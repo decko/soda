@@ -7,15 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
-)
-
-// Silence unused import errors — these are used by later tasks.
-var (
-	_ = json.Marshal
-	_ = errors.Is
-	_ = strings.Contains
 )
 
 func approxEqual(a, b float64) bool {
@@ -333,4 +325,140 @@ func TestAccumulateCost(t *testing.T) {
 			t.Fatal("expected error for unstarted phase")
 		}
 	})
+}
+
+func TestWriteReadArtifact(t *testing.T) {
+	dir := t.TempDir()
+	state, _ := LoadOrCreate(dir, "T-1")
+
+	content := []byte("# Triage handoff\n\nThis ticket is about X.")
+	if err := state.WriteArtifact("triage", content); err != nil {
+		t.Fatalf("WriteArtifact: %v", err)
+	}
+
+	got, err := state.ReadArtifact("triage")
+	if err != nil {
+		t.Fatalf("ReadArtifact: %v", err)
+	}
+	if string(got) != string(content) {
+		t.Errorf("content = %q, want %q", got, content)
+	}
+}
+
+func TestReadArtifact_NotExist(t *testing.T) {
+	dir := t.TempDir()
+	state, _ := LoadOrCreate(dir, "T-1")
+
+	_, err := state.ReadArtifact("nonexistent")
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("expected os.ErrNotExist, got %v", err)
+	}
+}
+
+func TestWriteReadResult(t *testing.T) {
+	dir := t.TempDir()
+	state, _ := LoadOrCreate(dir, "T-1")
+
+	result := json.RawMessage(`{"verdict":"pass","confidence":0.95}`)
+	if err := state.WriteResult("verify", result); err != nil {
+		t.Fatalf("WriteResult: %v", err)
+	}
+
+	got, err := state.ReadResult("verify")
+	if err != nil {
+		t.Fatalf("ReadResult: %v", err)
+	}
+	if string(got) != string(result) {
+		t.Errorf("result = %q, want %q", got, result)
+	}
+}
+
+func TestReadResult_NotExist(t *testing.T) {
+	dir := t.TempDir()
+	state, _ := LoadOrCreate(dir, "T-1")
+
+	_, err := state.ReadResult("nonexistent")
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("expected os.ErrNotExist, got %v", err)
+	}
+}
+
+func TestWriteLog(t *testing.T) {
+	dir := t.TempDir()
+	state, _ := LoadOrCreate(dir, "T-1")
+
+	prompt := []byte("You are a triage agent...")
+	if err := state.WriteLog("triage", "prompt", prompt); err != nil {
+		t.Fatalf("WriteLog: %v", err)
+	}
+
+	logPath := filepath.Join(dir, "T-1", "logs", "triage_prompt.md")
+	got, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(got) != string(prompt) {
+		t.Errorf("log content = %q, want %q", got, prompt)
+	}
+}
+
+func TestStateAcquireReleaseLock(t *testing.T) {
+	dir := t.TempDir()
+	state, _ := LoadOrCreate(dir, "T-1")
+
+	if err := state.AcquireLock(); err != nil {
+		t.Fatalf("AcquireLock: %v", err)
+	}
+
+	// Second state for same ticket should fail to lock
+	state2, _ := LoadOrCreate(dir, "T-1")
+	err := state2.AcquireLock()
+	if err == nil {
+		t.Fatal("expected error for contention")
+	}
+
+	state.ReleaseLock()
+
+	// Now second state should succeed
+	if err := state2.AcquireLock(); err != nil {
+		t.Fatalf("AcquireLock after release: %v", err)
+	}
+	state2.ReleaseLock()
+}
+
+func TestStateLogEvent(t *testing.T) {
+	dir := t.TempDir()
+	state, _ := LoadOrCreate(dir, "T-1")
+
+	if err := state.LogEvent(Event{Phase: "triage", Kind: "custom_event"}); err != nil {
+		t.Fatalf("LogEvent: %v", err)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(dir, "T-1", "events.jsonl"))
+	if len(data) == 0 {
+		t.Error("events.jsonl should not be empty")
+	}
+}
+
+func TestDir(t *testing.T) {
+	dir := t.TempDir()
+	state, _ := LoadOrCreate(dir, "T-1")
+
+	want := filepath.Join(dir, "T-1")
+	if state.Dir() != want {
+		t.Errorf("Dir() = %q, want %q", state.Dir(), want)
+	}
+}
+
+func TestMeta(t *testing.T) {
+	dir := t.TempDir()
+	state, _ := LoadOrCreate(dir, "T-1")
+
+	meta := state.Meta()
+	if meta == nil {
+		t.Fatal("Meta() should not be nil")
+	}
+	if meta.Ticket != "T-1" {
+		t.Errorf("Ticket = %q, want %q", meta.Ticket, "T-1")
+	}
 }
