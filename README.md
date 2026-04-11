@@ -44,4 +44,4 @@ soda (Go TUI + Pipeline Engine)
 
 ## License
 
-TBD
+Apache-2.0 — see [LICENSE](LICENSE)
