@@ -127,12 +127,14 @@ func (e *Engine) Resume(ctx context.Context, fromPhase string) error {
 
 	e.emit(Event{Kind: EventEngineStarted, Data: map[string]any{"resumed_from": fromPhase}})
 
-	for _, phase := range e.config.Pipeline.Phases[startIdx:] {
+	for i, phase := range e.config.Pipeline.Phases[startIdx:] {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("engine: context cancelled: %w", err)
 		}
 
-		if e.state.IsCompleted(phase.Name) {
+		// The fromPhase is always re-run, even if completed.
+		// Subsequent phases skip if already completed.
+		if i > 0 && e.state.IsCompleted(phase.Name) {
 			e.emit(Event{Phase: phase.Name, Kind: EventPhaseSkipped})
 			continue
 		}
@@ -230,14 +232,18 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 
 	_ = e.state.WriteLog(phase.Name, "prompt", []byte(rendered))
 
-	// Build runner opts.
+	// Build runner opts. Tighten per-phase budget to remaining amount.
+	remaining := e.config.MaxCostUSD - e.state.Meta().TotalCost
+	if e.config.MaxCostUSD <= 0 {
+		remaining = 0 // no budget enforcement
+	}
 	opts := runner.RunOpts{
 		Phase:        phase.Name,
 		SystemPrompt: rendered,
 		UserPrompt:   "",
 		OutputSchema: phase.Schema,
 		AllowedTools: phase.Tools,
-		MaxBudgetUSD: e.config.MaxCostUSD,
+		MaxBudgetUSD: remaining,
 		WorkDir:      e.workDir(phase),
 		Model:        e.config.Model,
 		Timeout:      phase.Timeout.Duration,
@@ -364,7 +370,7 @@ func backoff(attempt int, jitterFunc func(time.Duration) time.Duration) time.Dur
 	if exp > 30*time.Second {
 		exp = 30 * time.Second
 	}
-	return exp + jitterFunc(exp)
+	return exp + jitterFunc(time.Second)
 }
 
 // checkBudget verifies the pipeline has budget remaining before running a phase.
@@ -475,6 +481,22 @@ func (e *Engine) gatePhase(phase PhaseConfig) error {
 		if len(result.Tasks) == 0 {
 			return &PhaseGateError{Phase: phase.Name, Reason: "no tasks in plan"}
 		}
+
+	case "implement":
+		var result struct {
+			TestsPassed bool `json:"tests_passed"`
+		}
+		if err := json.Unmarshal(raw, &result); err != nil {
+			return nil
+		}
+		if !result.TestsPassed {
+			e.emit(Event{
+				Phase: phase.Name,
+				Kind:  EventPhaseRetrying,
+				Data:  map[string]any{"warning": "tests did not pass during implementation"},
+			})
+		}
+		// Proceed to verify regardless — verify will catch test failures.
 
 	case "verify":
 		var result struct {
