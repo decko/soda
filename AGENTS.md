@@ -155,6 +155,19 @@ Atomic writes: always write to `.tmp` then rename. Archive on re-run (`verify.js
 - **Prompt overrides**: `~/.config/soda/prompts/<phase>.md` overrides embedded prompts without forking.
 - **Monitor is a polling loop**: separate from one-shot phases. 2m initial interval, 5m after 30m, max 4h, max 3 auto-response rounds.
 
+## Git workflow
+
+- **NEVER commit directly on main.** Always use a feature branch.
+- **Always work in worktrees**: `git worktree add .worktrees/<branch> -b <branch> main`
+- **Worktree directory**: `.worktrees/<branch>/` (gitignored)
+- **Branch naming**: `feat/<issue-slug>`, `fix/<issue-slug>`, `chore/<issue-slug>`
+- **One PR per issue.** Reference the issue in the PR title.
+- **Push to origin**, PR against `main`.
+- Only stage specific files with `git add <file>`, never `git add .` or `git add -A`.
+- Do not force-push unless explicitly asked.
+- Do not amend published commits.
+- After PR is merged, start fresh — never build on already-merged branches.
+
 ## Conventions
 
 - **Formatting**: `gofmt` (standard Go formatting)
