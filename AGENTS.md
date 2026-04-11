@@ -166,7 +166,7 @@ Atomic writes: always write to `.tmp` then rename. Archive on re-run (`verify.js
 - Only stage specific files with `git add <file>`, never `git add .` or `git add -A`.
 - Do not force-push unless explicitly asked.
 - Do not amend published commits.
-- **Co-Authored-By**: use a single `Co-Authored-By: Claude <noreply@anthropic.com>` line at the end of the commit message. Do not include model name or version. Do not repeat the line per commit when squash-merging — one line at the end of the final message.
+- **Assisted-By**: use a single `Assisted-By: Claude <noreply@anthropic.com>` trailer at the end of the commit message. Do not include model name or version. Do not repeat the line per commit when squash-merging — one trailer at the end of the final message.
 - After PR is merged, start fresh — never build on already-merged branches.
 
 ## Conventions
