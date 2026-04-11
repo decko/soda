@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -460,5 +461,143 @@ func TestMeta(t *testing.T) {
 	}
 	if meta.Ticket != "T-1" {
 		t.Errorf("Ticket = %q, want %q", meta.Ticket, "T-1")
+	}
+}
+
+func TestFullLifecycle(t *testing.T) {
+	dir := t.TempDir()
+
+	// === First run ===
+	state, err := LoadOrCreate(dir, "PROJ-100")
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+
+	if err := state.AcquireLock(); err != nil {
+		t.Fatalf("AcquireLock: %v", err)
+	}
+	defer state.ReleaseLock()
+
+	// Run triage
+	state.MarkRunning("triage")
+	state.AccumulateCost("triage", 0.08)
+	state.WriteResult("triage", json.RawMessage(`{"complexity":"medium"}`))
+	state.WriteArtifact("triage", []byte("Triage: medium complexity"))
+	state.WriteLog("triage", "prompt", []byte("system prompt"))
+	state.WriteLog("triage", "response", []byte("raw response"))
+	state.MarkCompleted("triage")
+
+	// Run plan
+	state.MarkRunning("plan")
+	state.AccumulateCost("plan", 0.20)
+	state.WriteResult("plan", json.RawMessage(`{"tasks":["task1"]}`))
+	state.WriteArtifact("plan", []byte("Plan: one task"))
+	state.MarkCompleted("plan")
+
+	// Run implement — fails
+	state.MarkRunning("implement")
+	state.AccumulateCost("implement", 1.50)
+	state.MarkFailed("implement", fmt.Errorf("test suite failed"))
+
+	// Verify accumulated cost
+	meta := state.Meta()
+	if !approxEqual(meta.TotalCost, 1.78) {
+		t.Errorf("TotalCost = %v, want 1.78", meta.TotalCost)
+	}
+
+	state.ReleaseLock()
+
+	// === Resume after crash ===
+	state2, err := LoadOrCreate(dir, "PROJ-100")
+	if err != nil {
+		t.Fatalf("resume LoadOrCreate: %v", err)
+	}
+
+	if err := state2.AcquireLock(); err != nil {
+		t.Fatalf("resume AcquireLock: %v", err)
+	}
+	defer state2.ReleaseLock()
+
+	// Completed phases should be skippable
+	if !state2.IsCompleted("triage") {
+		t.Error("triage should be completed on resume")
+	}
+	if !state2.IsCompleted("plan") {
+		t.Error("plan should be completed on resume")
+	}
+	if state2.IsCompleted("implement") {
+		t.Error("implement should NOT be completed (it failed)")
+	}
+
+	// Artifacts should be readable
+	triageArtifact, _ := state2.ReadArtifact("triage")
+	if string(triageArtifact) != "Triage: medium complexity" {
+		t.Errorf("triage artifact = %q", triageArtifact)
+	}
+	triageResult, _ := state2.ReadResult("triage")
+	if string(triageResult) != `{"complexity":"medium"}` {
+		t.Errorf("triage result = %q", triageResult)
+	}
+
+	// Re-run implement (generation 2)
+	state2.MarkRunning("implement")
+
+	ps := state2.Meta().Phases["implement"]
+	if ps.Generation != 2 {
+		t.Errorf("implement generation = %d, want 2", ps.Generation)
+	}
+	if ps.Error != "" {
+		t.Errorf("implement error should be cleared, got %q", ps.Error)
+	}
+
+	// Budget preserved from first run's triage + plan
+	if !approxEqual(state2.Meta().TotalCost, 1.78) {
+		t.Errorf("resumed TotalCost = %v, want 1.78", state2.Meta().TotalCost)
+	}
+
+	state2.AccumulateCost("implement", 2.00)
+	state2.WriteResult("implement", json.RawMessage(`{"commits":1}`))
+	state2.MarkCompleted("implement")
+
+	if !approxEqual(state2.Meta().TotalCost, 3.78) {
+		t.Errorf("final TotalCost = %v, want 3.78", state2.Meta().TotalCost)
+	}
+
+	// Verify events.jsonl has entries
+	eventsData, _ := os.ReadFile(filepath.Join(dir, "PROJ-100", "events.jsonl"))
+	eventLines := strings.Split(strings.TrimSpace(string(eventsData)), "\n")
+	if len(eventLines) < 8 {
+		t.Errorf("expected >= 8 events, got %d", len(eventLines))
+	}
+
+	// Verify log files exist
+	logDir := filepath.Join(dir, "PROJ-100", "logs")
+	if _, err := os.Stat(filepath.Join(logDir, "triage_prompt.md")); err != nil {
+		t.Errorf("triage prompt log missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(logDir, "triage_response.md")); err != nil {
+		t.Errorf("triage response log missing: %v", err)
+	}
+}
+
+func TestCrashSafety_OrphanedTmp(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create state normally
+	state, _ := LoadOrCreate(dir, "T-1")
+	state.MarkRunning("triage")
+	state.MarkCompleted("triage")
+
+	// Simulate crash: leave orphaned meta.json.tmp with corrupt data
+	metaTmp := filepath.Join(dir, "T-1", "meta.json.tmp")
+	os.WriteFile(metaTmp, []byte("corrupt"), 0644)
+
+	// Resume should read the real meta.json, ignoring the orphaned .tmp
+	state2, err := LoadOrCreate(dir, "T-1")
+	if err != nil {
+		t.Fatalf("resume after crash: %v", err)
+	}
+	if !state2.IsCompleted("triage") {
+		t.Error("triage should still be completed after crash resume")
 	}
 }
