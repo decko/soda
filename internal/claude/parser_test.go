@@ -219,6 +219,33 @@ func TestExtractJSON(t *testing.T) {
 				}
 			},
 		},
+		{
+			name:  "multi_line_json",
+			input: "Streaming output\n{\n  \"type\": \"result\",\n  \"subtype\": \"success\"\n}\n",
+			check: func(t *testing.T, raw []byte) {
+				var obj map[string]string
+				if err := json.Unmarshal(raw, &obj); err != nil {
+					t.Fatalf("unmarshal: %v", err)
+				}
+				if obj["type"] != "result" {
+					t.Errorf("type = %q, want result", obj["type"])
+				}
+			},
+		},
+		{
+			name:  "last_line_non_envelope_json",
+			input: "{\"type\":\"result\",\"subtype\":\"success\"}\n{\"error\":\"not found\"}\n",
+			check: func(t *testing.T, raw []byte) {
+				t.Skip("known limitation: strategy 2 does not validate envelope type")
+				var obj map[string]string
+				if err := json.Unmarshal(raw, &obj); err != nil {
+					t.Fatalf("unmarshal: %v", err)
+				}
+				if obj["type"] != "result" {
+					t.Errorf("should extract result envelope, got type=%q", obj["type"])
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {

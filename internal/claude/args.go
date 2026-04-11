@@ -26,6 +26,10 @@ func buildArgs(opts RunOpts, model string) []string {
 	for _, tool := range opts.AllowedTools {
 		args = append(args, "--allowed-tools", tool)
 	}
+	// TODO: validate AllowedTools entries against known tool names
+	// (Read, Write, Edit, Glob, Grep, Bash, Bash(git:*), etc.)
+	// and log warnings for unknown tools. Not blocking — the CLI
+	// rejects unknown tools at runtime.
 
 	return args
 }

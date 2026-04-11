@@ -23,16 +23,17 @@ case "${MOCK_CLAUDE_MODE}" in
         exit 1
         ;;
     crash_unknown)
-        echo "unexpected internal error" >&2
+        echo "something went wrong unexpectedly" >&2
         exit 1
         ;;
     slow)
         sleep 60
         ;;
     echo_stdin)
-        # Read stdin and include it in the result for verification
+        # Read stdin and include it in the result for verification.
+        # NOTE: Only works for simple strings without JSON special chars (" \ etc.)
         STDIN_CONTENT=$(cat)
-        echo "{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"${STDIN_CONTENT}\",\"structured_output\":{}}"
+        printf '{"type":"result","subtype":"success","result":"%s","structured_output":{}}\n' "$STDIN_CONTENT"
         ;;
     signal_kill)
         kill -KILL $$

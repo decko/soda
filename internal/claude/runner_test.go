@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -341,5 +342,44 @@ func TestDryRun(t *testing.T) {
 
 	if result.Prompt != "Implement the feature." {
 		t.Errorf("Prompt = %q", result.Prompt)
+	}
+}
+
+func TestStream_OnChunkPanic(t *testing.T) {
+	runner, err := NewRunner(mockBinaryPath(t), "test-model", t.TempDir())
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	t.Setenv("MOCK_CLAUDE_MODE", "success")
+
+	result, err := runner.Stream(context.Background(), RunOpts{
+		Timeout: 10 * time.Second,
+	}, func(line string) {
+		panic("callback panic should not crash Stream")
+	})
+	if err != nil {
+		t.Fatalf("Stream should succeed despite onChunk panic: %v", err)
+	}
+	if result.CostUSD != 0.05 {
+		t.Errorf("CostUSD = %v, want 0.05", result.CostUSD)
+	}
+}
+
+func TestStream_RejectsOversizedSchema(t *testing.T) {
+	runner, err := NewRunner(mockBinaryPath(t), "test-model", t.TempDir())
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	// Create a schema larger than 256KB
+	bigSchema := `{"type":"object","properties":{` + strings.Repeat(`"field":"string",`, 20000) + `"last":"string"}}`
+
+	_, err = runner.Stream(context.Background(), RunOpts{
+		OutputSchema: bigSchema,
+		Timeout:      10 * time.Second,
+	}, nil)
+	if err == nil {
+		t.Fatal("expected error for oversized OutputSchema")
 	}
 }

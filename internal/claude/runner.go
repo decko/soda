@@ -109,9 +109,9 @@ func classifyExitError(exitErr *exec.ExitError, stderr []byte) error {
 		substrings []string
 		reason     string
 	}{
-		{[]string{"rate limit", "429"}, "rate_limit"},
-		{[]string{"timeout", "504", "529"}, "timeout"},
-		{[]string{"overloaded", "500", "502", "503", "server error"}, "overloaded"},
+		{[]string{"rate limit", " 429", "too many requests"}, "rate_limit"},
+		{[]string{"timeout", " 504", " 529"}, "timeout"},
+		{[]string{"overloaded", " 500", " 502", " 503", "server error", "internal error"}, "overloaded"},
 		{[]string{"connection refused", "econnreset", "connection reset"}, "connection"},
 	}
 
@@ -139,7 +139,10 @@ func classifyExitError(exitErr *exec.ExitError, stderr []byte) error {
 // and returns the parsed response. Context cancellation kills the subprocess
 // and its entire process group.
 func (r *Runner) Stream(ctx context.Context, opts RunOpts, onChunk func(string)) (*RunResult, error) {
-	// Validate opts
+	// Validate opts.
+	// NOTE: Full path containment checking (symlink resolution, directory boundary
+	// validation against project root / ~/.config/soda/prompts/) is a pipeline-level
+	// concern. This package does basic validation only (absolute path, valid JSON schema).
 	if opts.SystemPromptPath != "" && !filepath.IsAbs(opts.SystemPromptPath) {
 		return nil, fmt.Errorf("claude: system prompt path must be absolute: %s", opts.SystemPromptPath)
 	}
@@ -229,12 +232,14 @@ func (r *Runner) Stream(ctx context.Context, opts RunOpts, onChunk func(string))
 		}
 	}()
 
+	var stderrErr error
 	go func() {
 		defer wg.Done()
-		io.Copy(&stderrBuf, stderr)
+		_, stderrErr = io.Copy(&stderrBuf, stderr)
 	}()
 
 	wg.Wait()
+	_ = stderrErr // captured for diagnostics; stderr errors are not actionable
 
 	// Check stdout drain error
 	if stdoutErr != nil {
@@ -251,7 +256,7 @@ func (r *Runner) Stream(ctx context.Context, opts RunOpts, onChunk func(string))
 		}
 
 		// Non-zero exit: try parsing stdout first (some CLIs exit non-zero with valid output)
-		if outputBuf.Len() > 0 {
+		if outputBuf.Len() > 0 && !outputBuf.overflow {
 			result, parseErr := ParseResponse(outputBuf.Bytes())
 			if parseErr == nil {
 				return result, nil
@@ -283,6 +288,7 @@ func (r *Runner) Stream(ctx context.Context, opts RunOpts, onChunk func(string))
 
 // DryRun returns the command that would be executed, without running it.
 // For logging to events.jsonl and debugging.
+// NOTE: DryRun does not validate opts — call Stream() to get validation errors.
 func (r *Runner) DryRun(opts RunOpts) DryRunResult {
 	return DryRunResult{
 		Args:   buildArgs(opts, r.model),

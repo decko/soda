@@ -99,7 +99,7 @@ func extractJSON(output []byte) ([]byte, error) {
 		lastLine = trimmed[lastNewline+1:]
 	}
 
-	if len(lastLine) > 0 && lastLine[0] == '{' && json.Valid(lastLine) {
+	if len(lastLine) > 0 && lastLine[0] == '{' && json.Valid(lastLine) && isResultEnvelope(lastLine) {
 		return lastLine, nil
 	}
 
@@ -107,7 +107,17 @@ func extractJSON(output []byte) ([]byte, error) {
 	return extractJSONByDepth(output)
 }
 
+// isResultEnvelope checks if JSON data contains "type":"result".
+func isResultEnvelope(data []byte) bool {
+	var check struct {
+		Type string `json:"type"`
+	}
+	return json.Unmarshal(data, &check) == nil && check.Type == "result"
+}
+
 // extractJSONByDepth scans backwards for the last valid JSON object.
+// NOTE: This function does not validate the envelope type — the ParseResponse
+// type check handles that after extraction.
 func extractJSONByDepth(output []byte) ([]byte, error) {
 	end := bytes.LastIndexByte(output, '}')
 	if end == -1 {
@@ -166,5 +176,8 @@ func truncateForLog(data []byte, maxLen int) []byte {
 	if len(data) <= maxLen {
 		return data
 	}
-	return data[:maxLen]
+	truncated := make([]byte, maxLen+3)
+	copy(truncated, data[:maxLen])
+	copy(truncated[maxLen:], "...")
+	return truncated
 }
