@@ -22,7 +22,7 @@ func acquireLock(dir string) (*os.File, error) {
 
 	fd, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
-		return nil, fmt.Errorf("pipeline: open lock %s: %w", lockPath, err)
+		return nil, fmt.Errorf("open lock %s: %w", lockPath, err)
 	}
 
 	err = syscall.Flock(int(fd.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
@@ -33,7 +33,7 @@ func acquireLock(dir string) (*os.File, error) {
 
 	if err != syscall.EWOULDBLOCK {
 		fd.Close()
-		return nil, fmt.Errorf("pipeline: flock %s: %w", lockPath, err)
+		return nil, fmt.Errorf("flock %s: %w", lockPath, err)
 	}
 
 	// Lock is held — check if the holder is alive
@@ -49,10 +49,10 @@ func acquireLock(dir string) (*os.File, error) {
 
 	fd.Close()
 	if info != nil && info.PID > 0 {
-		return nil, fmt.Errorf("pipeline: locked by PID %d (acquired %s)",
+		return nil, fmt.Errorf("locked by PID %d (acquired %s)",
 			info.PID, info.AcquiredAt.Format(time.RFC3339))
 	}
-	return nil, fmt.Errorf("pipeline: lock %s is held by another process", lockPath)
+	return nil, fmt.Errorf("lock %s is held by another process", lockPath)
 }
 
 // releaseLock releases the flock and closes the file descriptor.
@@ -83,6 +83,9 @@ func readLockInfo(fd *os.File) (*lockInfo, error) {
 	data := make([]byte, 1024)
 	n, err := fd.Read(data)
 	if err != nil || n == 0 {
+		if err == nil {
+			err = fmt.Errorf("empty lock file")
+		}
 		return nil, fmt.Errorf("pipeline: read lock info: %w", err)
 	}
 	var info lockInfo
