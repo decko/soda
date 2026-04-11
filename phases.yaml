@@ -1,0 +1,113 @@
+# SODA Phase Pipeline Configuration
+#
+# Each phase defines: prompt template, output schema, tool scope,
+# timeout, retry policy, and dependencies on previous phase artifacts.
+
+phases:
+  - name: triage
+    prompt: prompts/triage.md
+    schema: schemas/triage.go
+    tools:
+      - Read
+      - Glob
+      - Grep
+      - Bash(git:*)
+      - Bash(ls:*)
+    timeout: 3m
+    retry:
+      transient: 2
+      parse: 1
+      semantic: 1
+    depends_on: []
+
+  - name: plan
+    prompt: prompts/plan.md
+    schema: schemas/plan.go
+    tools:
+      - Read
+      - Glob
+      - Grep
+      - Bash(git:*)
+      - Bash(ls:*)
+    timeout: 5m
+    retry:
+      transient: 2
+      parse: 1
+      semantic: 1
+    depends_on:
+      - triage
+
+  - name: implement
+    prompt: prompts/implement.md
+    schema: schemas/implement.go
+    tools:
+      - Read
+      - Write
+      - Edit
+      - Glob
+      - Grep
+      - Bash
+    timeout: 15m
+    retry:
+      transient: 2
+      parse: 1
+      semantic: 0    # don't retry semantic failures — human decides
+    depends_on:
+      - plan
+
+  - name: verify
+    prompt: prompts/verify.md
+    schema: schemas/verify.go
+    tools:
+      - Read
+      - Glob
+      - Grep
+      - Bash
+    timeout: 5m
+    retry:
+      transient: 2
+      parse: 1
+      semantic: 1
+    depends_on:
+      - plan
+      - implement
+
+  - name: submit
+    prompt: prompts/submit.md
+    schema: schemas/submit.go
+    tools:
+      - Bash(git:*)
+      - Bash(gh:*)
+      - Bash(glab:*)
+    timeout: 3m
+    retry:
+      transient: 2
+      parse: 1
+      semantic: 0
+    depends_on:
+      - implement
+      - verify
+
+  - name: monitor
+    prompt: prompts/monitor.md
+    schema: schemas/monitor.go
+    type: polling     # not one-shot
+    tools:
+      - Read
+      - Write
+      - Edit
+      - Glob
+      - Grep
+      - Bash
+    polling:
+      initial_interval: 2m
+      max_interval: 5m
+      escalate_after: 30m
+      max_duration: 4h
+      max_response_rounds: 3
+    retry:
+      transient: 2
+      parse: 1
+      semantic: 0
+    depends_on:
+      - submit

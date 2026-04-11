@@ -1,0 +1,17 @@
+# Build
+soda
+dist/
+
+# State
+.soda/
+
+# Config (contains credentials)
+config.yaml
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store

@@ -1,0 +1,75 @@
+# ~/.config/soda/config.yaml
+
+# Ticket source
+ticket_source: jira
+jira:
+  command: wtmcp
+  project: MYPROJECT
+  query: "labels = ai-workable AND status = Refinement"
+
+# Default execution mode
+mode: autonomous   # or "checkpoint"
+
+# Model (used for all phases in v1)
+model: claude-opus-4-6
+
+# Sandbox (via agentic-orchestrator)
+sandbox:
+  enabled: true
+  binary: agent-node
+  limits:
+    memory_mb: 2048
+    cpu_percent: 200
+    max_pids: 256
+
+# Budget
+limits:
+  max_cost_per_ticket: 15.00
+  max_cost_per_phase: 8.00
+
+# Worktrees
+worktree_dir: .worktrees
+
+# State directory
+state_dir: .soda
+
+# Project context — injected into every phase system prompt
+context:
+  - AGENTS.md
+
+# Phase-specific context — appended to the phase's system prompt
+phase_context:
+  plan:
+    - docs/gotchas.md
+  implement:
+    - docs/gotchas.md
+  verify:
+    - docs/gotchas.md
+
+# Repos and their conventions
+repos:
+  - name: my-service
+    forge: github
+    push_to: myuser/my-service
+    target: myorg/my-service
+    description: "Main service repo"
+    formatter: "black --line-length 100"
+    test_command: "pytest tests/"
+    labels:
+      - ai-assisted
+    trailers:
+      - "Assisted-by: SODA <noreply@soda.dev>"
+
+  - name: my-docs
+    forge: gitlab
+    push_to: direct
+    target: myorg/my-docs
+    description: "Documentation"
+    labels:
+      - ai-assisted
+    trailers:
+      - "Assisted-by: SODA <noreply@soda.dev>"
+
+# Prompt overrides (optional)
+# Place custom prompts in ~/.config/soda/prompts/<phase>.md
+# They take precedence over built-in prompts.
