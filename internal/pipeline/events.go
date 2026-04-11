@@ -16,6 +16,23 @@ type Event struct {
 	Data      map[string]any `json:"data,omitempty"`
 }
 
+// Event kinds emitted by the engine.
+const (
+	EventEngineStarted   = "engine_started"
+	EventEngineCompleted = "engine_completed"
+	EventEngineFailed    = "engine_failed"
+	EventPhaseStarted    = "phase_started"
+	EventPhaseCompleted  = "phase_completed"
+	EventPhaseFailed     = "phase_failed"
+	EventPhaseRetrying   = "phase_retrying"
+	EventPhaseSkipped    = "phase_skipped"
+	EventOutputChunk     = "output_chunk"
+	EventBudgetWarning   = "budget_warning"
+	EventCheckpointPause = "checkpoint_pause"
+	EventWorktreeCreated = "worktree_created"
+	EventMonitorSkipped  = "monitor_skipped"
+)
+
 // logEvent appends an event to the events.jsonl file in dir.
 func logEvent(dir string, event Event) error {
 	if event.Timestamp.IsZero() {
