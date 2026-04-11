@@ -8,7 +8,7 @@ import (
 var (
 	// Matches common "Acceptance Criteria" headings in wiki markup, markdown, and plain text.
 	headingRe = regexp.MustCompile(
-		`(?i)^(?:h[1-6]\.\s+|\#{1,6}\s+|\*{2})?[Aa]cceptance\s+[Cc]riteria\*{0,2}:?\s*$`,
+		`(?i)^(?:h[1-6]\.\s+|\#{1,6}\s+|\*{2})?acceptance\s+criteria\*{0,2}:?\s*$`,
 	)
 	// Matches the start of a new heading (signals end of AC section).
 	nextHeadingRe = regexp.MustCompile(`^(?:h[1-6]\.\s+|\#{1,6}\s+)`)

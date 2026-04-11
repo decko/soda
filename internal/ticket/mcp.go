@@ -2,6 +2,7 @@ package ticket
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -17,6 +18,7 @@ type mcpClient struct {
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
 	reader *bufio.Reader
+	stderr *bytes.Buffer
 	nextID atomic.Int64
 }
 
@@ -52,7 +54,9 @@ type mcpContent struct {
 // newMCPClient spawns an MCP server process and performs the protocol
 // initialization handshake. The caller must call close() when done.
 func newMCPClient(ctx context.Context, binary string, extraArgs ...string) (*mcpClient, error) {
-	args := append(extraArgs, "serve")
+	args := make([]string, 0, len(extraArgs)+1)
+	args = append(args, extraArgs...)
+	args = append(args, "serve")
 	cmd := exec.CommandContext(ctx, binary, args...)
 
 	stdin, err := cmd.StdinPipe()
@@ -65,7 +69,8 @@ func newMCPClient(ctx context.Context, binary string, extraArgs ...string) (*mcp
 		return nil, fmt.Errorf("mcp: stdout pipe: %w", err)
 	}
 
-	cmd.Stderr = io.Discard
+	var stderrBuf bytes.Buffer
+	cmd.Stderr = &limitedWriter{buf: &stderrBuf, max: 64 * 1024} // 64KB cap
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("mcp: start %s: %w", binary, err)
@@ -75,6 +80,7 @@ func newMCPClient(ctx context.Context, binary string, extraArgs ...string) (*mcp
 		cmd:    cmd,
 		stdin:  stdin,
 		reader: bufio.NewReaderSize(stdout, 1024*1024), // 1MB line buffer
+		stderr: &stderrBuf,
 	}
 
 	if err := client.initialize(); err != nil {
@@ -198,6 +204,29 @@ func (c *mcpClient) callTool(name string, arguments map[string]any) (string, err
 }
 
 func (c *mcpClient) close() error {
-	c.stdin.Close()
+	_ = c.stdin.Close() // best-effort; Wait() is the authoritative error
 	return c.cmd.Wait()
+}
+
+// stderrText returns captured server stderr for diagnostics.
+func (c *mcpClient) stderrText() string {
+	return c.stderr.String()
+}
+
+// limitedWriter writes up to max bytes, silently discarding excess.
+type limitedWriter struct {
+	buf *bytes.Buffer
+	max int
+}
+
+func (w *limitedWriter) Write(p []byte) (int, error) {
+	remaining := w.max - w.buf.Len()
+	if remaining <= 0 {
+		return len(p), nil
+	}
+	if len(p) > remaining {
+		w.buf.Write(p[:remaining])
+		return len(p), nil
+	}
+	return w.buf.Write(p)
 }

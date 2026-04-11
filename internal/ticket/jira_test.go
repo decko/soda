@@ -208,6 +208,5 @@ func TestJiraSource_Fetch_BadBinary(t *testing.T) {
 var _ Source = (*JiraSource)(nil)
 
 func TestMain(m *testing.M) {
-	// Ensure mock_mcp.sh is executable
 	os.Exit(m.Run())
 }

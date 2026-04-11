@@ -10,7 +10,6 @@ import (
 // JiraConfig holds configuration for the Jira ticket source.
 type JiraConfig struct {
 	Command string // MCP server binary (e.g., "wtmcp")
-	Project string // Jira project key (e.g., "MYPROJECT")
 	Query   string // default JQL query for List when none is provided
 }
 
@@ -42,7 +41,7 @@ func (s *JiraSource) Fetch(ctx context.Context, key string) (*Ticket, error) {
 		"fields":     "*",
 	})
 	if err != nil {
-		return nil, fmt.Errorf("ticket: jira fetch %s: %w", key, err)
+		return nil, fmt.Errorf("ticket: jira fetch %s: %w (stderr: %s)", key, err, client.stderrText())
 	}
 
 	var result jiraSearchResult
@@ -85,7 +84,7 @@ func (s *JiraSource) List(ctx context.Context, query string) ([]Ticket, error) {
 		"max_results": 50,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("ticket: jira list: %w", err)
+		return nil, fmt.Errorf("ticket: jira list: %w (stderr: %s)", err, client.stderrText())
 	}
 
 	var result jiraSearchResult
