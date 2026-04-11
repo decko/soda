@@ -1,0 +1,12 @@
+{
+  "type": "result",
+  "subtype": "success",
+  "result": "Done.",
+  "structured_output": {"key": "value"},
+  "total_cost_usd": 0.01,
+  "usage": {"input_tokens": 100, "output_tokens": 50},
+  "num_turns": 1,
+  "duration_ms": 500,
+  "new_field_from_future_cli": "should be ignored",
+  "another_new_field": 42
+}

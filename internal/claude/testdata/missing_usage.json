@@ -1,0 +1,9 @@
+{
+  "type": "result",
+  "subtype": "success",
+  "result": "Done.",
+  "structured_output": {"key": "value"},
+  "total_cost_usd": 0.01,
+  "num_turns": 1,
+  "duration_ms": 500
+}

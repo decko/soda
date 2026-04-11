@@ -1,0 +1,23 @@
+{
+  "type": "result",
+  "subtype": "success",
+  "result": "Implementation complete.",
+  "structured_output": {"ticket_key": "PROJ-123", "complexity": "small"},
+  "total_cost_usd": 0.097,
+  "usage": {
+    "input_tokens": 1174,
+    "cache_creation_input_tokens": 7493,
+    "cache_read_input_tokens": 38034,
+    "output_tokens": 1020
+  },
+  "modelUsage": {
+    "claude-opus-4-6": {
+      "inputTokens": 1174,
+      "outputTokens": 1020,
+      "costUSD": 0.097
+    }
+  },
+  "num_turns": 10,
+  "duration_ms": 29689,
+  "duration_api_ms": 27832
+}
