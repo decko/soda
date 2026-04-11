@@ -1,0 +1,30 @@
+{
+  "issues": [
+    {
+      "key": "PROJ-42",
+      "id": "10042",
+      "fields": {
+        "summary": "Add user authentication",
+        "description": "Implement login and registration.\n\nh3. Acceptance Criteria\n* Users can register with email\n* Users can log in with credentials",
+        "issuetype": {"name": "Story", "id": "10001"},
+        "priority": {"name": "High", "id": "2"},
+        "status": {"name": "In Progress", "id": "3"},
+        "labels": ["backend"]
+      }
+    },
+    {
+      "key": "PROJ-43",
+      "id": "10043",
+      "fields": {
+        "summary": "Fix payment processing",
+        "description": "Payment fails for some currencies.",
+        "issuetype": {"name": "Bug", "id": "10002"},
+        "priority": {"name": "Critical", "id": "1"},
+        "status": {"name": "Open", "id": "1"},
+        "labels": ["payments"]
+      }
+    }
+  ],
+  "count": 2,
+  "total": 2
+}
