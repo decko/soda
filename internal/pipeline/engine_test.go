@@ -1265,3 +1265,76 @@ func TestEnginePhaseGating(t *testing.T) {
 		}
 	})
 }
+
+func TestEngine_ResumeRerunsCompletedPhase(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "plan",
+			Prompt:    "plan.md",
+			DependsOn: []string{"triage"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage v2",
+					CostUSD: 0.30,
+				},
+			}},
+			"plan": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tasks":[{"id":"T1"}]}`),
+					RawText: "Plan v2",
+					CostUSD: 0.40,
+				},
+			}},
+		},
+	}
+
+	engine, state := setupEngine(t, phases, mock)
+
+	// Pre-complete both triage and plan.
+	state.MarkRunning("triage")
+	state.WriteResult("triage", json.RawMessage(`{"automatable":true}`))
+	state.WriteArtifact("triage", []byte("Triage v1"))
+	state.MarkCompleted("triage")
+
+	state.MarkRunning("plan")
+	state.WriteResult("plan", json.RawMessage(`{"tasks":[{"id":"old"}]}`))
+	state.WriteArtifact("plan", []byte("Plan v1"))
+	state.MarkCompleted("plan")
+
+	// Resume from triage — should re-run triage even though completed.
+	if err := engine.Resume(context.Background(), "triage"); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+
+	// Triage should have been called (re-run).
+	triageCalled := false
+	for _, call := range mock.calls {
+		if call.Phase == "triage" {
+			triageCalled = true
+		}
+	}
+	if !triageCalled {
+		t.Error("Resume should re-run the fromPhase even if completed")
+	}
+
+	// Artifact should be updated to v2.
+	artifact, err := state.ReadArtifact("triage")
+	if err != nil {
+		t.Fatalf("ReadArtifact: %v", err)
+	}
+	if string(artifact) != "Triage v2" {
+		t.Errorf("triage artifact = %q, want %q", string(artifact), "Triage v2")
+	}
+}
