@@ -166,6 +166,7 @@ Atomic writes: always write to `.tmp` then rename. Archive on re-run (`verify.js
 - Only stage specific files with `git add <file>`, never `git add .` or `git add -A`.
 - Do not force-push unless explicitly asked.
 - Do not amend published commits.
+- **Assisted-By**: add an `Assisted-by:` trailer at the end of the commit message naming the model used (e.g., `Assisted-by: Claude Opus 4.6`, `Assisted-by: GPT-4o`). One trailer per commit. Do not repeat when squash-merging — one at the end of the final message.
 - After PR is merged, start fresh — never build on already-merged branches.
 
 ## Conventions
