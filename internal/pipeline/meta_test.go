@@ -1,0 +1,141 @@
+package pipeline
+
+import (
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+func TestMetaRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "meta.json")
+
+	now := time.Date(2026, 4, 11, 10, 0, 0, 0, time.UTC)
+	original := &PipelineMeta{
+		Ticket:    "PROJ-123",
+		Branch:    "feat/thing",
+		Worktree:  "/tmp/wt",
+		StartedAt: now,
+		TotalCost: 1.23,
+		Phases: map[string]*PhaseState{
+			"triage": {
+				Status:     PhaseCompleted,
+				Cost:       0.12,
+				DurationMs: 8000,
+				Generation: 1,
+			},
+			"plan": {
+				Status:     PhaseRunning,
+				Cost:       0.31,
+				DurationMs: 0,
+				Generation: 2,
+			},
+			"implement": {
+				Status: PhaseFailed,
+				Error:  "test failure",
+			},
+		},
+	}
+
+	if err := writeMeta(path, original); err != nil {
+		t.Fatalf("writeMeta: %v", err)
+	}
+
+	loaded, err := readMeta(path)
+	if err != nil {
+		t.Fatalf("readMeta: %v", err)
+	}
+
+	if loaded.Ticket != original.Ticket {
+		t.Errorf("Ticket = %q, want %q", loaded.Ticket, original.Ticket)
+	}
+	if loaded.Branch != original.Branch {
+		t.Errorf("Branch = %q, want %q", loaded.Branch, original.Branch)
+	}
+	if loaded.Worktree != original.Worktree {
+		t.Errorf("Worktree = %q, want %q", loaded.Worktree, original.Worktree)
+	}
+	if !loaded.StartedAt.Equal(original.StartedAt) {
+		t.Errorf("StartedAt = %v, want %v", loaded.StartedAt, original.StartedAt)
+	}
+	if loaded.TotalCost != original.TotalCost {
+		t.Errorf("TotalCost = %v, want %v", loaded.TotalCost, original.TotalCost)
+	}
+
+	// Verify phase states
+	triagePhase := loaded.Phases["triage"]
+	if triagePhase == nil {
+		t.Fatal("triage phase missing")
+	}
+	if triagePhase.Status != PhaseCompleted {
+		t.Errorf("triage status = %q, want %q", triagePhase.Status, PhaseCompleted)
+	}
+	if triagePhase.Cost != 0.12 {
+		t.Errorf("triage cost = %v, want 0.12", triagePhase.Cost)
+	}
+	if triagePhase.DurationMs != 8000 {
+		t.Errorf("triage duration = %d, want 8000", triagePhase.DurationMs)
+	}
+
+	planPhase := loaded.Phases["plan"]
+	if planPhase == nil {
+		t.Fatal("plan phase missing")
+	}
+	if planPhase.Generation != 2 {
+		t.Errorf("plan generation = %d, want 2", planPhase.Generation)
+	}
+
+	implPhase := loaded.Phases["implement"]
+	if implPhase == nil {
+		t.Fatal("implement phase missing")
+	}
+	if implPhase.Error != "test failure" {
+		t.Errorf("implement error = %q, want %q", implPhase.Error, "test failure")
+	}
+}
+
+func TestReadMeta_InitializesNilPhasesMap(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "meta.json")
+
+	// Write JSON without a phases key
+	if err := atomicWrite(path, []byte(`{"ticket":"T-1","started_at":"2026-04-11T10:00:00Z"}`)); err != nil {
+		t.Fatal(err)
+	}
+
+	meta, err := readMeta(path)
+	if err != nil {
+		t.Fatalf("readMeta: %v", err)
+	}
+	if meta.Phases == nil {
+		t.Error("Phases should be initialized to non-nil map")
+	}
+}
+
+func TestReadMeta_FileNotExist(t *testing.T) {
+	_, err := readMeta("/nonexistent/path/meta.json")
+	if err == nil {
+		t.Fatal("expected error for missing file")
+	}
+}
+
+func TestPhaseStatusConstants(t *testing.T) {
+	// Verify JSON serialization matches expected strings
+	tests := []struct {
+		status PhaseStatus
+		want   string
+	}{
+		{PhasePending, "pending"},
+		{PhaseRunning, "running"},
+		{PhaseCompleted, "completed"},
+		{PhaseFailed, "failed"},
+		{PhaseRetrying, "retrying"},
+		{PhasePaused, "paused"},
+	}
+
+	for _, tt := range tests {
+		if string(tt.status) != tt.want {
+			t.Errorf("PhaseStatus %v = %q, want %q", tt.status, tt.status, tt.want)
+		}
+	}
+}

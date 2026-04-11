@@ -80,11 +80,14 @@ type State struct {
 - `PipelineMeta.Phases` uses `map[string]*PhaseState` — pointer so mutations are reflected without re-assignment. The engine populates phase names from `phases.yaml`; the state package does not hardcode phase names.
 - `PipelineMeta.TotalCost` is the sum across all phases, updated by `AccumulateCost` alongside per-phase cost. Convenience field so `soda status` doesn't iterate the map.
 - `State.meta` is loaded once by `LoadOrCreate` and mutated in place. Every mutation flushes to disk atomically.
+- `State` is not safe for concurrent use. The pipeline engine processes phases sequentially.
+- `PhaseRetrying` and `PhasePaused` statuses are defined for use by `pipeline/engine.go` (issue #4), which will set them via the `State` methods or direct meta manipulation. This package only provides the status constants.
 
 ## State lifecycle
 
 ### `LoadOrCreate(stateDir, ticketKey string) (*State, error)`
 
+- Validates `ticketKey`: rejects empty strings and keys containing `/`, `\`, or `..` (defense-in-depth against path traversal)
 - Builds path: `filepath.Join(stateDir, ticketKey)`
 - If `meta.json` exists: reads and unmarshals it (resume path)
 - If not: creates the directory tree (including `logs/`), initializes `PipelineMeta` with `StartedAt: time.Now()` and empty `Phases` map, writes `meta.json` atomically
@@ -94,7 +97,7 @@ type State struct {
 
 - Opens/creates `.soda/<ticket>/lock`
 - Attempts `syscall.Flock(fd, LOCK_EX|LOCK_NB)` (non-blocking exclusive lock)
-- On success: writes `{"pid": <pid>, "acquired_at": "<timestamp>"}` to the lock file, stores fd in `State.lockFd`
+- On success: truncates and writes `{"pid": <pid>, "acquired_at": "<timestamp>"}` to the lock file, stores fd in `State.lockFd`. Note: the PID write is not atomic with flock acquisition -- if the process crashes between flock and PID write, the lock file may contain a stale PID from a previous holder. The kernel flock is the source of truth; the PID file is best-effort diagnostics.
 - On `EWOULDBLOCK`: reads the lock file, checks if the PID is alive (`syscall.Kill(pid, 0)`)
   - PID alive: return error `"ticket %s is locked by PID %d (acquired %s)"`
   - PID dead: stale lock. Log a warning event, then retry the flock (the stale holder's fd is gone, so the kernel released it). If flock still fails, return error.
@@ -135,17 +138,20 @@ type State struct {
 
 ### `AccumulateCost(phase string, cost float64) error`
 
-1. Adds `cost` to `PhaseState.Cost`
-2. Adds `cost` to `PipelineMeta.TotalCost`
-3. Flushes `meta.json`
+1. If phase doesn't exist in `meta.Phases`, returns an error (phase must be started via `MarkRunning` first)
+2. Adds `cost` to `PhaseState.Cost`
+3. Adds `cost` to `PipelineMeta.TotalCost`
+4. Flushes `meta.json`
 
 ### `IsCompleted(phase string) bool`
 
-- Returns `meta.Phases[phase].Status == PhaseCompleted` (false if phase not in map)
+- Returns false if phase is not in `meta.Phases` map (nil-safe: checks map entry before accessing `.Status`)
+- Returns `true` only if `PhaseState.Status == PhaseCompleted`
 
 ### `Meta() *PipelineMeta`
 
 - Returns the in-memory meta. Callers should treat as read-only.
+- Simplified from the issue sketch's `(*PipelineMeta, error)` since meta is always valid after `LoadOrCreate`.
 
 ## Artifacts, results, and logs
 
@@ -188,6 +194,7 @@ No atomicity needed. JSONL is append-only; a partial write from a crash produces
 ### `atomicWrite(path string, data []byte) error` (unexported)
 
 - Writes to `<path>.tmp` with permissions `0644`
+- Calls `fd.Sync()` before closing (ensures data is durable on disk, not just in page cache -- protects against power loss, not just process crash)
 - `os.Rename("<path>.tmp", "<path>")`
 
 ### `archiveArtifact(path string, generation int) error` (unexported)
@@ -231,6 +238,8 @@ The consumer (`pipeline/engine.go`) treats any state error as fatal to the pipel
 ├── verify.json
 ├── verify.json.1          # archived from generation 1
 ├── verify.json.2          # archived from generation 2
+├── verify.md.1            # archived handoff (same pattern as .json)
+├── verify.md.2
 ├── submit.json
 ├── events.jsonl           # append-only event log
 └── logs/
