@@ -841,3 +841,428 @@ func TestEngine_GatePhase_TriageNotAutomatable(t *testing.T) {
 	}
 }
 
+func TestEngineFullLifecycle(t *testing.T) {
+	// A realistic 4-phase pipeline: triage -> plan -> implement -> verify.
+	// Each phase depends on the previous one. Prompt templates reference
+	// upstream artifacts so we can verify artifact flow through the pipeline.
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "plan",
+			Prompt:    "plan.md",
+			DependsOn: []string{"triage"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "implement",
+			Prompt:    "implement.md",
+			DependsOn: []string{"plan"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "verify",
+			Prompt:    "verify.md",
+			DependsOn: []string{"plan", "implement"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	triageOutput := `{"automatable":true,"complexity":"medium","estimated_hours":4,"components":["api","auth"]}`
+	planOutput := `{"tasks":[{"id":"T1","description":"Add auth middleware"},{"id":"T2","description":"Update API routes"}],"approach":"incremental"}`
+	implementOutput := `{"tests_passed":true,"commits":2,"files_changed":["middleware.go","routes.go"]}`
+	verifyOutput := `{"verdict":"PASS","test_results":{"passed":12,"failed":0},"coverage":85.5}`
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(triageOutput),
+					RawText: "Triage analysis: medium complexity, auth and api components affected",
+					CostUSD: 0.05,
+				},
+			}},
+			"plan": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(planOutput),
+					RawText: "Plan: add auth middleware first, then update routes",
+					CostUSD: 0.12,
+				},
+			}},
+			"implement": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(implementOutput),
+					RawText: "Implementation complete: 2 commits, all tests passing",
+					CostUSD: 1.50,
+				},
+			}},
+			"verify": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(verifyOutput),
+					RawText: "Verification passed: 12/12 tests, 85.5% coverage",
+					CostUSD: 0.30,
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	// We use setupEngine but override prompt templates to include artifact references.
+	stateDir := t.TempDir()
+	promptDir := t.TempDir()
+	workDir := t.TempDir()
+
+	// Write prompt templates that reference upstream artifacts.
+	templates := map[string]string{
+		"triage.md":    "Phase: triage\nTicket: {{.Ticket.Key}}\nSummary: {{.Ticket.Summary}}\n",
+		"plan.md":      "Phase: plan\nTicket: {{.Ticket.Key}}\nTriage output:\n{{.Artifacts.Triage}}\n",
+		"implement.md": "Phase: implement\nTicket: {{.Ticket.Key}}\nPlan:\n{{.Artifacts.Plan}}\n",
+		"verify.md":    "Phase: verify\nTicket: {{.Ticket.Key}}\nPlan:\n{{.Artifacts.Plan}}\nImplementation:\n{{.Artifacts.Implement}}\n",
+	}
+	for name, content := range templates {
+		if err := os.WriteFile(filepath.Join(promptDir, name), []byte(content), 0644); err != nil {
+			t.Fatalf("write prompt %s: %v", name, err)
+		}
+	}
+
+	state, err := LoadOrCreate(stateDir, "LIFECYCLE-1")
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+
+	pipeline := &PhasePipeline{Phases: phases}
+	loader := NewPromptLoader(promptDir)
+	cfg := EngineConfig{
+		Pipeline:   pipeline,
+		Loader:     loader,
+		Ticket:     TicketData{Key: "LIFECYCLE-1", Summary: "Full lifecycle test"},
+		Model:      "test-model",
+		WorkDir:    workDir,
+		MaxCostUSD: 0,
+		Mode:       Autonomous,
+		SleepFunc:  func(time.Duration) {},
+		JitterFunc: func(time.Duration) time.Duration { return 0 },
+		OnEvent: func(e Event) {
+			events = append(events, e)
+		},
+	}
+	engine := NewEngine(mock, state, cfg)
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// All 4 phases should be completed.
+	for _, phaseName := range []string{"triage", "plan", "implement", "verify"} {
+		if !state.IsCompleted(phaseName) {
+			t.Errorf("phase %q should be completed", phaseName)
+		}
+	}
+
+	// Total cost: 0.05 + 0.12 + 1.50 + 0.30 = 1.97
+	if !approxEqual(state.Meta().TotalCost, 1.97) {
+		t.Errorf("TotalCost = %v, want 1.97", state.Meta().TotalCost)
+	}
+
+	// Verify artifact flow: plan's SystemPrompt should contain triage's RawText.
+	if len(mock.calls) != 4 {
+		t.Fatalf("runner called %d times, want 4", len(mock.calls))
+	}
+
+	planPrompt := mock.calls[1].SystemPrompt
+	triageRawText := "Triage analysis: medium complexity, auth and api components affected"
+	if !strings.Contains(planPrompt, triageRawText) {
+		t.Errorf("plan's prompt should contain triage RawText;\nprompt: %q\nwanted substring: %q", planPrompt, triageRawText)
+	}
+
+	// verify's SystemPrompt should contain both plan and implement RawTexts.
+	verifyPrompt := mock.calls[3].SystemPrompt
+	planRawText := "Plan: add auth middleware first, then update routes"
+	implRawText := "Implementation complete: 2 commits, all tests passing"
+	if !strings.Contains(verifyPrompt, planRawText) {
+		t.Errorf("verify's prompt should contain plan RawText;\nprompt: %q\nwanted substring: %q", verifyPrompt, planRawText)
+	}
+	if !strings.Contains(verifyPrompt, implRawText) {
+		t.Errorf("verify's prompt should contain implement RawText;\nprompt: %q\nwanted substring: %q", verifyPrompt, implRawText)
+	}
+
+	// Artifacts should be persisted to disk.
+	for _, phaseName := range []string{"triage", "plan", "implement", "verify"} {
+		artifact, err := state.ReadArtifact(phaseName)
+		if err != nil {
+			t.Errorf("ReadArtifact(%q): %v", phaseName, err)
+			continue
+		}
+		if len(artifact) == 0 {
+			t.Errorf("artifact for %q should not be empty", phaseName)
+		}
+	}
+
+	// Results should be persisted to disk.
+	for _, phaseName := range []string{"triage", "plan", "implement", "verify"} {
+		result, err := state.ReadResult(phaseName)
+		if err != nil {
+			t.Errorf("ReadResult(%q): %v", phaseName, err)
+			continue
+		}
+		if len(result) == 0 {
+			t.Errorf("result for %q should not be empty", phaseName)
+		}
+	}
+
+	// Events should include engine lifecycle events.
+	hasStarted := false
+	hasCompleted := false
+	for _, e := range events {
+		if e.Kind == EventEngineStarted {
+			hasStarted = true
+		}
+		if e.Kind == EventEngineCompleted {
+			hasCompleted = true
+		}
+	}
+	if !hasStarted {
+		t.Error("engine_started event not emitted")
+	}
+	if !hasCompleted {
+		t.Error("engine_completed event not emitted")
+	}
+}
+
+func TestEnginePhaseGating(t *testing.T) {
+	t.Run("triage_not_automatable", func(t *testing.T) {
+		phases := []PhaseConfig{
+			{
+				Name:   "triage",
+				Prompt: "triage.md",
+				Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+			{
+				Name:      "plan",
+				Prompt:    "plan.md",
+				DependsOn: []string{"triage"},
+				Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+		}
+
+		mock := &flexMockRunner{
+			responses: map[string][]flexResponse{
+				"triage": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"automatable":false,"block_reason":"requires database migration"}`),
+						RawText: "Not automatable: database migration needed",
+						CostUSD: 0.05,
+					},
+				}},
+			},
+		}
+
+		engine, _ := setupEngine(t, phases, mock)
+
+		err := engine.Run(context.Background())
+		if err == nil {
+			t.Fatal("expected PhaseGateError for non-automatable ticket")
+		}
+
+		var gateErr *PhaseGateError
+		if !errors.As(err, &gateErr) {
+			t.Fatalf("expected PhaseGateError, got: %T: %v", err, err)
+		}
+		if gateErr.Phase != "triage" {
+			t.Errorf("gate error phase = %q, want %q", gateErr.Phase, "triage")
+		}
+		if !strings.Contains(gateErr.Reason, "requires database migration") {
+			t.Errorf("gate error reason should contain block_reason, got: %q", gateErr.Reason)
+		}
+
+		// Plan should NOT have been called.
+		for _, call := range mock.calls {
+			if call.Phase == "plan" {
+				t.Error("plan should not have run when triage is not automatable")
+			}
+		}
+	})
+
+	t.Run("plan_empty_tasks", func(t *testing.T) {
+		phases := []PhaseConfig{
+			{
+				Name:   "triage",
+				Prompt: "triage.md",
+				Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+			{
+				Name:      "plan",
+				Prompt:    "plan.md",
+				DependsOn: []string{"triage"},
+				Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+		}
+
+		mock := &flexMockRunner{
+			responses: map[string][]flexResponse{
+				"triage": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"automatable":true}`),
+						RawText: "Automatable",
+						CostUSD: 0.05,
+					},
+				}},
+				"plan": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"tasks":[]}`),
+						RawText: "No tasks identified",
+						CostUSD: 0.08,
+					},
+				}},
+			},
+		}
+
+		engine, _ := setupEngine(t, phases, mock)
+
+		err := engine.Run(context.Background())
+		if err == nil {
+			t.Fatal("expected PhaseGateError for empty tasks")
+		}
+
+		var gateErr *PhaseGateError
+		if !errors.As(err, &gateErr) {
+			t.Fatalf("expected PhaseGateError, got: %T: %v", err, err)
+		}
+		if gateErr.Phase != "plan" {
+			t.Errorf("gate error phase = %q, want %q", gateErr.Phase, "plan")
+		}
+		if !strings.Contains(gateErr.Reason, "no tasks") {
+			t.Errorf("gate error reason should mention 'no tasks', got: %q", gateErr.Reason)
+		}
+	})
+
+	t.Run("verify_fail_verdict", func(t *testing.T) {
+		phases := []PhaseConfig{
+			{
+				Name:   "triage",
+				Prompt: "triage.md",
+				Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+			{
+				Name:      "plan",
+				Prompt:    "plan.md",
+				DependsOn: []string{"triage"},
+				Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+			{
+				Name:      "implement",
+				Prompt:    "implement.md",
+				DependsOn: []string{"plan"},
+				Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+			{
+				Name:      "verify",
+				Prompt:    "verify.md",
+				DependsOn: []string{"plan", "implement"},
+				Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+		}
+
+		mock := &flexMockRunner{
+			responses: map[string][]flexResponse{
+				"triage": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"automatable":true}`),
+						RawText: "Automatable",
+						CostUSD: 0.05,
+					},
+				}},
+				"plan": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"tasks":[{"id":"T1","description":"fix it"}]}`),
+						RawText: "Plan: fix the issue",
+						CostUSD: 0.10,
+					},
+				}},
+				"implement": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"tests_passed":true,"commits":1}`),
+						RawText: "Implementation done",
+						CostUSD: 0.80,
+					},
+				}},
+				"verify": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"verdict":"FAIL","fixes_required":["fix the test"]}`),
+						RawText: "Verification failed",
+						CostUSD: 0.15,
+					},
+				}},
+			},
+		}
+
+		engine, _ := setupEngine(t, phases, mock)
+
+		err := engine.Run(context.Background())
+		if err == nil {
+			t.Fatal("expected PhaseGateError for verify FAIL verdict")
+		}
+
+		var gateErr *PhaseGateError
+		if !errors.As(err, &gateErr) {
+			t.Fatalf("expected PhaseGateError, got: %T: %v", err, err)
+		}
+		if gateErr.Phase != "verify" {
+			t.Errorf("gate error phase = %q, want %q", gateErr.Phase, "verify")
+		}
+		if !strings.Contains(gateErr.Reason, "fix the test") {
+			t.Errorf("gate error reason should contain fix message, got: %q", gateErr.Reason)
+		}
+	})
+
+	t.Run("semantic_retry_appends_message", func(t *testing.T) {
+		phases := []PhaseConfig{
+			{
+				Name:   "triage",
+				Prompt: "triage.md",
+				Retry:  RetryConfig{Transient: 0, Parse: 0, Semantic: 1},
+			},
+		}
+
+		mock := &flexMockRunner{
+			responses: map[string][]flexResponse{
+				"triage": {
+					{err: &claude.SemanticError{Message: "output incomplete"}},
+					{result: &runner.RunResult{
+						Output:  json.RawMessage(`{"automatable":true}`),
+						RawText: "Triage complete",
+						CostUSD: 0.05,
+					}},
+				},
+			},
+		}
+
+		engine, state := setupEngine(t, phases, mock)
+
+		if err := engine.Run(context.Background()); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+
+		if !state.IsCompleted("triage") {
+			t.Error("triage should be completed after semantic retry")
+		}
+
+		// Runner should have been called twice.
+		if len(mock.calls) != 2 {
+			t.Fatalf("runner called %d times, want 2", len(mock.calls))
+		}
+
+		// The retry call's UserPrompt should contain the semantic error message.
+		retryPrompt := mock.calls[1].UserPrompt
+		if !strings.Contains(retryPrompt, "output incomplete") {
+			t.Errorf("retry UserPrompt should contain semantic error message;\ngot: %q", retryPrompt)
+		}
+		if !strings.Contains(retryPrompt, "RETRY") {
+			t.Errorf("retry UserPrompt should contain RETRY marker;\ngot: %q", retryPrompt)
+		}
+	})
+}
+
