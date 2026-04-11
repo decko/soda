@@ -500,7 +500,7 @@ func (e *Engine) gatePhase(phase PhaseConfig) error {
 
 	case "verify":
 		var result struct {
-			Verdict      string   `json:"verdict"`
+			Verdict       string   `json:"verdict"`
 			FixesRequired []string `json:"fixes_required"`
 		}
 		if err := json.Unmarshal(raw, &result); err != nil {
