@@ -2,12 +2,12 @@ package schemas
 
 // MonitorOutput is the structured output for a single monitor cycle.
 type MonitorOutput struct {
-	TicketKey      string           `json:"ticket_key"`
-	PRURL          string           `json:"pr_url"`
+	TicketKey       string          `json:"ticket_key"`
+	PRURL           string          `json:"pr_url"`
 	CommentsHandled []CommentAction `json:"comments_handled"`
-	FilesChanged   []FileChange    `json:"files_changed,omitempty"`
-	Commits        []CommitRecord  `json:"commits,omitempty"`
-	TestsPassed    bool            `json:"tests_passed"`
+	FilesChanged    []FileChange    `json:"files_changed,omitempty"`
+	Commits         []CommitRecord  `json:"commits,omitempty"`
+	TestsPassed     bool            `json:"tests_passed"`
 }
 
 // CommentAction records how a review comment was addressed.
