@@ -195,6 +195,18 @@ Issues are fully specified with acceptance criteria.
 Do NOT write separate spec or plan documents.
 Read the issue, read the existing code, implement, test.
 
+### Test-driven development
+
+Every implementation must follow TDD:
+
+1. **Write tests first** — before writing any implementation code, write failing tests that cover the acceptance criteria.
+2. **Write functional tests** — test real behavior, not mocks of internals. Tests should exercise the public API of the package.
+3. **Run tests, see them fail** — confirm the tests fail for the right reason before implementing.
+4. **Implement** — write the minimum code to make the tests pass.
+5. **Refactor** — clean up while tests stay green.
+
+Do NOT write tests after implementation. Do NOT skip the "see it fail" step.
+
 ## Specialist reviews
 
 Every output must be reviewed before moving to the next step. Use parallel subagents for speed.
