@@ -155,7 +155,7 @@ func (r *Runner) Stream(ctx context.Context, opts RunOpts, onChunk func(string))
 		}
 	}
 
-	args := buildArgs(opts, r.model)
+	args := BuildArgs(opts, r.model)
 
 	// Apply fallback timeout if caller's context has no deadline
 	if opts.Timeout > 0 {
@@ -291,7 +291,7 @@ func (r *Runner) Stream(ctx context.Context, opts RunOpts, onChunk func(string))
 // NOTE: DryRun does not validate opts — call Stream() to get validation errors.
 func (r *Runner) DryRun(opts RunOpts) DryRunResult {
 	return DryRunResult{
-		Args:   buildArgs(opts, r.model),
+		Args:   BuildArgs(opts, r.model),
 		Prompt: opts.Prompt,
 	}
 }

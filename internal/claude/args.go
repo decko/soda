@@ -2,8 +2,8 @@ package claude
 
 import "strconv"
 
-// buildArgs constructs the CLI argument list from RunOpts and model.
-func buildArgs(opts RunOpts, model string) []string {
+// BuildArgs constructs the CLI argument list from RunOpts and model.
+func BuildArgs(opts RunOpts, model string) []string {
 	args := []string{
 		"--print",
 		"--bare",
