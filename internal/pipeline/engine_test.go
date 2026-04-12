@@ -1338,3 +1338,103 @@ func TestEngine_ResumeRerunsCompletedPhase(t *testing.T) {
 		t.Errorf("triage artifact = %q, want %q", string(artifact), "Triage v2")
 	}
 }
+
+func TestEngine_PhaseLifecycleEventsDispatchedToOnEvent(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "plan",
+			Prompt:    "plan.md",
+			DependsOn: []string{"triage"},
+			Retry:     RetryConfig{Transient: 0, Parse: 0, Semantic: 0},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage done",
+					CostUSD: 0.10,
+				},
+			}},
+			"plan": {{
+				err: fmt.Errorf("runner exploded"),
+			}},
+		},
+	}
+
+	var events []Event
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(e Event) {
+			events = append(events, e)
+		}
+	})
+
+	// plan will fail, but triage should succeed.
+	_ = engine.Run(context.Background())
+
+	// Collect event kinds by phase.
+	phaseEvents := map[string][]string{}
+	for _, e := range events {
+		if e.Phase != "" {
+			phaseEvents[e.Phase] = append(phaseEvents[e.Phase], e.Kind)
+		}
+	}
+
+	// Triage should have phase_started and phase_completed via OnEvent.
+	triageKinds := phaseEvents["triage"]
+	if !containsKind(triageKinds, EventPhaseStarted) {
+		t.Errorf("OnEvent missing %s for triage; got %v", EventPhaseStarted, triageKinds)
+	}
+	if !containsKind(triageKinds, EventPhaseCompleted) {
+		t.Errorf("OnEvent missing %s for triage; got %v", EventPhaseCompleted, triageKinds)
+	}
+
+	// Plan should have phase_started and phase_failed via OnEvent.
+	planKinds := phaseEvents["plan"]
+	if !containsKind(planKinds, EventPhaseStarted) {
+		t.Errorf("OnEvent missing %s for plan; got %v", EventPhaseStarted, planKinds)
+	}
+	if !containsKind(planKinds, EventPhaseFailed) {
+		t.Errorf("OnEvent missing %s for plan; got %v", EventPhaseFailed, planKinds)
+	}
+
+	// phase_completed for triage should carry duration and cost data.
+	for _, e := range events {
+		if e.Phase == "triage" && e.Kind == EventPhaseCompleted {
+			if _, ok := e.Data["duration_ms"]; !ok {
+				t.Error("phase_completed event should include duration_ms")
+			}
+			if _, ok := e.Data["cost"]; !ok {
+				t.Error("phase_completed event should include cost")
+			}
+		}
+	}
+
+	// phase_failed for plan should carry error data.
+	for _, e := range events {
+		if e.Phase == "plan" && e.Kind == EventPhaseFailed {
+			errStr, ok := e.Data["error"]
+			if !ok {
+				t.Error("phase_failed event should include error")
+			} else if errStr == "" {
+				t.Error("phase_failed event error should not be empty")
+			}
+		}
+	}
+}
+
+func containsKind(kinds []string, target string) bool {
+	for _, k := range kinds {
+		if k == target {
+			return true
+		}
+	}
+	return false
+}

@@ -206,7 +206,8 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 		})
 	}
 
-	// Mark phase running.
+	// Mark phase running and notify callback.
+	e.emit(Event{Phase: phase.Name, Kind: EventPhaseStarted})
 	if err := e.state.MarkRunning(phase.Name); err != nil {
 		return fmt.Errorf("engine: mark running %s: %w", phase.Name, err)
 	}
@@ -215,18 +216,21 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 	promptData, err := e.buildPromptData(phase)
 	if err != nil {
 		_ = e.state.MarkFailed(phase.Name, err)
+		e.emit(Event{Phase: phase.Name, Kind: EventPhaseFailed, Data: map[string]any{"error": err.Error()}})
 		return fmt.Errorf("engine: build prompt data for %s: %w", phase.Name, err)
 	}
 
 	tmplContent, err := e.config.Loader.Load(phase.Prompt)
 	if err != nil {
 		_ = e.state.MarkFailed(phase.Name, err)
+		e.emit(Event{Phase: phase.Name, Kind: EventPhaseFailed, Data: map[string]any{"error": err.Error()}})
 		return fmt.Errorf("engine: load template for %s: %w", phase.Name, err)
 	}
 
 	rendered, err := RenderPrompt(tmplContent, promptData)
 	if err != nil {
 		_ = e.state.MarkFailed(phase.Name, err)
+		e.emit(Event{Phase: phase.Name, Kind: EventPhaseFailed, Data: map[string]any{"error": err.Error()}})
 		return fmt.Errorf("engine: render prompt for %s: %w", phase.Name, err)
 	}
 
@@ -253,6 +257,7 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 	result, err := e.runWithRetry(ctx, phase, opts)
 	if err != nil {
 		_ = e.state.MarkFailed(phase.Name, err)
+		e.emit(Event{Phase: phase.Name, Kind: EventPhaseFailed, Data: map[string]any{"error": err.Error()}})
 		return err
 	}
 
@@ -271,10 +276,15 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 		return fmt.Errorf("engine: accumulate cost for %s: %w", phase.Name, err)
 	}
 
-	// Mark completed.
+	// Mark completed and notify callback.
 	if err := e.state.MarkCompleted(phase.Name); err != nil {
 		return fmt.Errorf("engine: mark completed %s: %w", phase.Name, err)
 	}
+	e.emit(Event{
+		Phase: phase.Name,
+		Kind:  EventPhaseCompleted,
+		Data:  map[string]any{"duration_ms": e.state.Meta().Phases[phase.Name].DurationMs, "cost": e.state.Meta().Phases[phase.Name].Cost},
+	})
 
 	// Domain gating.
 	return e.gatePhase(phase)
@@ -534,6 +544,7 @@ func (e *Engine) gatePhase(phase PhaseConfig) error {
 func (e *Engine) runMonitorStub(phase PhaseConfig) error {
 	prURL := e.extractPRURL()
 
+	e.emit(Event{Phase: phase.Name, Kind: EventPhaseStarted})
 	if err := e.state.MarkRunning(phase.Name); err != nil {
 		return fmt.Errorf("engine: mark running %s: %w", phase.Name, err)
 	}
@@ -547,6 +558,11 @@ func (e *Engine) runMonitorStub(phase PhaseConfig) error {
 	if err := e.state.MarkCompleted(phase.Name); err != nil {
 		return fmt.Errorf("engine: mark completed %s: %w", phase.Name, err)
 	}
+	e.emit(Event{
+		Phase: phase.Name,
+		Kind:  EventPhaseCompleted,
+		Data:  map[string]any{"duration_ms": e.state.Meta().Phases[phase.Name].DurationMs, "cost": e.state.Meta().Phases[phase.Name].Cost},
+	})
 
 	return nil
 }
