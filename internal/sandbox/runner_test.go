@@ -47,6 +47,8 @@ func TestParseSignalFromError(t *testing.T) {
 		{"sigterm", "killed by signal 15", 15},
 		{"no_match", "process exited normally", 0},
 		{"partial", "killed by signal", 0},
+		{"wrapped_error", "arapuca: wait: killed by signal 9: context canceled", 9},
+		{"trailing_text", "killed by signal 11 (core dumped)", 11},
 	}
 
 	for _, tt := range tests {
@@ -84,7 +86,9 @@ func TestParseEnvEntry(t *testing.T) {
 }
 
 func TestSetEnvForLaunch(t *testing.T) {
-	original := os.Getenv("PATH")
+	t.Setenv("PATH", "/original/path")
+	t.Setenv("SODA_TEST_VAR", "")
+
 	testEnv := []string{
 		"SODA_TEST_VAR=hello",
 		"PATH=/custom/path",
@@ -101,11 +105,17 @@ func TestSetEnvForLaunch(t *testing.T) {
 
 	restore()
 
-	if got := os.Getenv("SODA_TEST_VAR"); got != "" {
-		t.Errorf("SODA_TEST_VAR = %q after restore, want empty", got)
+	// SODA_TEST_VAR was set to empty before — restore should set it back to empty, not unset.
+	val, found := os.LookupEnv("SODA_TEST_VAR")
+	if !found {
+		t.Error("SODA_TEST_VAR was unset after restore, should be empty string")
 	}
-	if got := os.Getenv("PATH"); got != original {
-		t.Errorf("PATH = %q after restore, want %q", got, original)
+	if val != "" {
+		t.Errorf("SODA_TEST_VAR = %q after restore, want empty", val)
+	}
+
+	if got := os.Getenv("PATH"); got != "/original/path" {
+		t.Errorf("PATH = %q after restore, want /original/path", got)
 	}
 }
 

@@ -84,6 +84,8 @@ func parseWrapperPaths(scriptPath string) []string {
 }
 
 // systemReadPaths returns the standard OS paths required for process execution.
+// Note: /tmp is intentionally excluded — the sandbox has its own tmpDir with
+// read+write access. Including /tmp globally would expose other processes' temp files.
 func systemReadPaths() []string {
 	return []string{
 		"/usr",
@@ -94,7 +96,6 @@ func systemReadPaths() []string {
 		"/etc",
 		"/dev",
 		"/proc",
-		"/tmp",
 	}
 }
 
@@ -129,6 +130,8 @@ func claudeEnv(tmpDir string, opts runner.RunOpts, claudeBin string) []string {
 		"VERTEXAI_PROJECT",
 		"VERTEXAI_LOCATION",
 		"CLOUD_ML_REGION",
+		"GOOGLE_APPLICATION_CREDENTIALS",
+		"GOOGLE_CLOUD_PROJECT",
 	}
 	for _, key := range credentialVars {
 		if val := os.Getenv(key); val != "" {

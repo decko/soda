@@ -11,7 +11,7 @@ import (
 func TestSystemReadPaths(t *testing.T) {
 	paths := systemReadPaths()
 
-	required := []string{"/usr", "/lib", "/bin", "/proc", "/dev", "/etc", "/tmp"}
+	required := []string{"/usr", "/lib", "/bin", "/proc", "/dev", "/etc"}
 	for _, req := range required {
 		found := false
 		for _, path := range paths {
@@ -22,6 +22,13 @@ func TestSystemReadPaths(t *testing.T) {
 		}
 		if !found {
 			t.Errorf("systemReadPaths() missing %q", req)
+		}
+	}
+
+	// /tmp should NOT be in systemReadPaths — tmpDir is added separately.
+	for _, path := range paths {
+		if path == "/tmp" {
+			t.Error("systemReadPaths() should not include /tmp")
 		}
 	}
 }
@@ -59,6 +66,7 @@ func TestClaudeEnvVertexPassthrough(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_USE_VERTEX", "1")
 	t.Setenv("VERTEXAI_PROJECT", "my-project")
 	t.Setenv("VERTEXAI_LOCATION", "us-central1")
+	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", "/path/to/creds.json")
 
 	opts := runner.RunOpts{Phase: "plan", WorkDir: "/work"}
 	env := claudeEnv("/tmp/sb", opts, "/usr/bin/claude")
@@ -77,34 +85,39 @@ func TestClaudeEnvVertexPassthrough(t *testing.T) {
 	if envMap["VERTEXAI_PROJECT"] != "my-project" {
 		t.Errorf("VERTEXAI_PROJECT not passed through")
 	}
+	if envMap["GOOGLE_APPLICATION_CREDENTIALS"] != "/path/to/creds.json" {
+		t.Errorf("GOOGLE_APPLICATION_CREDENTIALS not passed through")
+	}
 }
 
 func TestClaudeEnvNoKeyMeansNoEntry(t *testing.T) {
-	os.Unsetenv("ANTHROPIC_API_KEY")
-	os.Unsetenv("CLAUDE_CODE_USE_VERTEX")
+	// Set credential vars to empty — claudeEnv should not emit them.
+	// t.Setenv restores the original env after the test.
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("CLAUDE_CODE_USE_VERTEX", "")
 
 	opts := runner.RunOpts{Phase: "plan", WorkDir: "/work"}
 	env := claudeEnv("/tmp/sb", opts, "/usr/bin/claude")
 
 	for _, entry := range env {
 		if strings.HasPrefix(entry, "ANTHROPIC_API_KEY=") {
-			t.Error("ANTHROPIC_API_KEY should not be present when unset")
+			t.Error("ANTHROPIC_API_KEY should not be present when empty")
 		}
 		if strings.HasPrefix(entry, "CLAUDE_CODE_USE_VERTEX=") {
-			t.Error("CLAUDE_CODE_USE_VERTEX should not be present when unset")
+			t.Error("CLAUDE_CODE_USE_VERTEX should not be present when empty")
 		}
 	}
 }
 
 func TestParseWrapperPaths(t *testing.T) {
-	tmpFile, err := os.CreateTemp(t.TempDir(), "claude-wrapper-*")
+	f, err := os.CreateTemp(t.TempDir(), "claude-wrapper-*")
 	if err != nil {
 		t.Fatal(err)
 	}
-	tmpFile.WriteString("#!/bin/bash\nexport NODE_PATH=\"/usr/lib/node_modules:/opt/claude/node_modules\"\nexec node \"$@\"\n")
-	tmpFile.Close()
+	f.WriteString("#!/bin/bash\nexport NODE_PATH=\"/usr/lib/node_modules:/opt/claude/node_modules\"\nexec node \"$@\"\n")
+	f.Close()
 
-	paths := parseWrapperPaths(tmpFile.Name())
+	paths := parseWrapperPaths(f.Name())
 
 	if len(paths) == 0 {
 		t.Fatal("expected paths from wrapper script, got none")
@@ -134,8 +147,32 @@ func TestEnvOrDefault(t *testing.T) {
 		t.Errorf("envOrDefault = %q, want value", got)
 	}
 
-	os.Unsetenv("SODA_MISSING")
-	if got := envOrDefault("SODA_MISSING", "fallback"); got != "fallback" {
+	// Set to empty — envOrDefault treats empty as missing.
+	t.Setenv("SODA_EMPTY", "")
+	if got := envOrDefault("SODA_EMPTY", "fallback"); got != "fallback" {
 		t.Errorf("envOrDefault = %q, want fallback", got)
+	}
+}
+
+func TestSetEnvForLaunchDistinguishesUnsetFromEmpty(t *testing.T) {
+	// Set a variable to empty string — restore should keep it empty, not unset it.
+	t.Setenv("SODA_EMPTY_VAR", "")
+
+	env := []string{"SODA_EMPTY_VAR=new-value"}
+	restore := setEnvForLaunch(env)
+
+	if got := os.Getenv("SODA_EMPTY_VAR"); got != "new-value" {
+		t.Errorf("after setEnvForLaunch: SODA_EMPTY_VAR = %q, want new-value", got)
+	}
+
+	restore()
+
+	// After restore, the variable should still exist as empty string.
+	val, found := os.LookupEnv("SODA_EMPTY_VAR")
+	if !found {
+		t.Error("SODA_EMPTY_VAR was unset after restore, should be empty string")
+	}
+	if val != "" {
+		t.Errorf("SODA_EMPTY_VAR = %q after restore, want empty", val)
 	}
 }
