@@ -29,7 +29,7 @@ func LoadOrCreate(stateDir, ticketKey string) (*State, error) {
 	dir := filepath.Join(stateDir, ticketKey)
 	metaPath := filepath.Join(dir, "meta.json")
 
-	meta, err := readMeta(metaPath)
+	meta, err := ReadMeta(metaPath)
 	if err == nil {
 		return &State{dir: dir, ticket: ticketKey, meta: meta}, nil
 	}
