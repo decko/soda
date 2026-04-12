@@ -253,6 +253,25 @@ Every ticket should include:
 - Total: ~NK / 160K available
 ```
 
+## Triaging issues
+
+Issues labeled `triage needed` require sizing and scope assessment before implementation.
+
+When asked to triage an issue:
+
+1. Read the issue description and understand the requirements
+2. Identify files to read and packages to integrate (scan the codebase)
+3. Estimate read surface, write surface, and integration points
+4. Apply the token budget formula from "Ticket sizing" above
+5. Update the issue with:
+   - `## Context to read` and `## Do NOT read` sections
+   - `## Estimated token budget` with the breakdown
+   - Split proposal if estimate exceeds 140K
+   - Dependencies on other issues
+6. Remove the `triage needed` label once complete
+
+If the issue lacks acceptance criteria, add them. If the scope is ambiguous, list the open questions in the issue and ask the maintainer.
+
 ## Build sequence
 
 Issues are numbered in dependency order:
