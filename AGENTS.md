@@ -166,7 +166,8 @@ Atomic writes: always write to `.tmp` then rename. Archive on re-run (`verify.js
 - Only stage specific files with `git add <file>`, never `git add .` or `git add -A`.
 - Do not force-push unless explicitly asked.
 - Do not amend published commits.
-- **Assisted-By**: add an `Assisted-by:` trailer at the end of the commit message naming the model used (e.g., `Assisted-by: Claude Opus 4.6`, `Assisted-by: GPT-4o`). One trailer per commit. Do not repeat when squash-merging — one at the end of the final message.
+- **Assisted-by**: add an `Assisted-by:` trailer at the end of the commit message naming the model used (e.g., `Assisted-by: Claude Opus 4.6`, `Assisted-by: GPT-4o`). One trailer per commit.
+- **Squash merge format**: title is the PR title (under 70 chars), body is a concise summary of what changed (not the full list of individual commits), single `Assisted-by:` trailer at the end.
 - After PR is merged, start fresh — never build on already-merged branches.
 
 ## Conventions
@@ -187,6 +188,90 @@ Atomic writes: always write to `.tmp` then rename. Archive on re-run (`verify.js
 4. **Landlock requires `agent-sandbox` wrapper binary**: it's a separate binary in the agentic-orchestrator. Must be on PATH.
 5. **Network namespace requires unprivileged user namespaces**: test with `unshare --user --net --map-current-user -- /bin/true`. If it fails, sandbox falls back to seccomp-only.
 6. **File locks are per-machine, not cross-machine**: `flock` on `.soda/<ticket>/lock` prevents concurrent runs on the same host but not across machines.
+
+## Implementation workflow
+
+Issues are fully specified with acceptance criteria.
+Do NOT write separate spec or plan documents.
+Read the issue, read the existing code, implement, test.
+
+## Ticket sizing
+
+Each ticket targets a **160K token working budget** (out of 256K context, after system prompt and safety buffer).
+
+### Estimate three factors
+
+| Factor | How to estimate | Token cost |
+|--------|----------------|-----------|
+| Read surface | Lines of existing code the session must read | ~5 tokens/line |
+| Write surface | Lines of new code to produce (including tests) | ~8 tokens/line |
+| Integration points | Number of existing packages to wire together | ~5K per package |
+
+Quick formula:
+```
+estimated = (read_lines × 5) + (write_lines × 8) + (packages × 5000) + 20000
+```
+
+### Decision
+
+| Estimate | Action |
+|----------|--------|
+| < 100K | Ship as one issue |
+| 100-140K | One issue, add explicit "do NOT read" list to save tokens |
+| 140-160K | Split unless the work is truly indivisible |
+| > 160K | Must split |
+
+### Split when
+
+- Multiple independent packages to create (each package is a natural boundary)
+- Read surface > 50K tokens (~10K lines)
+- More than 3 integration points (wiring 4+ packages)
+- Mixed read-heavy and write-heavy work
+- High test failure risk (complex wiring, external tools)
+
+### Don't split when
+
+- The work is tightly coupled (splitting creates stubs)
+- Read surface is small but write surface is large (greenfield is cheap)
+- Under 100K (splitting adds overhead for no benefit)
+
+### Ticket format
+
+Every ticket should include:
+
+```markdown
+## Context to read
+- <file> (<what to look at>, ~N lines)
+
+## Do NOT read
+- <package> (reason)
+
+## Estimated token budget
+- Read: ~NK
+- Write: ~NK
+- Tools: ~15K
+- Buffer: ~30K
+- Total: ~NK / 160K available
+```
+
+## Triaging issues
+
+Issues labeled `triage needed` require sizing and scope assessment before implementation.
+
+When asked to triage an issue:
+
+1. Read the issue description and understand the requirements
+2. Identify files to read and packages to integrate (scan the codebase)
+3. Estimate read surface, write surface, and integration points
+4. Apply the token budget formula from "Ticket sizing" above
+5. Update the issue with:
+   - `## Context to read` and `## Do NOT read` sections
+   - `## Estimated token budget` with the breakdown
+   - Split proposal if estimate exceeds 140K
+   - Dependencies on other issues
+6. Remove the `triage needed` label once complete
+
+If the issue lacks acceptance criteria, add them. If the scope is ambiguous, list the open questions in the issue and ask the maintainer.
 
 ## Build sequence
 
