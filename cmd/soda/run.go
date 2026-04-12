@@ -83,10 +83,14 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 	}
 	defer os.RemoveAll(promptDir)
 
-	loaderDirs := []string{"prompts"}
+	// Search order: user config dir > working dir > embedded.
+	// phases.yaml references prompts with the "prompts/" prefix
+	// (e.g. "prompts/triage.md"), so the base dirs should NOT
+	// include "prompts/" — the loader joins base + name.
+	loaderDirs := []string{"."}
 	configDir, _ := os.UserConfigDir()
 	if configDir != "" {
-		loaderDirs = append([]string{filepath.Join(configDir, "soda", "prompts")}, loaderDirs...)
+		loaderDirs = append([]string{filepath.Join(configDir, "soda")}, loaderDirs...)
 	}
 	loaderDirs = append(loaderDirs, promptDir)
 	loader := pipeline.NewPromptLoader(loaderDirs...)

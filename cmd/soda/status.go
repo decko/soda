@@ -35,6 +35,19 @@ func runStatus(stateDir string) error {
 		return fmt.Errorf("status: read state dir: %w", err)
 	}
 
+	// Load pipeline config for deterministic phase ordering.
+	phasesPath, cleanup, phasesErr := resolvePhasesPath()
+	if phasesErr != nil {
+		return fmt.Errorf("status: %w", phasesErr)
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+	pl, phasesErr := pipeline.LoadPipeline(phasesPath)
+	if phasesErr != nil {
+		return fmt.Errorf("status: %w", phasesErr)
+	}
+
 	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, "TICKET\tPHASE\tSTATUS\tELAPSED\tCOST")
 
@@ -51,7 +64,7 @@ func runStatus(stateDir string) error {
 			continue
 		}
 
-		phase, status := currentPhaseStatus(meta)
+		phase, status := currentPhaseStatus(meta, pl.Phases)
 		lockPath := filepath.Join(ticketDir, "lock")
 		lockInfo, lockErr := pipeline.ReadLockInfo(lockPath)
 		if lockErr == nil {
@@ -78,12 +91,20 @@ func runStatus(stateDir string) error {
 }
 
 // currentPhaseStatus returns the most advanced phase name and its status string.
-func currentPhaseStatus(meta *pipeline.PipelineMeta) (string, string) {
+// Uses pipeline phase order for deterministic results when ranks are tied.
+func currentPhaseStatus(meta *pipeline.PipelineMeta, phases []pipeline.PhaseConfig) (string, string) {
 	latestPhase := ""
+	latestRank := -1
 	latestStatus := ""
-	for name, ps := range meta.Phases {
-		if latestPhase == "" || phaseRank(ps.Status) > phaseRank(pipeline.PhaseStatus(latestStatus)) {
-			latestPhase = name
+	for _, phase := range phases {
+		ps, ok := meta.Phases[phase.Name]
+		if !ok {
+			continue
+		}
+		rank := phaseRank(ps.Status)
+		if rank > latestRank {
+			latestPhase = phase.Name
+			latestRank = rank
 			latestStatus = string(ps.Status)
 		}
 	}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,6 +11,8 @@ import (
 	"github.com/decko/soda/internal/pipeline"
 	"github.com/spf13/cobra"
 )
+
+var errSkipped = errors.New("skipped")
 
 func newCleanCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -56,7 +59,9 @@ func cleanAll(stateDir string, dryRun bool) error {
 			continue
 		}
 		if err := cleanTicket(stateDir, entry.Name(), dryRun); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: %s: %v\n", entry.Name(), err)
+			if !errors.Is(err, errSkipped) {
+				fmt.Fprintf(os.Stderr, "Warning: %s: %v\n", entry.Name(), err)
+			}
 		} else {
 			cleaned++
 		}
@@ -81,13 +86,13 @@ func cleanTicket(stateDir, ticketKey string, dryRun bool) error {
 	lockPath := filepath.Join(ticketDir, "lock")
 	if !tryLock(lockPath) {
 		fmt.Fprintf(os.Stderr, "Skipping %s: pipeline is running\n", ticketKey)
-		return nil
+		return errSkipped
 	}
 
 	// Check terminal state
 	if !isTerminal(meta) {
 		fmt.Fprintf(os.Stderr, "Skipping %s: not in terminal state\n", ticketKey)
-		return nil
+		return errSkipped
 	}
 
 	// Remove worktree

@@ -64,13 +64,16 @@ func loadConfig(cmd *cobra.Command) (*config.Config, error) {
 
 // extractEmbeddedPrompts writes embedded prompt files to a temp dir
 // and returns the path. Caller must clean up with os.RemoveAll.
+// The extracted tree preserves the prompts/ subdirectory so that
+// phases.yaml references (e.g. "prompts/triage.md") resolve correctly.
 func extractEmbeddedPrompts() (string, error) {
 	tmpDir, err := os.MkdirTemp("", "soda-prompts-*")
 	if err != nil {
 		return "", fmt.Errorf("create temp dir: %w", err)
 	}
 
-	promptsFS, err := fs.Sub(embeddedPrompts, "embeds/prompts")
+	// Use "embeds" (not "embeds/prompts") to preserve the prompts/ prefix.
+	promptsFS, err := fs.Sub(embeddedPrompts, "embeds")
 	if err != nil {
 		os.RemoveAll(tmpDir)
 		return "", fmt.Errorf("embedded prompts: %w", err)
@@ -81,7 +84,7 @@ func extractEmbeddedPrompts() (string, error) {
 			return walkErr
 		}
 		if entry.IsDir() {
-			return nil
+			return os.MkdirAll(filepath.Join(tmpDir, path), 0755)
 		}
 		data, readErr := fs.ReadFile(promptsFS, path)
 		if readErr != nil {

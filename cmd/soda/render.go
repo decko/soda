@@ -102,10 +102,10 @@ func runRender(cmd *cobra.Command, cfg *config.Config, phaseName, ticketKey stri
 	}
 	defer os.RemoveAll(promptDir)
 
-	loaderDirs := []string{"prompts"}
+	loaderDirs := []string{"."}
 	configDir, _ := os.UserConfigDir()
 	if configDir != "" {
-		loaderDirs = append([]string{filepath.Join(configDir, "soda", "prompts")}, loaderDirs...)
+		loaderDirs = append([]string{filepath.Join(configDir, "soda")}, loaderDirs...)
 	}
 	loaderDirs = append(loaderDirs, promptDir)
 	loader := pipeline.NewPromptLoader(loaderDirs...)
