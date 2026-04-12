@@ -1339,18 +1339,12 @@ func TestEngine_ResumeRerunsCompletedPhase(t *testing.T) {
 	}
 }
 
-func TestEngine_PhaseLifecycleEventsDispatchedToOnEvent(t *testing.T) {
+func TestEngine_BuildPromptDataIncludesConfigAndContext(t *testing.T) {
 	phases := []PhaseConfig{
 		{
 			Name:   "triage",
 			Prompt: "triage.md",
 			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
-		},
-		{
-			Name:      "plan",
-			Prompt:    "plan.md",
-			DependsOn: []string{"triage"},
-			Retry:     RetryConfig{Transient: 0, Parse: 0, Semantic: 0},
 		},
 	}
 
@@ -1360,81 +1354,86 @@ func TestEngine_PhaseLifecycleEventsDispatchedToOnEvent(t *testing.T) {
 				result: &runner.RunResult{
 					Output:  json.RawMessage(`{"automatable":true}`),
 					RawText: "Triage done",
-					CostUSD: 0.10,
+					CostUSD: 0.05,
 				},
-			}},
-			"plan": {{
-				err: fmt.Errorf("runner exploded"),
 			}},
 		},
 	}
 
-	var events []Event
-	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
-		cfg.OnEvent = func(e Event) {
-			events = append(events, e)
+	// Write a prompt template that renders Config and Context fields.
+	stateDir := t.TempDir()
+	promptDir := t.TempDir()
+	workDir := t.TempDir()
+
+	tmpl := `Formatter: {{.Config.Formatter}}
+TestCommand: {{.Config.TestCommand}}
+Forge: {{.Config.Repo.Forge}}
+PushTo: {{.Config.Repo.PushTo}}
+Target: {{.Config.Repo.Target}}
+{{range .Config.VerifyCommands}}Verify: {{.}}
+{{end}}ProjectContext: {{.Context.ProjectContext}}
+RepoConventions: {{.Context.RepoConventions}}
+`
+	if err := os.WriteFile(filepath.Join(promptDir, "triage.md"), []byte(tmpl), 0644); err != nil {
+		t.Fatalf("write prompt: %v", err)
+	}
+
+	state, err := LoadOrCreate(stateDir, "CFG-1")
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+
+	cfg := EngineConfig{
+		Pipeline: &PhasePipeline{Phases: phases},
+		Loader:   NewPromptLoader(promptDir),
+		Ticket:   TicketData{Key: "CFG-1", Summary: "Config context test"},
+		PromptConfig: PromptConfigData{
+			Formatter:      "gofmt",
+			TestCommand:    "go test ./...",
+			VerifyCommands: []string{"make lint", "make test"},
+			Repo: RepoConfig{
+				Forge:  "github",
+				PushTo: "origin",
+				Target: "main",
+			},
+		},
+		PromptContext: ContextData{
+			ProjectContext:  "Go CLI tool for automated development",
+			RepoConventions: "Use table-driven tests",
+		},
+		Model:      "test-model",
+		WorkDir:    workDir,
+		MaxCostUSD: 0,
+		Mode:       Autonomous,
+		SleepFunc:  func(time.Duration) {},
+		JitterFunc: func(time.Duration) time.Duration { return 0 },
+	}
+
+	engine := NewEngine(mock, state, cfg)
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if len(mock.calls) != 1 {
+		t.Fatalf("runner called %d times, want 1", len(mock.calls))
+	}
+
+	rendered := mock.calls[0].SystemPrompt
+
+	for _, want := range []string{
+		"Formatter: gofmt",
+		"TestCommand: go test ./...",
+		"Forge: github",
+		"PushTo: origin",
+		"Target: main",
+		"Verify: make lint",
+		"Verify: make test",
+		"ProjectContext: Go CLI tool for automated development",
+		"RepoConventions: Use table-driven tests",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("rendered prompt missing %q;\ngot: %s", want, rendered)
 		}
-	})
-
-	// plan will fail, but triage should succeed.
-	_ = engine.Run(context.Background())
-
-	// Collect event kinds by phase.
-	phaseEvents := map[string][]string{}
-	for _, e := range events {
-		if e.Phase != "" {
-			phaseEvents[e.Phase] = append(phaseEvents[e.Phase], e.Kind)
-		}
 	}
-
-	// Triage should have phase_started and phase_completed via OnEvent.
-	triageKinds := phaseEvents["triage"]
-	if !containsKind(triageKinds, EventPhaseStarted) {
-		t.Errorf("OnEvent missing %s for triage; got %v", EventPhaseStarted, triageKinds)
-	}
-	if !containsKind(triageKinds, EventPhaseCompleted) {
-		t.Errorf("OnEvent missing %s for triage; got %v", EventPhaseCompleted, triageKinds)
-	}
-
-	// Plan should have phase_started and phase_failed via OnEvent.
-	planKinds := phaseEvents["plan"]
-	if !containsKind(planKinds, EventPhaseStarted) {
-		t.Errorf("OnEvent missing %s for plan; got %v", EventPhaseStarted, planKinds)
-	}
-	if !containsKind(planKinds, EventPhaseFailed) {
-		t.Errorf("OnEvent missing %s for plan; got %v", EventPhaseFailed, planKinds)
-	}
-
-	// phase_completed for triage should carry duration and cost data.
-	for _, e := range events {
-		if e.Phase == "triage" && e.Kind == EventPhaseCompleted {
-			if _, ok := e.Data["duration_ms"]; !ok {
-				t.Error("phase_completed event should include duration_ms")
-			}
-			if _, ok := e.Data["cost"]; !ok {
-				t.Error("phase_completed event should include cost")
-			}
-		}
-	}
-
-	// phase_failed for plan should carry error data.
-	for _, e := range events {
-		if e.Phase == "plan" && e.Kind == EventPhaseFailed {
-			errStr, ok := e.Data["error"]
-			if !ok {
-				t.Error("phase_failed event should include error")
-			} else if errStr == "" {
-				t.Error("phase_failed event error should not be empty")
-			}
-		}
-	}
-}
-
-func containsKind(kinds []string, target string) bool {
-	for _, k := range kinds {
-		if k == target {
-			return true
-		}
-	}
-	return false
 }

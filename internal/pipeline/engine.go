@@ -26,18 +26,20 @@ const (
 
 // EngineConfig holds everything needed to construct an Engine.
 type EngineConfig struct {
-	Pipeline     *PhasePipeline
-	Loader       *PromptLoader
-	Ticket       TicketData
-	Model        string
-	WorkDir      string
-	WorktreeBase string
-	BaseBranch   string
-	MaxCostUSD   float64
-	Mode         Mode
-	OnEvent      func(Event)
-	SleepFunc    func(time.Duration)
-	JitterFunc   func(max time.Duration) time.Duration
+	Pipeline      *PhasePipeline
+	Loader        *PromptLoader
+	Ticket        TicketData
+	PromptConfig  PromptConfigData
+	PromptContext ContextData
+	Model         string
+	WorkDir       string
+	WorktreeBase  string
+	BaseBranch    string
+	MaxCostUSD    float64
+	Mode          Mode
+	OnEvent       func(Event)
+	SleepFunc     func(time.Duration)
+	JitterFunc    func(max time.Duration) time.Duration
 }
 
 // Engine orchestrates a pipeline run, tying together the runner,
@@ -411,6 +413,8 @@ func (e *Engine) checkBudget(phase PhaseConfig) error {
 func (e *Engine) buildPromptData(phase PhaseConfig) (PromptData, error) {
 	data := PromptData{
 		Ticket:       e.config.Ticket,
+		Config:       e.config.PromptConfig,
+		Context:      e.config.PromptContext,
 		WorktreePath: e.state.Meta().Worktree,
 		Branch:       e.state.Meta().Branch,
 		BaseBranch:   e.config.BaseBranch,
