@@ -9,10 +9,12 @@ import (
 	"time"
 )
 
-// lockInfo holds the PID and acquisition time written to the lock file.
-type lockInfo struct {
+// LockInfo holds the PID and acquisition time written to the lock file.
+// IsAlive is computed at read time and not serialized.
+type LockInfo struct {
 	PID        int       `json:"pid"`
 	AcquiredAt time.Time `json:"acquired_at"`
+	IsAlive    bool      `json:"-"`
 }
 
 // acquireLock acquires an exclusive flock on the lock file in dir.
@@ -66,7 +68,7 @@ func releaseLock(fd *os.File) {
 
 // writeLockInfo truncates and writes PID + timestamp to the lock file.
 func writeLockInfo(fd *os.File) {
-	info := lockInfo{
+	info := LockInfo{
 		PID:        os.Getpid(),
 		AcquiredAt: time.Now(),
 	}
@@ -78,7 +80,7 @@ func writeLockInfo(fd *os.File) {
 }
 
 // readLockInfo reads and parses the lock file contents.
-func readLockInfo(fd *os.File) (*lockInfo, error) {
+func readLockInfo(fd *os.File) (*LockInfo, error) {
 	fd.Seek(0, 0)
 	data := make([]byte, 1024)
 	n, err := fd.Read(data)
@@ -88,10 +90,24 @@ func readLockInfo(fd *os.File) (*lockInfo, error) {
 		}
 		return nil, fmt.Errorf("pipeline: read lock info: %w", err)
 	}
-	var info lockInfo
+	var info LockInfo
 	if err := json.Unmarshal(data[:n], &info); err != nil {
 		return nil, fmt.Errorf("pipeline: parse lock info: %w", err)
 	}
+	return &info, nil
+}
+
+// ReadLockInfo reads and parses a lock file from a path, computing IsAlive.
+func ReadLockInfo(lockPath string) (*LockInfo, error) {
+	data, err := os.ReadFile(lockPath)
+	if err != nil {
+		return nil, fmt.Errorf("pipeline: read lock %s: %w", lockPath, err)
+	}
+	var info LockInfo
+	if err := json.Unmarshal(data, &info); err != nil {
+		return nil, fmt.Errorf("pipeline: parse lock %s: %w", lockPath, err)
+	}
+	info.IsAlive = isPIDAlive(info.PID)
 	return &info, nil
 }
 

@@ -1,10 +1,13 @@
 package pipeline
 
 import (
+	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 func TestAcquireLock(t *testing.T) {
@@ -132,4 +135,48 @@ func TestAcquireLock_AfterHolderCloses(t *testing.T) {
 		t.Fatalf("acquireLock after holder closed: %v", err)
 	}
 	releaseLock(fd)
+}
+
+func TestReadLockInfo(t *testing.T) {
+	dir := t.TempDir()
+	lockPath := filepath.Join(dir, "lock")
+
+	info := LockInfo{
+		PID:        os.Getpid(),
+		AcquiredAt: time.Now().Truncate(time.Second),
+	}
+	data, _ := json.Marshal(info)
+	if err := os.WriteFile(lockPath, data, 0644); err != nil {
+		t.Fatalf("write lock file: %v", err)
+	}
+
+	got, err := ReadLockInfo(lockPath)
+	if err != nil {
+		t.Fatalf("ReadLockInfo: %v", err)
+	}
+	if got.PID != os.Getpid() {
+		t.Errorf("PID = %d, want %d", got.PID, os.Getpid())
+	}
+	if !got.IsAlive {
+		t.Error("IsAlive = false, want true (current process)")
+	}
+
+	// Write a dead PID
+	info.PID = 999999999
+	data, _ = json.Marshal(info)
+	os.WriteFile(lockPath, data, 0644)
+
+	got, err = ReadLockInfo(lockPath)
+	if err != nil {
+		t.Fatalf("ReadLockInfo (dead pid): %v", err)
+	}
+	if got.IsAlive {
+		t.Error("IsAlive = true for dead PID, want false")
+	}
+
+	// Missing file
+	_, err = ReadLockInfo(filepath.Join(dir, "nonexistent"))
+	if err == nil {
+		t.Error("expected error for missing lock file")
+	}
 }
