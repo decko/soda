@@ -1,13 +1,124 @@
 package main
 
-import "github.com/spf13/cobra"
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"text/tabwriter"
+	"time"
+
+	"github.com/decko/soda/internal/pipeline"
+	"github.com/spf13/cobra"
+)
 
 func newStatusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
 		Short: "Show active and recent pipelines",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return nil
+			cfg, err := loadConfig(cmd)
+			if err != nil {
+				return err
+			}
+			return runStatus(cfg.StateDir)
 		},
 	}
+}
+
+func runStatus(stateDir string) error {
+	entries, err := os.ReadDir(stateDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Println("No pipelines found.")
+			return nil
+		}
+		return fmt.Errorf("status: read state dir: %w", err)
+	}
+
+	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "TICKET\tPHASE\tSTATUS\tELAPSED\tCOST")
+
+	found := false
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		ticketDir := filepath.Join(stateDir, entry.Name())
+		metaPath := filepath.Join(ticketDir, "meta.json")
+
+		meta, metaErr := pipeline.ReadMeta(metaPath)
+		if metaErr != nil {
+			continue
+		}
+
+		phase, status := currentPhaseStatus(meta)
+		lockPath := filepath.Join(ticketDir, "lock")
+		lockInfo, lockErr := pipeline.ReadLockInfo(lockPath)
+		if lockErr == nil {
+			if lockInfo.IsAlive {
+				status = "running"
+			} else {
+				status = "stale"
+			}
+		}
+
+		elapsed := formatElapsed(meta)
+		cost := fmt.Sprintf("$%.2f", meta.TotalCost)
+
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", meta.Ticket, phase, status, elapsed, cost)
+		found = true
+	}
+
+	if !found {
+		fmt.Println("No pipelines found.")
+		return nil
+	}
+
+	return tw.Flush()
+}
+
+// currentPhaseStatus returns the most advanced phase name and its status string.
+func currentPhaseStatus(meta *pipeline.PipelineMeta) (string, string) {
+	latestPhase := ""
+	latestStatus := ""
+	for name, ps := range meta.Phases {
+		if latestPhase == "" || phaseRank(ps.Status) > phaseRank(pipeline.PhaseStatus(latestStatus)) {
+			latestPhase = name
+			latestStatus = string(ps.Status)
+		}
+	}
+	if latestPhase == "" {
+		return "-", "pending"
+	}
+	return latestPhase, latestStatus
+}
+
+func phaseRank(status pipeline.PhaseStatus) int {
+	switch status {
+	case pipeline.PhaseRunning:
+		return 4
+	case pipeline.PhaseFailed:
+		return 3
+	case pipeline.PhaseRetrying:
+		return 2
+	case pipeline.PhaseCompleted:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func formatElapsed(meta *pipeline.PipelineMeta) string {
+	var totalMs int64
+	hasRunning := false
+	for _, ps := range meta.Phases {
+		if ps.Status == pipeline.PhaseRunning {
+			hasRunning = true
+		}
+		totalMs += ps.DurationMs
+	}
+	if hasRunning {
+		return time.Since(meta.StartedAt).Truncate(time.Second).String()
+	}
+	return (time.Duration(totalMs) * time.Millisecond).Truncate(time.Second).String()
 }
