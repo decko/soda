@@ -209,30 +209,43 @@ Do NOT write tests after implementation. Do NOT skip the "see it fail" step.
 
 ## Specialist reviews
 
-Every output must be reviewed before moving to the next step. Use parallel subagents for speed.
+Every output must be reviewed before moving to the next step. Reviews run as **subagents** to minimize context cost in the parent session (~20K total, not ~60K).
 
 ### When to review
 
-| Phase | Reviewers |
-|-------|-----------|
-| Spec or issue written | Go Specialist Agent + AI Harness Agent |
-| Plan created | Go Specialist Agent + AI Harness Agent |
-| Code implemented | Go Specialist Agent + AI Harness Agent |
+| Ticket size | Review requirement |
+|-------------|-------------------|
+| Small (< 100K budget) | Skip reviews — the fix is trivial |
+| Medium (100-140K) | Review after implementation (one round) |
+| Large (> 140K) | Review after spec AND after implementation |
 
 ### How to review
 
-Dispatch two subagents in parallel:
+Dispatch two subagents **in parallel** using the Agent tool:
 
 1. **Go Specialist Agent**: review for Go idioms, error handling, interface design, test quality, performance, and correctness.
 2. **AI Harness Agent**: review for prompt engineering, context budget impact, Claude Code CLI integration, sandbox compatibility, and structured output reliability.
 
+Each subagent receives:
+- The code or spec to review (keep concise — send only the relevant files, not the whole repo)
+- Specific review questions (not "review everything")
+
 Each reviewer should be critical and flag concrete issues, not give generic approval.
+
+### Token cost of reviews
+
+Subagent reviews cost ~20K in the parent session (2 dispatches + 2 summaries). The heavy analysis happens in the subagent's own context window, not in the parent.
+
+Budget formula already includes this:
+```
+estimated = (read_lines × 5) + (write_lines × 8) + (packages × 5000) + 20000 (tools) + 20000 (reviews)
+```
 
 ### After reviews
 
 - Fix all critical and major issues before proceeding.
-- Re-estimate the token budget after incorporating review feedback — reviews add tokens. If the remaining budget is tight, defer minor suggestions to a follow-up issue.
-- Do NOT skip reviews to save tokens. A bug caught in review is cheaper than a bug caught in production.
+- If remaining budget is tight after fixes, defer minor suggestions to a follow-up issue.
+- Do NOT skip reviews on medium/large tickets to save tokens.
 
 ## Ticket sizing
 
@@ -248,7 +261,7 @@ Each ticket targets a **160K token working budget** (out of 256K context, after 
 
 Quick formula:
 ```
-estimated = (read_lines × 5) + (write_lines × 8) + (packages × 5000) + 20000
+estimated = (read_lines × 5) + (write_lines × 8) + (packages × 5000) + 20000 (tools) + 20000 (reviews)
 ```
 
 ### Decision
