@@ -19,7 +19,7 @@ type Config struct {
 	WorktreeDir  string              `yaml:"worktree_dir"`
 	StateDir     string              `yaml:"state_dir"`
 	Context      []string            `yaml:"context"`
-	PhaseContext map[string][]string  `yaml:"phase_context"`
+	PhaseContext map[string][]string `yaml:"phase_context"`
 	Repos        []RepoConfig        `yaml:"repos"`
 }
 
