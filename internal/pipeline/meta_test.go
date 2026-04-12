@@ -41,9 +41,9 @@ func TestMetaRoundTrip(t *testing.T) {
 		t.Fatalf("writeMeta: %v", err)
 	}
 
-	loaded, err := readMeta(path)
+	loaded, err := ReadMeta(path)
 	if err != nil {
-		t.Fatalf("readMeta: %v", err)
+		t.Fatalf("ReadMeta: %v", err)
 	}
 
 	if loaded.Ticket != original.Ticket {
@@ -103,9 +103,9 @@ func TestReadMeta_InitializesNilPhasesMap(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	meta, err := readMeta(path)
+	meta, err := ReadMeta(path)
 	if err != nil {
-		t.Fatalf("readMeta: %v", err)
+		t.Fatalf("ReadMeta: %v", err)
 	}
 	if meta.Phases == nil {
 		t.Error("Phases should be initialized to non-nil map")
@@ -113,9 +113,41 @@ func TestReadMeta_InitializesNilPhasesMap(t *testing.T) {
 }
 
 func TestReadMeta_FileNotExist(t *testing.T) {
-	_, err := readMeta("/nonexistent/path/meta.json")
+	_, err := ReadMeta("/nonexistent/path/meta.json")
 	if err == nil {
 		t.Fatal("expected error for missing file")
+	}
+}
+
+func TestReadMeta(t *testing.T) {
+	dir := t.TempDir()
+	metaPath := filepath.Join(dir, "meta.json")
+
+	meta := &PipelineMeta{
+		Ticket:    "TEST-1",
+		Branch:    "feat/test",
+		StartedAt: time.Now().Truncate(time.Second),
+		TotalCost: 1.23,
+		Phases:    map[string]*PhaseState{},
+	}
+	if err := writeMeta(metaPath, meta); err != nil {
+		t.Fatalf("writeMeta: %v", err)
+	}
+
+	got, err := ReadMeta(metaPath)
+	if err != nil {
+		t.Fatalf("ReadMeta: %v", err)
+	}
+	if got.Ticket != "TEST-1" {
+		t.Errorf("Ticket = %q, want TEST-1", got.Ticket)
+	}
+	if got.TotalCost != 1.23 {
+		t.Errorf("TotalCost = %f, want 1.23", got.TotalCost)
+	}
+
+	_, err = ReadMeta(filepath.Join(dir, "nonexistent.json"))
+	if err == nil {
+		t.Error("expected error for missing file")
 	}
 }
 

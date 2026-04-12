@@ -1,0 +1,147 @@
+package config
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"reflect"
+	"testing"
+
+	"github.com/decko/soda/internal/pipeline"
+)
+
+func TestLoad(t *testing.T) {
+	tests := []struct {
+		name    string
+		file    string
+		wantErr bool
+		check   func(t *testing.T, cfg *Config)
+	}{
+		{
+			name: "valid config parses all fields",
+			file: "testdata/valid.yaml",
+			check: func(t *testing.T, cfg *Config) {
+				if cfg.TicketSource != "jira" {
+					t.Errorf("TicketSource = %q, want %q", cfg.TicketSource, "jira")
+				}
+				if cfg.Jira.Command != "wtmcp" {
+					t.Errorf("Jira.Command = %q, want %q", cfg.Jira.Command, "wtmcp")
+				}
+				if cfg.Mode != "autonomous" {
+					t.Errorf("Mode = %q, want %q", cfg.Mode, "autonomous")
+				}
+				if cfg.Model != "claude-opus-4-6" {
+					t.Errorf("Model = %q, want %q", cfg.Model, "claude-opus-4-6")
+				}
+				if cfg.Limits.MaxCostPerTicket != 15.0 {
+					t.Errorf("MaxCostPerTicket = %f, want 15.0", cfg.Limits.MaxCostPerTicket)
+				}
+				if cfg.StateDir != ".soda" {
+					t.Errorf("StateDir = %q, want %q", cfg.StateDir, ".soda")
+				}
+				if len(cfg.Repos) != 1 {
+					t.Fatalf("len(Repos) = %d, want 1", len(cfg.Repos))
+				}
+				if cfg.Repos[0].Name != "my-service" {
+					t.Errorf("Repos[0].Name = %q, want %q", cfg.Repos[0].Name, "my-service")
+				}
+				if cfg.Repos[0].Forge != "github" {
+					t.Errorf("Repos[0].Forge = %q, want %q", cfg.Repos[0].Forge, "github")
+				}
+				if len(cfg.Context) != 1 || cfg.Context[0] != "AGENTS.md" {
+					t.Errorf("Context = %v, want [AGENTS.md]", cfg.Context)
+				}
+				if len(cfg.PhaseContext["plan"]) != 1 {
+					t.Errorf("PhaseContext[plan] = %v, want 1 entry", cfg.PhaseContext["plan"])
+				}
+			},
+		},
+		{
+			name: "minimal config",
+			file: "testdata/minimal.yaml",
+			check: func(t *testing.T, cfg *Config) {
+				if cfg.TicketSource != "jira" {
+					t.Errorf("TicketSource = %q, want %q", cfg.TicketSource, "jira")
+				}
+				if len(cfg.Repos) != 0 {
+					t.Errorf("len(Repos) = %d, want 0", len(cfg.Repos))
+				}
+			},
+		},
+		{
+			name:    "missing file",
+			file:    "testdata/nonexistent.yaml",
+			wantErr: true,
+			check: func(t *testing.T, _ *Config) {
+				// Error check is below
+			},
+		},
+		{
+			name:    "malformed yaml",
+			file:    "testdata/malformed.yaml",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := Load(tt.file)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if tt.name == "missing file" && !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("expected os.ErrNotExist, got %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tt.check != nil {
+				tt.check(t, cfg)
+			}
+		})
+	}
+}
+
+func TestDefaultPath(t *testing.T) {
+	path, err := DefaultPath()
+	if err != nil {
+		t.Fatalf("DefaultPath() error: %v", err)
+	}
+	if !filepath.IsAbs(path) {
+		t.Errorf("DefaultPath() = %q, want absolute path", path)
+	}
+	if filepath.Base(path) != "config.yaml" {
+		t.Errorf("DefaultPath() base = %q, want config.yaml", filepath.Base(path))
+	}
+}
+
+func TestRepoConfigFieldParity(t *testing.T) {
+	configType := reflect.TypeOf(RepoConfig{})
+	pipelineType := reflect.TypeOf(pipeline.RepoConfig{})
+
+	configFields := make(map[string]reflect.StructField)
+	for i := 0; i < configType.NumField(); i++ {
+		field := configType.Field(i)
+		configFields[field.Name] = field
+	}
+
+	for i := 0; i < pipelineType.NumField(); i++ {
+		pipeField := pipelineType.Field(i)
+		configField, ok := configFields[pipeField.Name]
+		if !ok {
+			t.Errorf("pipeline.RepoConfig has field %q not found in config.RepoConfig", pipeField.Name)
+			continue
+		}
+		if configField.Type != pipeField.Type {
+			t.Errorf("field %q type mismatch: config=%v, pipeline=%v", pipeField.Name, configField.Type, pipeField.Type)
+		}
+		delete(configFields, pipeField.Name)
+	}
+
+	for name := range configFields {
+		t.Errorf("config.RepoConfig has field %q not found in pipeline.RepoConfig", name)
+	}
+}

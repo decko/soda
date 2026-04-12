@@ -1,0 +1,6 @@
+ticket_source: jira
+jira:
+  command: wtmcp
+mode: autonomous
+model: claude-opus-4-6
+state_dir: .soda

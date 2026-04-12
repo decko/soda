@@ -39,8 +39,8 @@ type PipelineMeta struct {
 	Phases    map[string]*PhaseState `json:"phases"`
 }
 
-// readMeta reads and unmarshals a meta.json file.
-func readMeta(path string) (*PipelineMeta, error) {
+// ReadMeta reads and unmarshals a meta.json file.
+func ReadMeta(path string) (*PipelineMeta, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("pipeline: read meta %s: %w", path, err)
