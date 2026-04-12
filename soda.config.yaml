@@ -1,0 +1,59 @@
+# SODA configuration for the soda project itself
+
+# Ticket source
+ticket_source: github
+github:
+  owner: decko
+  repo: soda
+
+# Default execution mode
+mode: autonomous
+
+# Model
+model: claude-opus-4-6
+
+# Sandbox
+sandbox:
+  enabled: true
+  limits:
+    memory_mb: 2048
+    cpu_percent: 200
+    max_pids: 256
+
+# Budget
+limits:
+  max_cost_per_ticket: 15.00
+  max_cost_per_phase: 8.00
+
+# Worktrees
+worktree_dir: .worktrees
+
+# State directory
+state_dir: .soda
+
+# Project context — injected into every phase system prompt
+context:
+  - AGENTS.md
+
+# Phase-specific context
+phase_context:
+  plan:
+    - docs/gotchas.md
+  implement:
+    - docs/gotchas.md
+  verify:
+    - docs/gotchas.md
+
+# Repos
+repos:
+  - name: soda
+    forge: github
+    push_to: decko/soda
+    target: decko/soda
+    description: "Session-Orchestrated Development Agent"
+    formatter: "gofmt -w ."
+    test_command: "go test ./..."
+    labels:
+      - ai-assisted
+    trailers:
+      - "Assisted-by: SODA"
