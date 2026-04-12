@@ -195,6 +195,33 @@ Issues are fully specified with acceptance criteria.
 Do NOT write separate spec or plan documents.
 Read the issue, read the existing code, implement, test.
 
+## Specialist reviews
+
+Every output must be reviewed before moving to the next step. Use parallel subagents for speed.
+
+### When to review
+
+| Phase | Reviewers |
+|-------|-----------|
+| Spec or issue written | Go Specialist Agent + AI Harness Agent |
+| Plan created | Go Specialist Agent + AI Harness Agent |
+| Code implemented | Go Specialist Agent + AI Harness Agent |
+
+### How to review
+
+Dispatch two subagents in parallel:
+
+1. **Go Specialist Agent**: review for Go idioms, error handling, interface design, test quality, performance, and correctness.
+2. **AI Harness Agent**: review for prompt engineering, context budget impact, Claude Code CLI integration, sandbox compatibility, and structured output reliability.
+
+Each reviewer should be critical and flag concrete issues, not give generic approval.
+
+### After reviews
+
+- Fix all critical and major issues before proceeding.
+- Re-estimate the token budget after incorporating review feedback — reviews add tokens. If the remaining budget is tight, defer minor suggestions to a follow-up issue.
+- Do NOT skip reviews to save tokens. A bug caught in review is cheaper than a bug caught in production.
+
 ## Ticket sizing
 
 Each ticket targets a **160K token working budget** (out of 256K context, after system prompt and safety buffer).
