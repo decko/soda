@@ -25,7 +25,7 @@ func newRunCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig(cmd)
 			if err != nil {
-				os.Exit(2)
+				return err
 			}
 			return runPipeline(cmd, cfg, args[0])
 		},
@@ -108,8 +108,13 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 	if cmd.Flags().Changed("mode") {
 		modeStr, _ = cmd.Flags().GetString("mode")
 	}
-	if modeStr == "checkpoint" {
+	switch modeStr {
+	case "checkpoint":
 		mode = pipeline.Checkpoint
+	case "autonomous", "":
+		// default
+	default:
+		return fmt.Errorf("run: unknown mode %q (expected 'checkpoint' or 'autonomous')", modeStr)
 	}
 
 	// Build mock runner
@@ -156,10 +161,7 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 	// Print summary
 	printSummary(state.Meta(), time.Since(startTime))
 
-	if runErr != nil {
-		os.Exit(4)
-	}
-	return nil
+	return runErr
 }
 
 func buildMockRunner() *runner.MockRunner {
@@ -207,7 +209,7 @@ func handleEvent(ctx context.Context, cancel context.CancelFunc, engine *pipelin
 		fmt.Printf("⚠ Budget warning: $%.2f / $%.2f\n", total, limit)
 	case pipeline.EventCheckpointPause:
 		fmt.Printf("⏸ %s completed. Continue? [y/N] ", event.Phase)
-		if promptConfirm(ctx) {
+		if engine != nil && promptConfirm(ctx) {
 			engine.Confirm()
 		} else {
 			cancel()
