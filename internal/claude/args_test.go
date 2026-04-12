@@ -67,7 +67,7 @@ func TestBuildArgs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			args := buildArgs(tt.opts, tt.model)
+			args := BuildArgs(tt.opts, tt.model)
 
 			for _, want := range tt.contains {
 				if !slices.Contains(args, want) {
