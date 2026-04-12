@@ -44,9 +44,7 @@ func resolveClaudePaths(binary string) (resolved string, readPaths []string, err
 
 	// NODE_PATH from environment
 	if nodePath := os.Getenv("NODE_PATH"); nodePath != "" {
-		for _, entry := range filepath.SplitList(nodePath) {
-			readPaths = append(readPaths, entry)
-		}
+		readPaths = append(readPaths, filepath.SplitList(nodePath)...)
 	}
 
 	return resolved, readPaths, nil
