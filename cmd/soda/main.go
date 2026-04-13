@@ -44,6 +44,7 @@ func newRootCmd() *cobra.Command {
 		newHistoryCmd(),
 		newCleanCmd(),
 		newRenderCmd(),
+		newVersionCmd(),
 	)
 
 	return cmd
