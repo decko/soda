@@ -260,7 +260,7 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 	opts := runner.RunOpts{
 		Phase:        phase.Name,
 		SystemPrompt: rendered,
-		UserPrompt:   "",
+		UserPrompt:   "Execute the task described in the system prompt.",
 		OutputSchema: phase.Schema,
 		AllowedTools: phase.Tools,
 		MaxBudgetUSD: remaining,
