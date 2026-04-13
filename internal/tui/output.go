@@ -23,7 +23,7 @@ func newOutputView() outputView {
 func (v *outputView) setSize(width, height int) {
 	v.width = width
 	v.height = height
-	contentW := width - 4 // border + padding
+	contentW := width - 4  // border + padding
 	contentH := height - 2 // border
 	if contentW < 1 {
 		contentW = 1
