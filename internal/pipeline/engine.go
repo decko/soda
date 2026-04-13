@@ -122,6 +122,11 @@ func (e *Engine) Run(ctx context.Context) error {
 	}
 	defer e.state.ReleaseLock()
 
+	// Cache ticket summary in meta for soda sessions/history display.
+	if e.state.Meta().Summary == "" && e.config.Ticket.Summary != "" {
+		e.state.Meta().Summary = e.config.Ticket.Summary
+	}
+
 	if err := e.ensureWorktree(ctx); err != nil {
 		return err
 	}
@@ -178,6 +183,11 @@ func (e *Engine) Resume(ctx context.Context, fromPhase string) error {
 		return fmt.Errorf("engine: %w", err)
 	}
 	defer e.state.ReleaseLock()
+
+	// Cache ticket summary in meta for soda sessions/history display.
+	if e.state.Meta().Summary == "" && e.config.Ticket.Summary != "" {
+		e.state.Meta().Summary = e.config.Ticket.Summary
+	}
 
 	if err := e.ensureWorktree(ctx); err != nil {
 		return err
