@@ -316,7 +316,7 @@ func TestPrintSummarySuccess(t *testing.T) {
 	state.WriteResult("submit", json.RawMessage(`{"ticket_key":"PROJ-42","pr_url":"https://github.com/org/repo/pull/99","pr_number":99,"title":"feat","branch":"soda/PROJ-42","target":"main","forge":"github"}`))
 
 	var buf bytes.Buffer
-	fprintSummary(&buf, state, testPhases(), "Add feature X", 5*time.Minute, nil)
+	fprintSummary(&buf, state, testPhases(), "Add feature X", 5*time.Minute, nil, nil)
 	output := buf.String()
 
 	// Check header
@@ -391,7 +391,7 @@ func TestPrintSummaryFailure(t *testing.T) {
 	state.WriteResult("plan", json.RawMessage(`{"ticket_key":"PROJ-99","approach":"x","tasks":[{"id":"T1","description":"d","files":[],"done_when":"w"},{"id":"T2","description":"e","files":[],"done_when":"x"}],"verification":{"commands":[]}}`))
 
 	var buf bytes.Buffer
-	fprintSummary(&buf, state, testPhases(), "Fix bug Y", 2*time.Minute, fmt.Errorf("engine: phase implement failed"))
+	fprintSummary(&buf, state, testPhases(), "Fix bug Y", 2*time.Minute, fmt.Errorf("engine: phase implement failed"), nil)
 	output := buf.String()
 
 	// Check failure header
@@ -435,20 +435,21 @@ func TestPrintSummarySkippedPhases(t *testing.T) {
 	state.WriteResult("triage", json.RawMessage(`{"ticket_key":"PROJ-50","repo":"soda","complexity":"small","automatable":false,"block_reason":"needs design review"}`))
 
 	var buf bytes.Buffer
-	fprintSummary(&buf, state, testPhases(), "Blocked ticket", 30*time.Second, fmt.Errorf("gate: triage blocked"))
+	skipped := map[string]bool{"plan": true, "implement": true, "verify": true, "submit": true}
+	fprintSummary(&buf, state, testPhases(), "Blocked ticket", 30*time.Second, fmt.Errorf("gate: triage blocked"), skipped)
 	output := buf.String()
 
-	// Phases without state should show · status
+	// Skipped phases should show ⏭ status
 	lines := strings.Split(output, "\n")
-	pendingCount := 0
+	skippedCount := 0
 	for _, line := range lines {
-		if strings.Contains(line, "·") {
-			pendingCount++
+		if strings.Contains(line, "⏭") {
+			skippedCount++
 		}
 	}
-	// plan, implement, verify, submit should all be pending
-	if pendingCount < 4 {
-		t.Errorf("expected at least 4 pending phases (·), got %d", pendingCount)
+	// plan, implement, verify, submit should all be skipped
+	if skippedCount < 4 {
+		t.Errorf("expected at least 4 skipped phases (⏭), got %d", skippedCount)
 	}
 
 	// Triage should show blocked details

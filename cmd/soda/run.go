@@ -150,6 +150,7 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 
 	// Build engine config — use a closure that captures the engine pointer
 	var engine *pipeline.Engine
+	skippedPhases := map[string]bool{}
 
 	engineCfg := pipeline.EngineConfig{
 		Pipeline:      pl,
@@ -164,6 +165,9 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 		MaxCostUSD:    cfg.Limits.MaxCostPerTicket,
 		Mode:          mode,
 		OnEvent: func(event pipeline.Event) {
+			if event.Kind == pipeline.EventPhaseSkipped || event.Kind == pipeline.EventMonitorSkipped {
+				skippedPhases[event.Phase] = true
+			}
 			handleEvent(ctx, cancel, engine, event)
 		},
 	}
@@ -189,7 +193,7 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 	}
 
 	// Print summary
-	printSummary(state, pl.Phases, t.Summary, time.Since(startTime), runErr)
+	printSummary(state, pl.Phases, t.Summary, time.Since(startTime), runErr, skippedPhases)
 
 	return runErr
 }
@@ -413,13 +417,13 @@ func formatPhaseDetails(state *pipeline.State, phase string) string {
 	return ""
 }
 
-func printSummary(state *pipeline.State, phases []pipeline.PhaseConfig, summary string, elapsed time.Duration, runErr error) {
-	fprintSummary(os.Stdout, state, phases, summary, elapsed, runErr)
+func printSummary(state *pipeline.State, phases []pipeline.PhaseConfig, summary string, elapsed time.Duration, runErr error, skippedPhases map[string]bool) {
+	fprintSummary(os.Stdout, state, phases, summary, elapsed, runErr, skippedPhases)
 }
 
 // fprintSummary writes the detailed pipeline outcome report to w.
 // Extracted so tests can capture output without os.Pipe.
-func fprintSummary(w io.Writer, state *pipeline.State, phases []pipeline.PhaseConfig, summary string, elapsed time.Duration, runErr error) {
+func fprintSummary(w io.Writer, state *pipeline.State, phases []pipeline.PhaseConfig, summary string, elapsed time.Duration, runErr error, skippedPhases map[string]bool) {
 	meta := state.Meta()
 	success := runErr == nil
 
@@ -461,7 +465,9 @@ func fprintSummary(w io.Writer, state *pipeline.State, phases []pipeline.PhaseCo
 		cost := "—"
 		details := ""
 
-		if ps != nil {
+		if skippedPhases[phase.Name] {
+			status = "⏭"
+		} else if ps != nil {
 			switch ps.Status {
 			case pipeline.PhaseCompleted:
 				status = "✓"
@@ -479,15 +485,6 @@ func fprintSummary(w io.Writer, state *pipeline.State, phases []pipeline.PhaseCo
 				cost = fmt.Sprintf("$%.2f", ps.Cost)
 			}
 		}
-
-		// Check if skipped (completed but not in this run — we detect via
-		// EventPhaseSkipped, but we can approximate: completed phases with
-		// no cost and no duration in this run are likely skipped).
-		// However, the simplest signal is: if phase is completed but was
-		// never recorded as started in meta (generation == 0 is impossible,
-		// so we rely on DurationMs == 0 for a skipped proxy).
-		// Actually, skipped phases keep their prior state, so we can't
-		// distinguish perfectly. We'll just show completed as ✓.
 
 		// Details from structured output
 		if ps != nil && ps.Status == pipeline.PhaseCompleted {
