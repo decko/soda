@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 // CreateWorktree creates a git worktree for a new branch based on baseBranch.
@@ -41,4 +42,21 @@ func CreateWorktree(ctx context.Context, repoDir, worktreeBase, branch, baseBran
 	}
 
 	return absPath, nil
+}
+
+// DeleteBranch deletes a local git branch. It runs "git branch -D <branch>"
+// from the given repoDir. Returns nil if the branch was deleted or did not exist.
+func DeleteBranch(repoDir, branch string) error {
+	cmd := exec.Command("git", "branch", "-D", branch)
+	cmd.Dir = repoDir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		// If the branch doesn't exist, treat as success.
+		outStr := string(output)
+		if strings.Contains(outStr, "not found") || strings.Contains(outStr, "not a valid branch") {
+			return nil
+		}
+		return fmt.Errorf("git: branch delete %s: %s: %w", branch, outStr, err)
+	}
+	return nil
 }

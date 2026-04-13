@@ -98,3 +98,52 @@ func TestCreateWorktree(t *testing.T) {
 		}
 	})
 }
+
+func TestDeleteBranch(t *testing.T) {
+	t.Run("deletes_existing_branch", func(t *testing.T) {
+		repoDir := initGitRepo(t)
+
+		// Create a branch
+		cmd := exec.Command("git", "branch", "feat/to-delete")
+		cmd.Dir = repoDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git branch: %s: %v", out, err)
+		}
+
+		// Verify it exists
+		cmd = exec.Command("git", "branch", "--list", "feat/to-delete")
+		cmd.Dir = repoDir
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("git branch --list: %v", err)
+		}
+		if len(out) == 0 {
+			t.Fatal("branch feat/to-delete should exist before deletion")
+		}
+
+		// Delete it
+		if err := DeleteBranch(repoDir, "feat/to-delete"); err != nil {
+			t.Fatalf("DeleteBranch: %v", err)
+		}
+
+		// Verify it no longer exists
+		cmd = exec.Command("git", "branch", "--list", "feat/to-delete")
+		cmd.Dir = repoDir
+		out, err = cmd.Output()
+		if err != nil {
+			t.Fatalf("git branch --list after delete: %v", err)
+		}
+		if len(out) != 0 {
+			t.Error("branch feat/to-delete should not exist after deletion")
+		}
+	})
+
+	t.Run("no_error_for_nonexistent_branch", func(t *testing.T) {
+		repoDir := initGitRepo(t)
+
+		err := DeleteBranch(repoDir, "feat/does-not-exist")
+		if err != nil {
+			t.Fatalf("DeleteBranch should not error for nonexistent branch: %v", err)
+		}
+	})
+}
