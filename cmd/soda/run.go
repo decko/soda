@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strings"
 	"syscall"
+	"text/tabwriter"
 	"time"
 
 	"github.com/decko/soda/internal/config"
@@ -187,7 +189,7 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 	}
 
 	// Print summary
-	printSummary(state.Meta(), time.Since(startTime))
+	printSummary(state, pl.Phases, t.Summary, time.Since(startTime), runErr)
 
 	return runErr
 }
@@ -411,17 +413,120 @@ func formatPhaseDetails(state *pipeline.State, phase string) string {
 	return ""
 }
 
-func printSummary(meta *pipeline.PipelineMeta, elapsed time.Duration) {
-	fmt.Println()
-	fmt.Println("--- Summary ---")
-	fmt.Printf("Ticket:  %s\n", meta.Ticket)
-	fmt.Printf("Cost:    $%.2f\n", meta.TotalCost)
-	fmt.Printf("Elapsed: %s\n", elapsed.Truncate(time.Second))
+func printSummary(state *pipeline.State, phases []pipeline.PhaseConfig, summary string, elapsed time.Duration, runErr error) {
+	fprintSummary(os.Stdout, state, phases, summary, elapsed, runErr)
+}
 
-	for name, ps := range meta.Phases {
-		if ps.Status == pipeline.PhaseFailed {
-			fmt.Printf("Failed:  %s — %s\n", name, ps.Error)
+// fprintSummary writes the detailed pipeline outcome report to w.
+// Extracted so tests can capture output without os.Pipe.
+func fprintSummary(w io.Writer, state *pipeline.State, phases []pipeline.PhaseConfig, summary string, elapsed time.Duration, runErr error) {
+	meta := state.Meta()
+	success := runErr == nil
+
+	// Header
+	fmt.Fprintln(w)
+	if success {
+		fmt.Fprintln(w, "✅ Pipeline completed successfully")
+	} else {
+		fmt.Fprintln(w, "❌ Pipeline failed")
+	}
+	fmt.Fprintln(w)
+
+	// Ticket / branch / worktree info
+	fmt.Fprintf(w, "Ticket:   %s", meta.Ticket)
+	if summary != "" {
+		fmt.Fprintf(w, " — %s", summary)
+	}
+	fmt.Fprintln(w)
+	if meta.Branch != "" {
+		fmt.Fprintf(w, "Branch:   %s\n", meta.Branch)
+	}
+	if meta.Worktree != "" {
+		fmt.Fprintf(w, "Worktree: %s\n", meta.Worktree)
+	}
+	fmt.Fprintln(w)
+
+	// Phase table
+	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+	fmt.Fprintf(tw, "PHASE\tSTATUS\tDURATION\tCOST\tDETAILS\n")
+	fmt.Fprintf(tw, "─────\t──────\t────────\t────\t───────\n")
+
+	failedPhase := ""
+	failedIdx := -1
+	for i, phase := range phases {
+		ps := meta.Phases[phase.Name]
+
+		status := "·"
+		dur := "—"
+		cost := "—"
+		details := ""
+
+		if ps != nil {
+			switch ps.Status {
+			case pipeline.PhaseCompleted:
+				status = "✓"
+			case pipeline.PhaseFailed:
+				status = "✗"
+				failedPhase = phase.Name
+				failedIdx = i
+			case pipeline.PhaseRunning:
+				status = "▸"
+			default:
+				status = "·"
+			}
+			dur = formatDuration(ps.DurationMs)
+			if ps.Cost > 0 {
+				cost = fmt.Sprintf("$%.2f", ps.Cost)
+			}
 		}
+
+		// Check if skipped (completed but not in this run — we detect via
+		// EventPhaseSkipped, but we can approximate: completed phases with
+		// no cost and no duration in this run are likely skipped).
+		// However, the simplest signal is: if phase is completed but was
+		// never recorded as started in meta (generation == 0 is impossible,
+		// so we rely on DurationMs == 0 for a skipped proxy).
+		// Actually, skipped phases keep their prior state, so we can't
+		// distinguish perfectly. We'll just show completed as ✓.
+
+		// Details from structured output
+		if ps != nil && ps.Status == pipeline.PhaseCompleted {
+			details = formatPhaseDetails(state, phase.Name)
+		} else if ps != nil && ps.Status == pipeline.PhaseFailed {
+			details = formatPhaseDetails(state, phase.Name)
+			if details == "" && ps.Error != "" {
+				details = ps.Error
+			}
+		}
+
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", phase.Name, status, dur, cost, details)
+	}
+	tw.Flush()
+
+	// Totals
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "Total cost: $%.2f\n", meta.TotalCost)
+	fmt.Fprintf(w, "Elapsed:    %s\n", elapsed.Truncate(time.Second))
+
+	// PR URL on success
+	if success {
+		prDetails := formatPhaseDetails(state, "submit")
+		if prDetails != "" && strings.HasPrefix(prDetails, "http") {
+			fmt.Fprintln(w)
+			fmt.Fprintf(w, "PR: %s\n", prDetails)
+		}
+	}
+
+	// Actionable next steps on failure
+	if !success && failedPhase != "" {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Next steps:")
+		// Suggest resuming from the predecessor phase (whose output feeds the failed phase)
+		resumeFrom := failedPhase
+		if failedIdx > 0 {
+			resumeFrom = phases[failedIdx-1].Name
+		}
+		fmt.Fprintf(w, "  soda run %s --from %s\n", meta.Ticket, resumeFrom)
 	}
 }
 
