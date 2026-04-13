@@ -537,7 +537,7 @@ func (e *Engine) extractReworkFeedback() *ReworkFeedback {
 	}
 
 	var result struct {
-		Verdict         string `json:"verdict"`
+		Verdict         string   `json:"verdict"`
 		FixesRequired   []string `json:"fixes_required"`
 		CriteriaResults []struct {
 			Criterion string `json:"criterion"`
@@ -571,9 +571,9 @@ func (e *Engine) extractReworkFeedback() *ReworkFeedback {
 				Phase: "implement",
 				Kind:  EventReworkFeedbackSkipped,
 				Data: map[string]any{
-					"reason":             "plan changed since verify ran",
-					"verify_plan_hash":   verifyPS.PlanHash,
-					"current_plan_hash":  currentHash,
+					"reason":            "plan changed since verify ran",
+					"verify_plan_hash":  verifyPS.PlanHash,
+					"current_plan_hash": currentHash,
 				},
 			})
 			return nil
@@ -634,7 +634,8 @@ func (e *Engine) computePlanHash() string {
 
 // truncateLines returns at most maxLines lines from s.
 func truncateLines(s string, maxLines int) string {
-	lines := strings.Split(s, "\n")
+	trimmed := strings.TrimRight(s, "\n")
+	lines := strings.Split(trimmed, "\n")
 	if len(lines) <= maxLines {
 		return s
 	}

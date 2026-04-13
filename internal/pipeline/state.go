@@ -124,6 +124,7 @@ func (s *State) MarkRunning(phase string) error {
 	ps.Cost = 0
 	ps.DurationMs = 0
 	ps.Error = ""
+	ps.PlanHash = ""
 	ps.startedAt = time.Now()
 
 	if err := s.flushMeta(); err != nil {

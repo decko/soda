@@ -17,9 +17,12 @@ You MUST address every item below. Do not repeat the same mistakes.
 
 ### Verdict: {{.ReworkFeedback.Verdict}}
 
+{{- if .ReworkFeedback.FixesRequired}}
 ### Fixes Required
 {{range .ReworkFeedback.FixesRequired}}- **{{.}}**
 {{end}}
+{{- end}}
+
 {{- if .ReworkFeedback.FailedCriteria}}
 ### Failed Acceptance Criteria
 {{range .ReworkFeedback.FailedCriteria}}- **FAIL**: {{.Criterion}}

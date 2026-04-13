@@ -18,21 +18,21 @@ type Event struct {
 
 // Event kinds emitted by the engine.
 const (
-	EventEngineStarted   = "engine_started"
-	EventEngineCompleted = "engine_completed"
-	EventEngineFailed    = "engine_failed"
-	EventPhaseStarted    = "phase_started"
-	EventPhaseCompleted  = "phase_completed"
-	EventPhaseFailed     = "phase_failed"
-	EventPhaseRetrying   = "phase_retrying"
-	EventPhaseSkipped    = "phase_skipped"
-	EventOutputChunk     = "output_chunk"
-	EventBudgetWarning   = "budget_warning"
-	EventCheckpointPause = "checkpoint_pause"
-	EventWorktreeCreated = "worktree_created"
-	EventMonitorSkipped           = "monitor_skipped"
-	EventReworkFeedbackInjected   = "rework_feedback_injected"
-	EventReworkFeedbackSkipped    = "rework_feedback_skipped"
+	EventEngineStarted          = "engine_started"
+	EventEngineCompleted        = "engine_completed"
+	EventEngineFailed           = "engine_failed"
+	EventPhaseStarted           = "phase_started"
+	EventPhaseCompleted         = "phase_completed"
+	EventPhaseFailed            = "phase_failed"
+	EventPhaseRetrying          = "phase_retrying"
+	EventPhaseSkipped           = "phase_skipped"
+	EventOutputChunk            = "output_chunk"
+	EventBudgetWarning          = "budget_warning"
+	EventCheckpointPause        = "checkpoint_pause"
+	EventWorktreeCreated        = "worktree_created"
+	EventMonitorSkipped         = "monitor_skipped"
+	EventReworkFeedbackInjected = "rework_feedback_injected"
+	EventReworkFeedbackSkipped  = "rework_feedback_skipped"
 )
 
 // logEvent appends an event to the events.jsonl file in dir.
