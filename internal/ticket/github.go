@@ -89,12 +89,12 @@ func (s *GitHubSource) List(ctx context.Context, query string) ([]Ticket, error)
 // GitHub API response types
 
 type ghIssue struct {
-	Number    int        `json:"number"`
-	Title     string     `json:"title"`
-	Body      string     `json:"body"`
-	State     string     `json:"state"`
-	Labels    []ghLabel  `json:"labels"`
-	Assignees []ghUser   `json:"assignees"`
+	Number    int       `json:"number"`
+	Title     string    `json:"title"`
+	Body      string    `json:"body"`
+	State     string    `json:"state"`
+	Labels    []ghLabel `json:"labels"`
+	Assignees []ghUser  `json:"assignees"`
 }
 
 type ghLabel struct {
