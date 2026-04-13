@@ -1768,7 +1768,7 @@ func TestEngine_ResumeInvalidatesDownstreamPhases(t *testing.T) {
 		}
 	})
 
-	t.Run("from_verify_skips_submit_if_unchanged", func(t *testing.T) {
+	t.Run("from_verify_reruns_submit_because_dep_reran", func(t *testing.T) {
 		phases := []PhaseConfig{
 			{
 				Name:   "implement",
