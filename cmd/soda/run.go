@@ -34,6 +34,7 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().String("mode", "", "execution mode: checkpoint or autonomous")
 	cmd.Flags().String("from", "", "resume from phase (or 'last')")
 	cmd.Flags().Bool("dry-run", false, "render prompts without executing")
+	cmd.Flags().Bool("mock", false, "use mock runner for testing")
 
 	return cmd
 }
@@ -121,8 +122,22 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 		return fmt.Errorf("run: unknown mode %q (expected 'checkpoint' or 'autonomous')", modeStr)
 	}
 
-	// Build mock runner
-	mockRunner := buildMockRunner()
+	// Build runner
+	var r runner.Runner
+	useMock, _ := cmd.Flags().GetBool("mock")
+	if useMock {
+		r = buildMockRunner()
+	} else {
+		workDir, err := filepath.Abs(".")
+		if err != nil {
+			return fmt.Errorf("run: resolve workdir: %w", err)
+		}
+		claudeRunner, err := runner.NewClaudeRunner("claude", cfg.Model, workDir)
+		if err != nil {
+			return fmt.Errorf("run: create claude runner: %w", err)
+		}
+		r = claudeRunner
+	}
 
 	// Build engine config — use a closure that captures the engine pointer
 	var engine *pipeline.Engine
@@ -142,7 +157,7 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 		},
 	}
 
-	engine = pipeline.NewEngine(mockRunner, state, engineCfg)
+	engine = pipeline.NewEngine(r, state, engineCfg)
 
 	// Run or resume
 	fromPhase, _ := cmd.Flags().GetString("from")
