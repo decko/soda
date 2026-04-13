@@ -555,18 +555,27 @@ func TestEngine_CheckpointMode(t *testing.T) {
 		},
 	}
 
+	// checkpointReached signals the confirming goroutine that the engine
+	// has emitted a checkpoint_pause and is now blocked waiting for Confirm().
+	// Buffered so the synchronous OnEvent callback never blocks.
+	checkpointReached := make(chan struct{}, len(phases))
+
 	var events []Event
 	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
 		cfg.Mode = Checkpoint
 		cfg.OnEvent = func(e Event) {
 			events = append(events, e)
+			if e.Kind == EventCheckpointPause {
+				checkpointReached <- struct{}{}
+			}
 		}
 	})
 
-	// Auto-confirm from a goroutine.
+	// Auto-confirm from a goroutine, waiting for each checkpoint_pause
+	// before calling Confirm() to avoid timing-fragile fire-and-forget sends.
 	go func() {
-		// Wait for each checkpoint_pause, then confirm.
 		for i := 0; i < len(phases); i++ {
+			<-checkpointReached
 			engine.Confirm()
 		}
 	}()
