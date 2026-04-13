@@ -37,12 +37,23 @@ Triage → Plan → Implement → Verify → Submit → Monitor
 |-------|---------|-------|---------|
 | Triage | Classify ticket, identify repo/files/complexity | Read-only | 3m |
 | Plan | Design approach, break into atomic tasks | Read-only | 5m |
-| Implement | Create worktree, write code, run tests, commit | Full | 15m |
+| Implement | Write code, run tests, commit | Full | 15m |
 | Verify | Run tests, check acceptance criteria, review code | Read + Bash | 5m |
 | Submit | Push branch, create PR/MR | git + gh/glab | 3m |
 | Monitor | Poll for review comments, respond (polling loop) | Full | 4h max |
 
 Phase definitions, tools, timeouts, and retry policies are in `phases.yaml`.
+
+### Worktree-first execution
+
+The pipeline creates a worktree **before any phase runs**. All phases — including triage and plan — execute inside the worktree, not the main checkout. This ensures:
+
+- Triage reads the same code that implement will modify
+- No dirty state or conflicts with other work in the main checkout
+- Consistent WorkDir across all phases
+- Enforces "never work on main" convention
+
+The worktree is cleaned up only on explicit `soda clean` or after PR merge — never automatically on failure (human may want to inspect).
 
 ## Project structure
 
