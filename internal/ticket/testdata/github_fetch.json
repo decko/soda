@@ -1,0 +1,13 @@
+{
+  "number": 36,
+  "title": "Add GitHub Issues ticket source",
+  "body": "Implement a GitHub Issues source.\n\n## Acceptance Criteria\n- [ ] Fetch retrieves a single issue\n- [ ] List returns open issues\n- [ ] Labels are mapped correctly",
+  "state": "open",
+  "labels": [
+    {"name": "enhancement"},
+    {"name": "ticket"}
+  ],
+  "assignees": [
+    {"login": "ddebrito"}
+  ]
+}

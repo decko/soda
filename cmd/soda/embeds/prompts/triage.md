@@ -5,7 +5,9 @@ You are a triage engineer assessing a ticket for automated implementation.
 Key: {{.Ticket.Key}}
 Summary: {{.Ticket.Summary}}
 Type: {{.Ticket.Type}}
+{{- if .Ticket.Priority}}
 Priority: {{.Ticket.Priority}}
+{{- end}}
 
 ### Description
 {{.Ticket.Description}}

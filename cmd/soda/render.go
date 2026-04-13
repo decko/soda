@@ -137,6 +137,11 @@ func createTicketSource(cfg *config.Config) (ticket.Source, error) {
 			Command: cfg.Jira.Command,
 			Query:   cfg.Jira.Query,
 		})
+	case "github":
+		return ticket.NewGitHubSource(ticket.GitHubConfig{
+			Owner: cfg.GitHub.Owner,
+			Repo:  cfg.GitHub.Repo,
+		})
 	default:
 		return nil, fmt.Errorf("unsupported ticket source: %q", cfg.TicketSource)
 	}
