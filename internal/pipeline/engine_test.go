@@ -1666,3 +1666,424 @@ RepoConventions: {{.Context.RepoConventions}}
 		}
 	}
 }
+
+func TestEngine_ResumeInvalidatesDownstreamPhases(t *testing.T) {
+	// Pipeline: implement -> verify -> submit (linear dependency chain).
+	// Bug: --from implement re-runs implement but skips verify/submit
+	// if they were previously completed, even though their dependency changed.
+
+	t.Run("from_implement_reruns_verify", func(t *testing.T) {
+		phases := []PhaseConfig{
+			{
+				Name:   "implement",
+				Prompt: "implement.md",
+				Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+			{
+				Name:      "verify",
+				Prompt:    "verify.md",
+				DependsOn: []string{"implement"},
+				Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+			{
+				Name:      "submit",
+				Prompt:    "submit.md",
+				DependsOn: []string{"verify"},
+				Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+		}
+
+		mock := &flexMockRunner{
+			responses: map[string][]flexResponse{
+				"implement": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"tests_passed":true,"commits":2}`),
+						RawText: "Impl v2",
+						CostUSD: 0.50,
+					},
+				}},
+				"verify": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"verdict":"PASS"}`),
+						RawText: "Verify v2",
+						CostUSD: 0.20,
+					},
+				}},
+				"submit": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"pr_url":"https://github.com/org/repo/pull/1"}`),
+						RawText: "Submit done",
+						CostUSD: 0.10,
+					},
+				}},
+			},
+		}
+
+		engine, state := setupEngine(t, phases, mock)
+
+		// Pre-complete all three phases (simulate a previous run).
+		for _, name := range []string{"implement", "verify", "submit"} {
+			if err := state.MarkRunning(name); err != nil {
+				t.Fatal(err)
+			}
+			if err := state.MarkCompleted(name); err != nil {
+				t.Fatal(err)
+			}
+		}
+		// Write verify result with PASS so gate doesn't block.
+		if err := state.WriteResult("verify", json.RawMessage(`{"verdict":"PASS"}`)); err != nil {
+			t.Fatal(err)
+		}
+		if err := state.WriteResult("submit", json.RawMessage(`{"pr_url":"https://github.com/org/repo/pull/1"}`)); err != nil {
+			t.Fatal(err)
+		}
+
+		// Resume from implement — verify and submit should be re-run
+		// because their dependency (implement) was re-run.
+		if err := engine.Resume(context.Background(), "implement"); err != nil {
+			t.Fatalf("Resume: %v", err)
+		}
+
+		// All three phases should have been called.
+		if len(mock.calls) != 3 {
+			t.Errorf("runner called %d times, want 3 (implement+verify+submit); got phases: %v",
+				len(mock.calls), phaseNames(mock.calls))
+		}
+
+		verifyCalled := false
+		submitCalled := false
+		for _, call := range mock.calls {
+			if call.Phase == "verify" {
+				verifyCalled = true
+			}
+			if call.Phase == "submit" {
+				submitCalled = true
+			}
+		}
+		if !verifyCalled {
+			t.Error("verify should be re-run when dependency (implement) was re-run")
+		}
+		if !submitCalled {
+			t.Error("submit should be re-run when transitive dependency (implement) was re-run")
+		}
+	})
+
+	t.Run("from_verify_reruns_submit_because_dep_reran", func(t *testing.T) {
+		phases := []PhaseConfig{
+			{
+				Name:   "implement",
+				Prompt: "implement.md",
+				Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+			{
+				Name:      "verify",
+				Prompt:    "verify.md",
+				DependsOn: []string{"implement"},
+				Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+			{
+				Name:      "submit",
+				Prompt:    "submit.md",
+				DependsOn: []string{"verify"},
+				Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+		}
+
+		mock := &flexMockRunner{
+			responses: map[string][]flexResponse{
+				"verify": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"verdict":"PASS"}`),
+						RawText: "Verify v2",
+						CostUSD: 0.20,
+					},
+				}},
+				"submit": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"pr_url":"https://github.com/org/repo/pull/2"}`),
+						RawText: "Submit v2",
+						CostUSD: 0.10,
+					},
+				}},
+			},
+		}
+
+		engine, state := setupEngine(t, phases, mock)
+
+		// Pre-complete all three phases.
+		for _, name := range []string{"implement", "verify", "submit"} {
+			if err := state.MarkRunning(name); err != nil {
+				t.Fatal(err)
+			}
+			if err := state.MarkCompleted(name); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := state.WriteResult("verify", json.RawMessage(`{"verdict":"PASS"}`)); err != nil {
+			t.Fatal(err)
+		}
+		if err := state.WriteResult("submit", json.RawMessage(`{"pr_url":"https://github.com/org/repo/pull/1"}`)); err != nil {
+			t.Fatal(err)
+		}
+
+		// Resume from verify — submit should also re-run because verify (its dep) was re-run.
+		if err := engine.Resume(context.Background(), "verify"); err != nil {
+			t.Fatalf("Resume: %v", err)
+		}
+
+		// verify (fromPhase) + submit (dependency re-ran) = 2 calls
+		if len(mock.calls) != 2 {
+			t.Errorf("runner called %d times, want 2 (verify+submit); got phases: %v",
+				len(mock.calls), phaseNames(mock.calls))
+		}
+	})
+
+	t.Run("skipped_phase_with_fail_gate_blocks", func(t *testing.T) {
+		// Even when a phase is skipped (deps unchanged), its existing gate
+		// result should be re-checked. A FAIL verify should block submit.
+		phases := []PhaseConfig{
+			{
+				Name:   "implement",
+				Prompt: "implement.md",
+				Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+			{
+				Name:      "verify",
+				Prompt:    "verify.md",
+				DependsOn: []string{"implement"},
+				Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+			{
+				Name:      "submit",
+				Prompt:    "submit.md",
+				DependsOn: []string{"verify"},
+				Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+		}
+
+		mock := &flexMockRunner{
+			responses: map[string][]flexResponse{
+				"implement": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"tests_passed":true}`),
+						RawText: "Impl done",
+						CostUSD: 0.50,
+					},
+				}},
+				"verify": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"verdict":"PASS"}`),
+						RawText: "Verify done",
+						CostUSD: 0.20,
+					},
+				}},
+				"submit": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"pr_url":"https://github.com/org/repo/pull/1"}`),
+						RawText: "Submit done",
+						CostUSD: 0.10,
+					},
+				}},
+			},
+		}
+
+		engine, state := setupEngine(t, phases, mock)
+
+		// Run the full pipeline — verify will PASS, all phases complete.
+		if err := engine.Run(context.Background()); err != nil {
+			t.Fatalf("initial Run: %v", err)
+		}
+
+		// Now overwrite verify's result with a FAIL verdict (simulating
+		// external corruption or a previous run that left stale state).
+		if err := state.WriteResult("verify", json.RawMessage(`{"verdict":"FAIL","fixes_required":["tests broken"]}`)); err != nil {
+			t.Fatal(err)
+		}
+
+		// Create a new engine with fresh mock for the resume.
+		mock2 := &flexMockRunner{
+			responses: map[string][]flexResponse{},
+		}
+		engine2 := NewEngine(mock2, state, engine.config)
+
+		// Run() should re-check verify's gate even though it's "completed",
+		// and block because the stored result is FAIL.
+		err := engine2.Run(context.Background())
+		if err == nil {
+			t.Fatal("expected PhaseGateError for skipped phase with FAIL gate")
+		}
+
+		var gateErr *PhaseGateError
+		if !errors.As(err, &gateErr) {
+			t.Fatalf("expected PhaseGateError, got: %T: %v", err, err)
+		}
+		if gateErr.Phase != "verify" {
+			t.Errorf("gate error phase = %q, want %q", gateErr.Phase, "verify")
+		}
+	})
+
+	t.Run("verify_fail_then_resume_implement_reruns_verify", func(t *testing.T) {
+		// Full scenario: verify FAIL → --from implement → implement gen 2 →
+		// verify re-runs → PASS → submit runs.
+		phases := []PhaseConfig{
+			{
+				Name:   "implement",
+				Prompt: "implement.md",
+				Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+			{
+				Name:      "verify",
+				Prompt:    "verify.md",
+				DependsOn: []string{"implement"},
+				Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+			{
+				Name:      "submit",
+				Prompt:    "submit.md",
+				DependsOn: []string{"verify"},
+				Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+		}
+
+		// First run: implement succeeds, verify FAILs (gate blocks).
+		mock1 := &flexMockRunner{
+			responses: map[string][]flexResponse{
+				"implement": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"tests_passed":true,"commits":1}`),
+						RawText: "Impl v1",
+						CostUSD: 0.50,
+					},
+				}},
+				"verify": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"verdict":"FAIL","fixes_required":["fix the test"]}`),
+						RawText: "Verify v1 FAIL",
+						CostUSD: 0.15,
+					},
+				}},
+			},
+		}
+
+		engine, state := setupEngine(t, phases, mock1)
+
+		err := engine.Run(context.Background())
+		if err == nil {
+			t.Fatal("expected PhaseGateError from verify FAIL")
+		}
+		var gateErr *PhaseGateError
+		if !errors.As(err, &gateErr) {
+			t.Fatalf("expected PhaseGateError, got: %v", err)
+		}
+
+		// Second run: resume from implement → implement gen 2 → verify PASS → submit.
+		mock2 := &flexMockRunner{
+			responses: map[string][]flexResponse{
+				"implement": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"tests_passed":true,"commits":2}`),
+						RawText: "Impl v2",
+						CostUSD: 0.60,
+					},
+				}},
+				"verify": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"verdict":"PASS"}`),
+						RawText: "Verify v2 PASS",
+						CostUSD: 0.20,
+					},
+				}},
+				"submit": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"pr_url":"https://github.com/org/repo/pull/2"}`),
+						RawText: "Submit done",
+						CostUSD: 0.10,
+					},
+				}},
+			},
+		}
+
+		engine2 := NewEngine(mock2, state, engine.config)
+
+		if err := engine2.Resume(context.Background(), "implement"); err != nil {
+			t.Fatalf("Resume: %v", err)
+		}
+
+		// All three should have been called.
+		if len(mock2.calls) != 3 {
+			t.Errorf("runner called %d times, want 3; got phases: %v",
+				len(mock2.calls), phaseNames(mock2.calls))
+		}
+
+		// verify should have gen 2 (re-run).
+		verifyPS := state.Meta().Phases["verify"]
+		if verifyPS == nil {
+			t.Fatal("verify phase state should exist")
+		}
+		if verifyPS.Generation < 2 {
+			t.Errorf("verify generation = %d, want >= 2", verifyPS.Generation)
+		}
+	})
+}
+
+func TestEngine_RunChecksGateOnSkippedPhases(t *testing.T) {
+	// In Run(), completed phases should still have their gate checked.
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "plan",
+			Prompt:    "plan.md",
+			DependsOn: []string{"triage"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{},
+	}
+
+	engine, state := setupEngine(t, phases, mock)
+
+	// Pre-complete triage with a non-automatable result.
+	if err := state.MarkRunning("triage"); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.WriteResult("triage", json.RawMessage(`{"automatable":false,"block_reason":"needs human"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.MarkCompleted("triage"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Run should check the gate on skipped triage and block.
+	err := engine.Run(context.Background())
+	if err == nil {
+		t.Fatal("expected PhaseGateError for skipped phase with failing gate")
+	}
+
+	var gateErr *PhaseGateError
+	if !errors.As(err, &gateErr) {
+		t.Fatalf("expected PhaseGateError, got: %T: %v", err, err)
+	}
+	if gateErr.Phase != "triage" {
+		t.Errorf("gate error phase = %q, want %q", gateErr.Phase, "triage")
+	}
+
+	// Runner should NOT have been called (blocked at triage gate).
+	if len(mock.calls) != 0 {
+		t.Errorf("runner called %d times, want 0", len(mock.calls))
+	}
+}
+
+// phaseNames extracts phase names from runner calls for test error messages.
+func phaseNames(calls []runner.RunOpts) []string {
+	names := make([]string, len(calls))
+	for i, c := range calls {
+		names[i] = c.Phase
+	}
+	return names
+}

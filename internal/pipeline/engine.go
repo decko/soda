@@ -45,10 +45,11 @@ type EngineConfig struct {
 // Engine orchestrates a pipeline run, tying together the runner,
 // state management, prompt rendering, and retry logic.
 type Engine struct {
-	runner    runner.Runner
-	config    EngineConfig
-	state     *State
-	confirmCh chan struct{}
+	runner      runner.Runner
+	config      EngineConfig
+	state       *State
+	confirmCh   chan struct{}
+	reranPhases map[string]bool // phases that ran (not skipped) in this execution
 }
 
 // NewEngine creates an Engine with sensible defaults for sleep and jitter.
@@ -100,6 +101,20 @@ func (e *Engine) ensureWorktree(ctx context.Context) error {
 	return nil
 }
 
+// shouldSkip returns true if a completed phase can be skipped because none
+// of its dependencies were re-run in this execution.
+func (e *Engine) shouldSkip(phase PhaseConfig) bool {
+	if !e.state.IsCompleted(phase.Name) {
+		return false
+	}
+	for _, dep := range phase.DependsOn {
+		if e.reranPhases[dep] {
+			return false
+		}
+	}
+	return true
+}
+
 // Run executes the full pipeline from the beginning, skipping completed phases.
 func (e *Engine) Run(ctx context.Context) error {
 	if err := e.state.AcquireLock(); err != nil {
@@ -111,6 +126,7 @@ func (e *Engine) Run(ctx context.Context) error {
 		return err
 	}
 
+	e.reranPhases = make(map[string]bool)
 	e.emit(Event{Kind: EventEngineStarted})
 
 	for _, phase := range e.config.Pipeline.Phases {
@@ -118,7 +134,10 @@ func (e *Engine) Run(ctx context.Context) error {
 			return fmt.Errorf("engine: context cancelled: %w", err)
 		}
 
-		if e.state.IsCompleted(phase.Name) {
+		if e.shouldSkip(phase) {
+			if err := e.gatePhase(phase); err != nil {
+				return err
+			}
 			e.emit(Event{Phase: phase.Name, Kind: EventPhaseSkipped})
 			continue
 		}
@@ -126,6 +145,7 @@ func (e *Engine) Run(ctx context.Context) error {
 		if err := e.runPhase(ctx, phase); err != nil {
 			return err
 		}
+		e.reranPhases[phase.Name] = true
 
 		if e.config.Mode == Checkpoint {
 			e.emit(Event{Phase: phase.Name, Kind: EventCheckpointPause})
@@ -163,6 +183,7 @@ func (e *Engine) Resume(ctx context.Context, fromPhase string) error {
 		return err
 	}
 
+	e.reranPhases = make(map[string]bool)
 	e.emit(Event{Kind: EventEngineStarted, Data: map[string]any{"resumed_from": fromPhase}})
 
 	for i, phase := range e.config.Pipeline.Phases[startIdx:] {
@@ -170,9 +191,12 @@ func (e *Engine) Resume(ctx context.Context, fromPhase string) error {
 			return fmt.Errorf("engine: context cancelled: %w", err)
 		}
 
-		// The fromPhase is always re-run, even if completed.
-		// Subsequent phases skip if already completed.
-		if i > 0 && e.state.IsCompleted(phase.Name) {
+		// The fromPhase (i==0) is always re-run, even if completed.
+		// Subsequent phases use shouldSkip to check dependency invalidation.
+		if i > 0 && e.shouldSkip(phase) {
+			if err := e.gatePhase(phase); err != nil {
+				return err
+			}
 			e.emit(Event{Phase: phase.Name, Kind: EventPhaseSkipped})
 			continue
 		}
@@ -180,6 +204,7 @@ func (e *Engine) Resume(ctx context.Context, fromPhase string) error {
 		if err := e.runPhase(ctx, phase); err != nil {
 			return err
 		}
+		e.reranPhases[phase.Name] = true
 
 		if e.config.Mode == Checkpoint {
 			e.emit(Event{Phase: phase.Name, Kind: EventCheckpointPause})
