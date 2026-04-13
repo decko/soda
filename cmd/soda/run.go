@@ -139,19 +139,27 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 		r = claudeRunner
 	}
 
+	// Build prompt config from repos
+	promptConfig := buildPromptConfig(cfg)
+
+	// Load project context files
+	promptContext := buildPromptContext(cfg)
+
 	// Build engine config — use a closure that captures the engine pointer
 	var engine *pipeline.Engine
 
 	engineCfg := pipeline.EngineConfig{
-		Pipeline:     pl,
-		Loader:       loader,
-		Ticket:       ticketData,
-		Model:        cfg.Model,
-		WorkDir:      ".",
-		WorktreeBase: cfg.WorktreeDir,
-		BaseBranch:   "main",
-		MaxCostUSD:   cfg.Limits.MaxCostPerTicket,
-		Mode:         mode,
+		Pipeline:      pl,
+		Loader:        loader,
+		Ticket:        ticketData,
+		PromptConfig:  promptConfig,
+		PromptContext: promptContext,
+		Model:         cfg.Model,
+		WorkDir:       ".",
+		WorktreeBase:  cfg.WorktreeDir,
+		BaseBranch:    "main",
+		MaxCostUSD:    cfg.Limits.MaxCostPerTicket,
+		Mode:          mode,
 		OnEvent: func(event pipeline.Event) {
 			handleEvent(ctx, cancel, engine, event)
 		},
@@ -259,7 +267,9 @@ func promptConfirm(ctx context.Context) bool {
 
 func runDryRun(cfg *config.Config, pl *pipeline.PhasePipeline, loader *pipeline.PromptLoader, ticketData pipeline.TicketData) error {
 	promptData := pipeline.PromptData{
-		Ticket: ticketData,
+		Ticket:  ticketData,
+		Config:  buildPromptConfig(cfg),
+		Context: buildPromptContext(cfg),
 	}
 
 	// Load artifacts from state if available
@@ -307,6 +317,68 @@ func printSummary(meta *pipeline.PipelineMeta, elapsed time.Duration) {
 			fmt.Printf("Failed:  %s — %s\n", name, ps.Error)
 		}
 	}
+}
+
+func buildPromptConfig(cfg *config.Config) pipeline.PromptConfigData {
+	repos := make([]pipeline.RepoConfig, len(cfg.Repos))
+	for i, r := range cfg.Repos {
+		repos[i] = pipeline.RepoConfig{
+			Name:        r.Name,
+			Forge:       r.Forge,
+			PushTo:      r.PushTo,
+			Target:      r.Target,
+			Description: r.Description,
+			Formatter:   r.Formatter,
+			TestCommand: r.TestCommand,
+			Labels:      r.Labels,
+			Trailers:    r.Trailers,
+		}
+	}
+
+	pc := pipeline.PromptConfigData{
+		Repos: repos,
+	}
+
+	// Set single Repo, Formatter, TestCommand from the first repo if available.
+	if len(repos) > 0 {
+		pc.Repo = repos[0]
+		pc.Formatter = repos[0].Formatter
+		pc.TestCommand = repos[0].TestCommand
+	}
+
+	return pc
+}
+
+func buildPromptContext(cfg *config.Config) pipeline.ContextData {
+	var ctx pipeline.ContextData
+
+	// Load project-wide context files
+	var projectParts []string
+	for _, path := range cfg.Context {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		projectParts = append(projectParts, string(data))
+	}
+	if len(projectParts) > 0 {
+		ctx.ProjectContext = strings.Join(projectParts, "\n\n---\n\n")
+	}
+
+	// Load gotchas if referenced in any phase context
+	if paths, ok := cfg.PhaseContext["plan"]; ok {
+		for _, path := range paths {
+			if strings.Contains(path, "gotchas") {
+				data, err := os.ReadFile(path)
+				if err == nil {
+					ctx.Gotchas = string(data)
+				}
+				break
+			}
+		}
+	}
+
+	return ctx
 }
 
 // resolveLastPhase finds the last running or failed phase in pipeline order.
