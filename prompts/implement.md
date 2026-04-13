@@ -8,6 +8,14 @@ Summary: {{.Ticket.Summary}}
 ## Implementation Plan
 {{.Artifacts.Plan}}
 
+{{- if .VerifyFeedback}}
+
+## Previous Verification Feedback
+
+{{.VerifyFeedback}}
+**You MUST address every item above before proceeding with the rest of the plan.**
+{{- end}}
+
 {{- if .Context.RepoConventions}}
 
 ## Repo Conventions
