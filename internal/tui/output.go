@@ -65,14 +65,14 @@ func (v *outputView) clear() {
 
 func (v *outputView) scrollUp() {
 	if v.ready {
-		v.viewport.LineUp(1)
+		v.viewport.ScrollUp(1)
 		v.autoScroll = false
 	}
 }
 
 func (v *outputView) scrollDown() {
 	if v.ready {
-		v.viewport.LineDown(1)
+		v.viewport.ScrollDown(1)
 		if v.viewport.AtBottom() {
 			v.autoScroll = true
 		}
