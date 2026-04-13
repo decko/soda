@@ -12,6 +12,7 @@ import (
 type Config struct {
 	TicketSource string              `yaml:"ticket_source"`
 	Jira         JiraConfig          `yaml:"jira"`
+	GitHub       GitHubTicketConfig  `yaml:"github"`
 	Mode         string              `yaml:"mode"`
 	Model        string              `yaml:"model"`
 	Sandbox      SandboxConfig       `yaml:"sandbox"`
@@ -28,6 +29,12 @@ type JiraConfig struct {
 	Command string `yaml:"command"`
 	Project string `yaml:"project"`
 	Query   string `yaml:"query"`
+}
+
+// GitHubTicketConfig holds GitHub Issues ticket source settings.
+type GitHubTicketConfig struct {
+	Owner string `yaml:"owner"`
+	Repo  string `yaml:"repo"`
 }
 
 // SandboxConfig holds sandbox execution settings.

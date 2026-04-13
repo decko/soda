@@ -208,5 +208,9 @@ func TestJiraSource_Fetch_BadBinary(t *testing.T) {
 var _ Source = (*JiraSource)(nil)
 
 func TestMain(m *testing.M) {
+	_, file, _, _ := runtime.Caller(0)
+	dir := filepath.Join(filepath.Dir(file), "testdata")
+	os.Chmod(filepath.Join(dir, "mock_mcp.sh"), 0755)
+	os.Chmod(filepath.Join(dir, "mock_gh.sh"), 0755)
 	os.Exit(m.Run())
 }

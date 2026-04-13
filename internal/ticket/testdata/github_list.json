@@ -1,0 +1,24 @@
+[
+  {
+    "number": 36,
+    "title": "Add GitHub Issues ticket source",
+    "body": "Implement a GitHub Issues source.\n\n## Acceptance Criteria\n- Fetch retrieves a single issue\n- List returns open issues",
+    "state": "open",
+    "labels": [
+      {"name": "enhancement"}
+    ],
+    "assignees": [
+      {"login": "ddebrito"}
+    ]
+  },
+  {
+    "number": 37,
+    "title": "Fix CI pipeline timeout",
+    "body": "The CI pipeline is timing out on large repos.",
+    "state": "open",
+    "labels": [
+      {"name": "bug"}
+    ],
+    "assignees": []
+  }
+]
