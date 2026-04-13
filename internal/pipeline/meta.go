@@ -32,6 +32,7 @@ type PhaseState struct {
 // PipelineMeta is the top-level state stored in meta.json.
 type PipelineMeta struct {
 	Ticket    string                 `json:"ticket"`
+	Summary   string                 `json:"summary,omitempty"`
 	Branch    string                 `json:"branch,omitempty"`
 	Worktree  string                 `json:"worktree,omitempty"`
 	StartedAt time.Time              `json:"started_at"`
