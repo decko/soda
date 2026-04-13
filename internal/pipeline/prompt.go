@@ -22,6 +22,7 @@ type PromptData struct {
 	Branch         string
 	BaseBranch     string
 	ReviewComments string
+	VerifyFeedback string
 }
 
 // TicketData holds ticket fields for prompt templates.
