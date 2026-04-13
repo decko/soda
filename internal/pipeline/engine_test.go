@@ -2079,6 +2079,278 @@ func TestEngine_RunChecksGateOnSkippedPhases(t *testing.T) {
 	}
 }
 
+func TestEngine_ResumeImplementInjectsVerifyFeedback(t *testing.T) {
+	// When verify FAILs and we resume from implement, the implement prompt
+	// should contain the verify feedback (fixes_required + artifact text).
+	phases := []PhaseConfig{
+		{
+			Name:   "implement",
+			Prompt: "implement.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "verify",
+			Prompt:    "verify.md",
+			DependsOn: []string{"implement"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	// First run: implement succeeds, verify FAILs.
+	mock1 := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true,"commits":1}`),
+					RawText: "Impl v1",
+					CostUSD: 0.50,
+				},
+			}},
+			"verify": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"verdict":"FAIL","fixes_required":["add missing test for edge case","fix nil pointer in handler"]}`),
+					RawText: "Verify report: tests incomplete, nil pointer found",
+					CostUSD: 0.15,
+				},
+			}},
+		},
+	}
+
+	stateDir := t.TempDir()
+	promptDir := t.TempDir()
+	workDir := t.TempDir()
+
+	// Write prompt template that includes VerifyFeedback.
+	implTmpl := "Phase: implement\nTicket: {{.Ticket.Key}}\n{{if .VerifyFeedback}}VerifyFeedback:\n{{.VerifyFeedback}}{{end}}\n"
+	verifyTmpl := "Phase: verify\nTicket: {{.Ticket.Key}}\n"
+
+	if err := os.WriteFile(filepath.Join(promptDir, "implement.md"), []byte(implTmpl), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(promptDir, "verify.md"), []byte(verifyTmpl), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := LoadOrCreate(stateDir, "VERIFY-FB-1")
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+
+	cfg := EngineConfig{
+		Pipeline:   &PhasePipeline{Phases: phases},
+		Loader:     NewPromptLoader(promptDir),
+		Ticket:     TicketData{Key: "VERIFY-FB-1", Summary: "Verify feedback test"},
+		Model:      "test-model",
+		WorkDir:    workDir,
+		MaxCostUSD: 0,
+		Mode:       Autonomous,
+		SleepFunc:  func(time.Duration) {},
+		JitterFunc: func(time.Duration) time.Duration { return 0 },
+	}
+
+	engine1 := NewEngine(mock1, state, cfg)
+
+	// First run should fail at verify gate.
+	runErr := engine1.Run(context.Background())
+	if runErr == nil {
+		t.Fatal("expected PhaseGateError from verify FAIL")
+	}
+	var gateErr *PhaseGateError
+	if !errors.As(runErr, &gateErr) {
+		t.Fatalf("expected PhaseGateError, got: %v", runErr)
+	}
+
+	// Now resume from implement — the verify FAIL feedback should be injected.
+	mock2 := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true,"commits":2}`),
+					RawText: "Impl v2 with fixes",
+					CostUSD: 0.60,
+				},
+			}},
+			"verify": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"verdict":"PASS"}`),
+					RawText: "All checks pass",
+					CostUSD: 0.20,
+				},
+			}},
+		},
+	}
+
+	engine2 := NewEngine(mock2, state, cfg)
+
+	if err := engine2.Resume(context.Background(), "implement"); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+
+	// Verify the implement prompt contained the verify feedback.
+	if len(mock2.calls) < 1 {
+		t.Fatal("expected at least 1 runner call")
+	}
+
+	implPrompt := mock2.calls[0].SystemPrompt
+	if !strings.Contains(implPrompt, "VerifyFeedback:") {
+		t.Errorf("implement prompt should contain VerifyFeedback section;\ngot: %s", implPrompt)
+	}
+	if !strings.Contains(implPrompt, "add missing test for edge case") {
+		t.Errorf("implement prompt should contain first fix;\ngot: %s", implPrompt)
+	}
+	if !strings.Contains(implPrompt, "fix nil pointer in handler") {
+		t.Errorf("implement prompt should contain second fix;\ngot: %s", implPrompt)
+	}
+	if !strings.Contains(implPrompt, "Verify report: tests incomplete") {
+		t.Errorf("implement prompt should contain verify artifact text;\ngot: %s", implPrompt)
+	}
+	if !strings.Contains(implPrompt, "Verdict: FAIL") {
+		t.Errorf("implement prompt should contain FAIL verdict;\ngot: %s", implPrompt)
+	}
+}
+
+func TestEngine_ImplementPromptNoVerifyFeedbackOnFirstRun(t *testing.T) {
+	// On the very first run (no verify result exists), VerifyFeedback should be empty.
+	phases := []PhaseConfig{
+		{
+			Name:   "implement",
+			Prompt: "implement.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true,"commits":1}`),
+					RawText: "Impl done",
+					CostUSD: 0.50,
+				},
+			}},
+		},
+	}
+
+	stateDir := t.TempDir()
+	promptDir := t.TempDir()
+	workDir := t.TempDir()
+
+	implTmpl := "Phase: implement\n{{if .VerifyFeedback}}FEEDBACK:{{.VerifyFeedback}}{{end}}\n"
+	if err := os.WriteFile(filepath.Join(promptDir, "implement.md"), []byte(implTmpl), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := LoadOrCreate(stateDir, "NOFB-1")
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+
+	cfg := EngineConfig{
+		Pipeline:   &PhasePipeline{Phases: phases},
+		Loader:     NewPromptLoader(promptDir),
+		Ticket:     TicketData{Key: "NOFB-1"},
+		Model:      "test-model",
+		WorkDir:    workDir,
+		MaxCostUSD: 0,
+		Mode:       Autonomous,
+		SleepFunc:  func(time.Duration) {},
+		JitterFunc: func(time.Duration) time.Duration { return 0 },
+	}
+
+	engine := NewEngine(mock, state, cfg)
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if len(mock.calls) != 1 {
+		t.Fatalf("runner called %d times, want 1", len(mock.calls))
+	}
+
+	implPrompt := mock.calls[0].SystemPrompt
+	if strings.Contains(implPrompt, "FEEDBACK:") {
+		t.Errorf("implement prompt should NOT contain verify feedback on first run;\ngot: %s", implPrompt)
+	}
+}
+
+func TestEngine_ImplementPromptNoVerifyFeedbackOnPass(t *testing.T) {
+	// When verify passed previously, VerifyFeedback should be empty on resume.
+	phases := []PhaseConfig{
+		{
+			Name:   "implement",
+			Prompt: "implement.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true,"commits":1}`),
+					RawText: "Impl done",
+					CostUSD: 0.50,
+				},
+			}},
+		},
+	}
+
+	stateDir := t.TempDir()
+	promptDir := t.TempDir()
+	workDir := t.TempDir()
+
+	implTmpl := "Phase: implement\n{{if .VerifyFeedback}}FEEDBACK:{{.VerifyFeedback}}{{end}}\n"
+	if err := os.WriteFile(filepath.Join(promptDir, "implement.md"), []byte(implTmpl), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := LoadOrCreate(stateDir, "PASSFB-1")
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+
+	// Pre-populate a PASS verify result.
+	if err := state.MarkRunning("verify"); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.WriteResult("verify", json.RawMessage(`{"verdict":"PASS"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.WriteArtifact("verify", []byte("All tests pass")); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.MarkCompleted("verify"); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := EngineConfig{
+		Pipeline:   &PhasePipeline{Phases: phases},
+		Loader:     NewPromptLoader(promptDir),
+		Ticket:     TicketData{Key: "PASSFB-1"},
+		Model:      "test-model",
+		WorkDir:    workDir,
+		MaxCostUSD: 0,
+		Mode:       Autonomous,
+		SleepFunc:  func(time.Duration) {},
+		JitterFunc: func(time.Duration) time.Duration { return 0 },
+	}
+
+	engine := NewEngine(mock, state, cfg)
+
+	if err := engine.Resume(context.Background(), "implement"); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+
+	if len(mock.calls) != 1 {
+		t.Fatalf("runner called %d times, want 1", len(mock.calls))
+	}
+
+	implPrompt := mock.calls[0].SystemPrompt
+	if strings.Contains(implPrompt, "FEEDBACK:") {
+		t.Errorf("implement prompt should NOT contain verify feedback when verdict was PASS;\ngot: %s", implPrompt)
+	}
+}
+
 // phaseNames extracts phase names from runner calls for test error messages.
 func phaseNames(calls []runner.RunOpts) []string {
 	names := make([]string, len(calls))

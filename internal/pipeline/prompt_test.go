@@ -174,4 +174,39 @@ func TestRenderPrompt(t *testing.T) {
 			t.Errorf("result should list criteria, got: %s", result)
 		}
 	})
+
+	t.Run("renders_verify_feedback_when_present", func(t *testing.T) {
+		tmpl := `{{- if .VerifyFeedback}}
+## Verification Feedback
+{{.VerifyFeedback}}
+{{- end}}`
+		data := PromptData{
+			VerifyFeedback: "The previous verification failed.\n\nVerdict: FAIL\n\nFixes required:\n- fix the test\n",
+		}
+		result, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+		if !strings.Contains(result, "Verification Feedback") {
+			t.Errorf("result should contain feedback header, got: %s", result)
+		}
+		if !strings.Contains(result, "fix the test") {
+			t.Errorf("result should contain fix message, got: %s", result)
+		}
+	})
+
+	t.Run("omits_verify_feedback_when_empty", func(t *testing.T) {
+		tmpl := `{{- if .VerifyFeedback}}
+## Verification Feedback
+{{.VerifyFeedback}}
+{{- end}}`
+		data := PromptData{}
+		result, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+		if strings.Contains(result, "Verification Feedback") {
+			t.Errorf("result should not contain feedback section when empty, got: %s", result)
+		}
+	})
 }
