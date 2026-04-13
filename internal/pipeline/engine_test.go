@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -1336,6 +1337,234 @@ func TestEngine_ResumeRerunsCompletedPhase(t *testing.T) {
 	}
 	if string(artifact) != "Triage v2" {
 		t.Errorf("triage artifact = %q, want %q", string(artifact), "Triage v2")
+	}
+}
+
+// initGitRepo creates a bare-minimum git repo in dir with one commit on "main".
+func initGitRepo(t *testing.T, dir string) {
+	t.Helper()
+	for _, args := range [][]string{
+		{"git", "init", "--initial-branch=main"},
+		{"git", "config", "user.email", "test@test.com"},
+		{"git", "config", "user.name", "test"},
+		{"git", "commit", "--allow-empty", "-m", "init"},
+	} {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v: %s: %v", args, out, err)
+		}
+	}
+}
+
+func TestEngine_WorktreeCreatedBeforeFirstPhase(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "plan",
+			Prompt:    "plan.md",
+			DependsOn: []string{"triage"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage done",
+					CostUSD: 0.05,
+				},
+			}},
+			"plan": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tasks":["t1"]}`),
+					RawText: "Plan done",
+					CostUSD: 0.10,
+				},
+			}},
+		},
+	}
+
+	// Set up a real git repo so CreateWorktree works.
+	repoDir := t.TempDir()
+	initGitRepo(t, repoDir)
+	wtBase := filepath.Join(repoDir, ".worktrees")
+
+	var events []Event
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.WorkDir = repoDir
+		cfg.WorktreeBase = wtBase
+		cfg.BaseBranch = "main"
+		cfg.OnEvent = func(e Event) {
+			events = append(events, e)
+		}
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Worktree should be recorded in state.
+	if state.Meta().Worktree == "" {
+		t.Fatal("worktree path should be set in state")
+	}
+	if state.Meta().Branch != "soda/TEST-1" {
+		t.Errorf("branch = %q, want %q", state.Meta().Branch, "soda/TEST-1")
+	}
+
+	// EventWorktreeCreated must come before EventEngineStarted.
+	wtIdx := -1
+	startIdx := -1
+	for i, e := range events {
+		if e.Kind == EventWorktreeCreated && wtIdx == -1 {
+			wtIdx = i
+		}
+		if e.Kind == EventEngineStarted && startIdx == -1 {
+			startIdx = i
+		}
+	}
+	if wtIdx == -1 {
+		t.Fatal("worktree_created event not emitted")
+	}
+	if startIdx == -1 {
+		t.Fatal("engine_started event not emitted")
+	}
+	if wtIdx >= startIdx {
+		t.Errorf("worktree_created (idx %d) should come before engine_started (idx %d)", wtIdx, startIdx)
+	}
+
+	// All phases should have received the worktree as WorkDir.
+	for _, call := range mock.calls {
+		if call.WorkDir != state.Meta().Worktree {
+			t.Errorf("phase %s WorkDir = %q, want %q", call.Phase, call.WorkDir, state.Meta().Worktree)
+		}
+	}
+}
+
+func TestEngine_ResumeCreatesWorktreeIfMissing(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "plan",
+			Prompt:    "plan.md",
+			DependsOn: []string{"triage"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage done",
+					CostUSD: 0.05,
+				},
+			}},
+			"plan": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tasks":["t1"]}`),
+					RawText: "Plan done",
+					CostUSD: 0.10,
+				},
+			}},
+		},
+	}
+
+	repoDir := t.TempDir()
+	initGitRepo(t, repoDir)
+	wtBase := filepath.Join(repoDir, ".worktrees")
+
+	var events []Event
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.WorkDir = repoDir
+		cfg.WorktreeBase = wtBase
+		cfg.BaseBranch = "main"
+		cfg.OnEvent = func(e Event) {
+			events = append(events, e)
+		}
+	})
+
+	if err := engine.Resume(context.Background(), "triage"); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+
+	// Worktree should have been created.
+	if state.Meta().Worktree == "" {
+		t.Fatal("worktree path should be set in state after Resume")
+	}
+
+	hasWT := false
+	for _, e := range events {
+		if e.Kind == EventWorktreeCreated {
+			hasWT = true
+		}
+	}
+	if !hasWT {
+		t.Error("worktree_created event not emitted during Resume")
+	}
+}
+
+func TestEngine_ResumeWithExistingWorktreeSkipsCreation(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage done",
+					CostUSD: 0.05,
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.WorktreeBase = "/some/base"
+		cfg.OnEvent = func(e Event) {
+			events = append(events, e)
+		}
+	})
+
+	// Pre-set worktree in state to simulate a previous run.
+	state.Meta().Worktree = "/existing/worktree"
+	state.Meta().Branch = "soda/TEST-1"
+
+	if err := engine.Resume(context.Background(), "triage"); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+
+	// Should NOT have emitted worktree_created (already exists).
+	for _, e := range events {
+		if e.Kind == EventWorktreeCreated {
+			t.Error("worktree_created should not be emitted when worktree already exists")
+		}
+	}
+
+	// WorkDir for triage should be the existing worktree.
+	if len(mock.calls) != 1 {
+		t.Fatalf("runner called %d times, want 1", len(mock.calls))
+	}
+	if mock.calls[0].WorkDir != "/existing/worktree" {
+		t.Errorf("WorkDir = %q, want %q", mock.calls[0].WorkDir, "/existing/worktree")
 	}
 }
 
