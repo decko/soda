@@ -8,12 +8,44 @@ Summary: {{.Ticket.Summary}}
 ## Implementation Plan
 {{.Artifacts.Plan}}
 
-{{- if .VerifyFeedback}}
+{{- if .ReworkFeedback}}
 
-## Previous Verification Feedback
+## MANDATORY: Previous Verification Failures
 
-{{.VerifyFeedback}}
-**You MUST address every item above before proceeding with the rest of the plan.**
+The following issues were identified in the previous implementation attempt.
+You MUST address every item below. Do not repeat the same mistakes.
+
+### Verdict: {{.ReworkFeedback.Verdict}}
+
+### Fixes Required
+{{range .ReworkFeedback.FixesRequired}}- **{{.}}**
+{{end}}
+{{- if .ReworkFeedback.FailedCriteria}}
+### Failed Acceptance Criteria
+{{range .ReworkFeedback.FailedCriteria}}- **FAIL**: {{.Criterion}}
+  Evidence: {{.Evidence}}
+{{end}}
+{{- end}}
+
+{{- if .ReworkFeedback.CodeIssues}}
+### Code Issues
+{{range .ReworkFeedback.CodeIssues}}- **{{.Severity}}** {{.File}}{{if .Line}}:{{.Line}}{{end}}: {{.Issue}}
+{{end}}
+{{- end}}
+
+{{- if .ReworkFeedback.FailedCommands}}
+### Failed Commands
+{{range .ReworkFeedback.FailedCommands}}- `{{.Command}}` (exit {{.ExitCode}})
+{{- if .Output}}
+```
+{{.Output}}
+```
+{{- end}}
+{{end}}
+{{- end}}
+
+If any feedback above contradicts the Implementation Plan, the plan takes precedence.
+After implementing, verify that each fix above is addressed before reporting completion.
 {{- end}}
 
 {{- if .Context.RepoConventions}}

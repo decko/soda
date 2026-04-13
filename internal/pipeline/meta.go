@@ -26,6 +26,7 @@ type PhaseState struct {
 	DurationMs int64       `json:"duration_ms,omitempty"`
 	Error      string      `json:"error,omitempty"`
 	Generation int         `json:"generation,omitempty"`
+	PlanHash   string      `json:"plan_hash,omitempty"`
 	startedAt  time.Time
 }
 

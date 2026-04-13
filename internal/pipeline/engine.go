@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -271,6 +272,16 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 		return fmt.Errorf("engine: build prompt data for %s: %w", phase.Name, err)
 	}
 
+	// Store plan hash for staleness guard on phases that depend on plan.
+	for _, dep := range phase.DependsOn {
+		if dep == "plan" {
+			if h := e.computePlanHash(); h != "" {
+				e.state.Meta().Phases[phase.Name].PlanHash = h
+			}
+			break
+		}
+	}
+
 	tmplContent, err := e.config.Loader.Load(phase.Prompt)
 	if err != nil {
 		_ = e.state.MarkFailed(phase.Name, err)
@@ -496,50 +507,138 @@ func (e *Engine) buildPromptData(phase PhaseConfig) (PromptData, error) {
 	// implement phase actionable context on resume after verification
 	// failure.
 	if phase.Name == "implement" {
-		data.VerifyFeedback = e.extractVerifyFeedback()
+		if fb := e.extractReworkFeedback(); fb != nil {
+			data.ReworkFeedback = fb
+			e.emit(Event{
+				Phase: phase.Name,
+				Kind:  EventReworkFeedbackInjected,
+				Data: map[string]any{
+					"verdict":         fb.Verdict,
+					"fixes_count":     len(fb.FixesRequired),
+					"failed_criteria": len(fb.FailedCriteria),
+					"code_issues":     len(fb.CodeIssues),
+					"failed_commands": len(fb.FailedCommands),
+				},
+			})
+		}
 	}
 
 	return data, nil
 }
 
-// extractVerifyFeedback reads the verify result and returns a formatted
-// feedback string when the verdict is FAIL. Returns "" if no verify
-// result exists or the verdict is not FAIL.
-func (e *Engine) extractVerifyFeedback() string {
+// extractReworkFeedback reads the verify result and returns structured
+// feedback when the verdict is FAIL. Returns nil if no verify result
+// exists, the verdict is not FAIL, or the plan has changed since verify
+// ran (staleness guard).
+func (e *Engine) extractReworkFeedback() *ReworkFeedback {
 	raw, err := e.state.ReadResult("verify")
+	if err != nil {
+		return nil
+	}
+
+	var result struct {
+		Verdict         string `json:"verdict"`
+		FixesRequired   []string `json:"fixes_required"`
+		CriteriaResults []struct {
+			Criterion string `json:"criterion"`
+			Passed    bool   `json:"passed"`
+			Evidence  string `json:"evidence"`
+		} `json:"criteria_results"`
+		CodeIssues []struct {
+			File     string `json:"file"`
+			Line     int    `json:"line"`
+			Severity string `json:"severity"`
+			Issue    string `json:"issue"`
+		} `json:"code_issues"`
+		CommandResults []struct {
+			Command  string `json:"command"`
+			ExitCode int    `json:"exit_code"`
+			Output   string `json:"output"`
+			Passed   bool   `json:"passed"`
+		} `json:"command_results"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil
+	}
+	if !strings.EqualFold(result.Verdict, "FAIL") {
+		return nil
+	}
+
+	// Staleness guard: skip if plan changed since verify ran.
+	if verifyPS := e.state.Meta().Phases["verify"]; verifyPS != nil && verifyPS.PlanHash != "" {
+		if currentHash := e.computePlanHash(); currentHash != "" && currentHash != verifyPS.PlanHash {
+			e.emit(Event{
+				Phase: "implement",
+				Kind:  EventReworkFeedbackSkipped,
+				Data: map[string]any{
+					"reason":             "plan changed since verify ran",
+					"verify_plan_hash":   verifyPS.PlanHash,
+					"current_plan_hash":  currentHash,
+				},
+			})
+			return nil
+		}
+	}
+
+	fb := &ReworkFeedback{
+		Verdict:       result.Verdict,
+		FixesRequired: result.FixesRequired,
+	}
+
+	// Failed criteria only.
+	for _, cr := range result.CriteriaResults {
+		if !cr.Passed {
+			fb.FailedCriteria = append(fb.FailedCriteria, FailedCriterion{
+				Criterion: cr.Criterion,
+				Evidence:  cr.Evidence,
+			})
+		}
+	}
+
+	// Critical and major code issues only.
+	for _, ci := range result.CodeIssues {
+		sev := strings.ToLower(ci.Severity)
+		if sev == "critical" || sev == "major" {
+			fb.CodeIssues = append(fb.CodeIssues, ReworkCodeIssue{
+				File:     ci.File,
+				Line:     ci.Line,
+				Severity: ci.Severity,
+				Issue:    ci.Issue,
+			})
+		}
+	}
+
+	// Failed commands only, output truncated to 50 lines.
+	for _, cmd := range result.CommandResults {
+		if !cmd.Passed {
+			fb.FailedCommands = append(fb.FailedCommands, FailedCommand{
+				Command:  cmd.Command,
+				ExitCode: cmd.ExitCode,
+				Output:   truncateLines(cmd.Output, 50),
+			})
+		}
+	}
+
+	return fb
+}
+
+// computePlanHash returns the SHA-256 hex digest of the plan artifact.
+func (e *Engine) computePlanHash() string {
+	artifact, err := e.state.ReadArtifact("plan")
 	if err != nil {
 		return ""
 	}
-	var result struct {
-		Verdict       string   `json:"verdict"`
-		FixesRequired []string `json:"fixes_required"`
-	}
-	if err := json.Unmarshal(raw, &result); err != nil {
-		return ""
-	}
-	if !strings.EqualFold(result.Verdict, "FAIL") {
-		return ""
-	}
+	h := sha256.Sum256(artifact)
+	return fmt.Sprintf("%x", h)
+}
 
-	// Also include the verify artifact (raw text) for richer context.
-	artifact, _ := e.state.ReadArtifact("verify")
-
-	var sb strings.Builder
-	sb.WriteString("The previous verification failed.\n\nVerdict: FAIL\n")
-	if len(result.FixesRequired) > 0 {
-		sb.WriteString("\nFixes required:\n")
-		for _, fix := range result.FixesRequired {
-			sb.WriteString("- ")
-			sb.WriteString(fix)
-			sb.WriteString("\n")
-		}
+// truncateLines returns at most maxLines lines from s.
+func truncateLines(s string, maxLines int) string {
+	lines := strings.Split(s, "\n")
+	if len(lines) <= maxLines {
+		return s
 	}
-	if len(artifact) > 0 {
-		sb.WriteString("\nVerify phase output:\n")
-		sb.Write(artifact)
-		sb.WriteString("\n")
-	}
-	return sb.String()
+	return strings.Join(lines[:maxLines], "\n") + "\n... (truncated)"
 }
 
 // extractPRURL reads the submit result and extracts the pr_url field.

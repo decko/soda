@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -2079,9 +2080,9 @@ func TestEngine_RunChecksGateOnSkippedPhases(t *testing.T) {
 	}
 }
 
-func TestEngine_ResumeImplementInjectsVerifyFeedback(t *testing.T) {
+func TestEngine_ResumeImplementInjectsReworkFeedback(t *testing.T) {
 	// When verify FAILs and we resume from implement, the implement prompt
-	// should contain the verify feedback (fixes_required + artifact text).
+	// should contain structured rework feedback with selective extraction.
 	phases := []PhaseConfig{
 		{
 			Name:   "implement",
@@ -2096,7 +2097,24 @@ func TestEngine_ResumeImplementInjectsVerifyFeedback(t *testing.T) {
 		},
 	}
 
-	// First run: implement succeeds, verify FAILs.
+	verifyOutput := `{
+		"verdict": "FAIL",
+		"fixes_required": ["add missing test for edge case", "fix nil pointer in handler"],
+		"criteria_results": [
+			{"criterion": "handles valid input", "passed": true, "evidence": "test passes"},
+			{"criterion": "handles nil input", "passed": false, "evidence": "panics on nil"}
+		],
+		"code_issues": [
+			{"file": "handler.go", "line": 42, "severity": "critical", "issue": "nil deref"},
+			{"file": "handler.go", "line": 100, "severity": "minor", "issue": "unused var"},
+			{"file": "util.go", "line": 10, "severity": "major", "issue": "unchecked error"}
+		],
+		"command_results": [
+			{"command": "go test ./...", "exit_code": 1, "output": "FAIL handler_test.go", "passed": false},
+			{"command": "go vet ./...", "exit_code": 0, "output": "ok", "passed": true}
+		]
+	}`
+
 	mock1 := &flexMockRunner{
 		responses: map[string][]flexResponse{
 			"implement": {{
@@ -2108,8 +2126,8 @@ func TestEngine_ResumeImplementInjectsVerifyFeedback(t *testing.T) {
 			}},
 			"verify": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"verdict":"FAIL","fixes_required":["add missing test for edge case","fix nil pointer in handler"]}`),
-					RawText: "Verify report: tests incomplete, nil pointer found",
+					Output:  json.RawMessage(verifyOutput),
+					RawText: "Verify report",
 					CostUSD: 0.15,
 				},
 			}},
@@ -2120,8 +2138,22 @@ func TestEngine_ResumeImplementInjectsVerifyFeedback(t *testing.T) {
 	promptDir := t.TempDir()
 	workDir := t.TempDir()
 
-	// Write prompt template that includes VerifyFeedback.
-	implTmpl := "Phase: implement\nTicket: {{.Ticket.Key}}\n{{if .VerifyFeedback}}VerifyFeedback:\n{{.VerifyFeedback}}{{end}}\n"
+	// Template that renders ReworkFeedback fields.
+	implTmpl := `Phase: implement
+Ticket: {{.Ticket.Key}}
+{{- if .ReworkFeedback}}
+REWORK:
+Verdict: {{.ReworkFeedback.Verdict}}
+{{range .ReworkFeedback.FixesRequired}}Fix: {{.}}
+{{end}}
+{{- range .ReworkFeedback.FailedCriteria}}FailedCrit: {{.Criterion}} | {{.Evidence}}
+{{end}}
+{{- range .ReworkFeedback.CodeIssues}}Issue: {{.Severity}} {{.File}}:{{.Line}} {{.Issue}}
+{{end}}
+{{- range .ReworkFeedback.FailedCommands}}Cmd: {{.Command}} exit={{.ExitCode}}
+{{end}}
+{{- end}}
+`
 	verifyTmpl := "Phase: verify\nTicket: {{.Ticket.Key}}\n"
 
 	if err := os.WriteFile(filepath.Join(promptDir, "implement.md"), []byte(implTmpl), 0644); err != nil {
@@ -2131,21 +2163,25 @@ func TestEngine_ResumeImplementInjectsVerifyFeedback(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	state, err := LoadOrCreate(stateDir, "VERIFY-FB-1")
+	state, err := LoadOrCreate(stateDir, "REWORK-1")
 	if err != nil {
 		t.Fatalf("LoadOrCreate: %v", err)
 	}
 
+	var events []Event
 	cfg := EngineConfig{
 		Pipeline:   &PhasePipeline{Phases: phases},
 		Loader:     NewPromptLoader(promptDir),
-		Ticket:     TicketData{Key: "VERIFY-FB-1", Summary: "Verify feedback test"},
+		Ticket:     TicketData{Key: "REWORK-1", Summary: "Rework feedback test"},
 		Model:      "test-model",
 		WorkDir:    workDir,
 		MaxCostUSD: 0,
 		Mode:       Autonomous,
 		SleepFunc:  func(time.Duration) {},
 		JitterFunc: func(time.Duration) time.Duration { return 0 },
+		OnEvent: func(e Event) {
+			events = append(events, e)
+		},
 	}
 
 	engine1 := NewEngine(mock1, state, cfg)
@@ -2160,7 +2196,8 @@ func TestEngine_ResumeImplementInjectsVerifyFeedback(t *testing.T) {
 		t.Fatalf("expected PhaseGateError, got: %v", runErr)
 	}
 
-	// Now resume from implement — the verify FAIL feedback should be injected.
+	// Resume from implement — rework feedback should be injected.
+	events = nil
 	mock2 := &flexMockRunner{
 		responses: map[string][]flexResponse{
 			"implement": {{
@@ -2186,31 +2223,69 @@ func TestEngine_ResumeImplementInjectsVerifyFeedback(t *testing.T) {
 		t.Fatalf("Resume: %v", err)
 	}
 
-	// Verify the implement prompt contained the verify feedback.
 	if len(mock2.calls) < 1 {
 		t.Fatal("expected at least 1 runner call")
 	}
 
 	implPrompt := mock2.calls[0].SystemPrompt
-	if !strings.Contains(implPrompt, "VerifyFeedback:") {
-		t.Errorf("implement prompt should contain VerifyFeedback section;\ngot: %s", implPrompt)
+
+	// Fixes required should be present.
+	if !strings.Contains(implPrompt, "Fix: add missing test for edge case") {
+		t.Errorf("prompt should contain first fix;\ngot: %s", implPrompt)
 	}
-	if !strings.Contains(implPrompt, "add missing test for edge case") {
-		t.Errorf("implement prompt should contain first fix;\ngot: %s", implPrompt)
+	if !strings.Contains(implPrompt, "Fix: fix nil pointer in handler") {
+		t.Errorf("prompt should contain second fix;\ngot: %s", implPrompt)
 	}
-	if !strings.Contains(implPrompt, "fix nil pointer in handler") {
-		t.Errorf("implement prompt should contain second fix;\ngot: %s", implPrompt)
+
+	// Only failed criteria should appear (not the passed one).
+	if !strings.Contains(implPrompt, "FailedCrit: handles nil input | panics on nil") {
+		t.Errorf("prompt should contain failed criterion;\ngot: %s", implPrompt)
 	}
-	if !strings.Contains(implPrompt, "Verify report: tests incomplete") {
-		t.Errorf("implement prompt should contain verify artifact text;\ngot: %s", implPrompt)
+	if strings.Contains(implPrompt, "handles valid input") {
+		t.Errorf("prompt should NOT contain passed criterion;\ngot: %s", implPrompt)
 	}
+
+	// Only critical/major code issues (not minor).
+	if !strings.Contains(implPrompt, "Issue: critical handler.go:42 nil deref") {
+		t.Errorf("prompt should contain critical issue;\ngot: %s", implPrompt)
+	}
+	if !strings.Contains(implPrompt, "Issue: major util.go:10 unchecked error") {
+		t.Errorf("prompt should contain major issue;\ngot: %s", implPrompt)
+	}
+	if strings.Contains(implPrompt, "unused var") {
+		t.Errorf("prompt should NOT contain minor issue;\ngot: %s", implPrompt)
+	}
+
+	// Only failed commands (not the passing go vet).
+	if !strings.Contains(implPrompt, "Cmd: go test ./... exit=1") {
+		t.Errorf("prompt should contain failed command;\ngot: %s", implPrompt)
+	}
+	if strings.Contains(implPrompt, "go vet") {
+		t.Errorf("prompt should NOT contain passing command;\ngot: %s", implPrompt)
+	}
+
+	// Verdict should be present.
 	if !strings.Contains(implPrompt, "Verdict: FAIL") {
-		t.Errorf("implement prompt should contain FAIL verdict;\ngot: %s", implPrompt)
+		t.Errorf("prompt should contain FAIL verdict;\ngot: %s", implPrompt)
+	}
+
+	// Injection event should have been logged.
+	hasInjectionEvent := false
+	for _, e := range events {
+		if e.Kind == EventReworkFeedbackInjected {
+			hasInjectionEvent = true
+			if e.Phase != "implement" {
+				t.Errorf("injection event phase = %q, want %q", e.Phase, "implement")
+			}
+		}
+	}
+	if !hasInjectionEvent {
+		t.Error("rework_feedback_injected event not emitted")
 	}
 }
 
-func TestEngine_ImplementPromptNoVerifyFeedbackOnFirstRun(t *testing.T) {
-	// On the very first run (no verify result exists), VerifyFeedback should be empty.
+func TestEngine_ImplementPromptNoReworkFeedbackOnFirstRun(t *testing.T) {
+	// On the very first run (no verify result exists), ReworkFeedback should be nil.
 	phases := []PhaseConfig{
 		{
 			Name:   "implement",
@@ -2235,7 +2310,7 @@ func TestEngine_ImplementPromptNoVerifyFeedbackOnFirstRun(t *testing.T) {
 	promptDir := t.TempDir()
 	workDir := t.TempDir()
 
-	implTmpl := "Phase: implement\n{{if .VerifyFeedback}}FEEDBACK:{{.VerifyFeedback}}{{end}}\n"
+	implTmpl := "Phase: implement\n{{if .ReworkFeedback}}FEEDBACK:yes{{end}}\n"
 	if err := os.WriteFile(filepath.Join(promptDir, "implement.md"), []byte(implTmpl), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -2269,12 +2344,12 @@ func TestEngine_ImplementPromptNoVerifyFeedbackOnFirstRun(t *testing.T) {
 
 	implPrompt := mock.calls[0].SystemPrompt
 	if strings.Contains(implPrompt, "FEEDBACK:") {
-		t.Errorf("implement prompt should NOT contain verify feedback on first run;\ngot: %s", implPrompt)
+		t.Errorf("implement prompt should NOT contain rework feedback on first run;\ngot: %s", implPrompt)
 	}
 }
 
-func TestEngine_ImplementPromptNoVerifyFeedbackOnPass(t *testing.T) {
-	// When verify passed previously, VerifyFeedback should be empty on resume.
+func TestEngine_ImplementPromptNoReworkFeedbackOnPass(t *testing.T) {
+	// When verify passed previously, ReworkFeedback should be nil on resume.
 	phases := []PhaseConfig{
 		{
 			Name:   "implement",
@@ -2299,7 +2374,7 @@ func TestEngine_ImplementPromptNoVerifyFeedbackOnPass(t *testing.T) {
 	promptDir := t.TempDir()
 	workDir := t.TempDir()
 
-	implTmpl := "Phase: implement\n{{if .VerifyFeedback}}FEEDBACK:{{.VerifyFeedback}}{{end}}\n"
+	implTmpl := "Phase: implement\n{{if .ReworkFeedback}}FEEDBACK:yes{{end}}\n"
 	if err := os.WriteFile(filepath.Join(promptDir, "implement.md"), []byte(implTmpl), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -2347,7 +2422,171 @@ func TestEngine_ImplementPromptNoVerifyFeedbackOnPass(t *testing.T) {
 
 	implPrompt := mock.calls[0].SystemPrompt
 	if strings.Contains(implPrompt, "FEEDBACK:") {
-		t.Errorf("implement prompt should NOT contain verify feedback when verdict was PASS;\ngot: %s", implPrompt)
+		t.Errorf("implement prompt should NOT contain rework feedback when verdict was PASS;\ngot: %s", implPrompt)
+	}
+}
+
+func TestEngine_ReworkFeedbackStalePlanSkipped(t *testing.T) {
+	// When the plan has changed since verify ran, rework feedback should
+	// be skipped and a warning event emitted.
+	phases := []PhaseConfig{
+		{
+			Name:      "implement",
+			Prompt:    "implement.md",
+			DependsOn: []string{"plan"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "verify",
+			Prompt:    "verify.md",
+			DependsOn: []string{"implement"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true,"commits":1}`),
+					RawText: "Impl v2",
+					CostUSD: 0.50,
+				},
+			}},
+			"verify": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"verdict":"PASS"}`),
+					RawText: "All pass",
+					CostUSD: 0.20,
+				},
+			}},
+		},
+	}
+
+	stateDir := t.TempDir()
+	promptDir := t.TempDir()
+	workDir := t.TempDir()
+
+	implTmpl := "Phase: implement\n{{if .ReworkFeedback}}FEEDBACK:yes{{end}}\n"
+	verifyTmpl := "Phase: verify\n"
+
+	if err := os.WriteFile(filepath.Join(promptDir, "implement.md"), []byte(implTmpl), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(promptDir, "verify.md"), []byte(verifyTmpl), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := LoadOrCreate(stateDir, "STALE-1")
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+
+	// Write a plan artifact (version 1).
+	if err := state.MarkRunning("plan"); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.WriteResult("plan", json.RawMessage(`{"tasks":["t1"]}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.WriteArtifact("plan", []byte("Plan version 1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.MarkCompleted("plan"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Pre-populate a FAIL verify result with a plan_hash from the OLD plan.
+	if err := state.MarkRunning("verify"); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.WriteResult("verify", json.RawMessage(`{"verdict":"FAIL","fixes_required":["fix it"]}`)); err != nil {
+		t.Fatal(err)
+	}
+	// Store plan hash from "Plan version 1".
+	state.Meta().Phases["verify"].PlanHash = fmt.Sprintf("%x", sha256.Sum256([]byte("Plan version 1")))
+	if err := state.MarkCompleted("verify"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Now change the plan artifact (version 2) — simulates re-running plan.
+	if err := state.WriteArtifact("plan", []byte("Plan version 2 - different")); err != nil {
+		t.Fatal(err)
+	}
+
+	var events []Event
+	cfg := EngineConfig{
+		Pipeline:   &PhasePipeline{Phases: phases},
+		Loader:     NewPromptLoader(promptDir),
+		Ticket:     TicketData{Key: "STALE-1"},
+		Model:      "test-model",
+		WorkDir:    workDir,
+		MaxCostUSD: 0,
+		Mode:       Autonomous,
+		SleepFunc:  func(time.Duration) {},
+		JitterFunc: func(time.Duration) time.Duration { return 0 },
+		OnEvent: func(e Event) {
+			events = append(events, e)
+		},
+	}
+
+	engine := NewEngine(mock, state, cfg)
+
+	if err := engine.Resume(context.Background(), "implement"); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+
+	// Implement prompt should NOT contain feedback (stale plan).
+	if len(mock.calls) < 1 {
+		t.Fatal("expected at least 1 runner call")
+	}
+	implPrompt := mock.calls[0].SystemPrompt
+	if strings.Contains(implPrompt, "FEEDBACK:") {
+		t.Errorf("prompt should NOT contain rework feedback when plan is stale;\ngot: %s", implPrompt)
+	}
+
+	// Should have emitted a rework_feedback_skipped event.
+	hasSkipEvent := false
+	for _, e := range events {
+		if e.Kind == EventReworkFeedbackSkipped {
+			hasSkipEvent = true
+			if reason, ok := e.Data["reason"].(string); !ok || !strings.Contains(reason, "plan changed") {
+				t.Errorf("skip event reason should mention plan changed, got: %v", e.Data["reason"])
+			}
+		}
+	}
+	if !hasSkipEvent {
+		t.Error("rework_feedback_skipped event not emitted for stale plan")
+	}
+}
+
+func TestEngine_TruncateLines(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		max      int
+		contains string
+		notLong  bool
+	}{
+		{"under_limit", "line1\nline2\nline3", 5, "line1", false},
+		{"at_limit", "a\nb\nc", 3, "a\nb\nc", false},
+		{"over_limit", "1\n2\n3\n4\n5", 3, "... (truncated)", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := truncateLines(tt.input, tt.max)
+			if !strings.Contains(got, tt.contains) {
+				t.Errorf("truncateLines() = %q, want to contain %q", got, tt.contains)
+			}
+			if tt.notLong {
+				lines := strings.Split(got, "\n")
+				// max lines + 1 for the truncation marker
+				if len(lines) > tt.max+1 {
+					t.Errorf("truncateLines() has %d lines, want <= %d", len(lines), tt.max+1)
+				}
+			}
+		})
 	}
 }
 
