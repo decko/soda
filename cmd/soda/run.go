@@ -14,6 +14,7 @@ import (
 	"github.com/decko/soda/internal/config"
 	"github.com/decko/soda/internal/pipeline"
 	"github.com/decko/soda/internal/runner"
+	"github.com/decko/soda/schemas"
 	"github.com/spf13/cobra"
 )
 
@@ -303,6 +304,111 @@ func runDryRun(cfg *config.Config, pl *pipeline.PhasePipeline, loader *pipeline.
 	}
 
 	return nil
+}
+
+// formatDuration formats a millisecond duration into a human-readable string.
+// Returns "—" for zero/negative values.
+func formatDuration(ms int64) string {
+	if ms <= 0 {
+		return "—"
+	}
+	d := time.Duration(ms) * time.Millisecond
+	if d < time.Second {
+		return fmt.Sprintf("%dms", ms)
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	}
+	m := int(d.Minutes())
+	s := int(d.Seconds()) % 60
+	if s == 0 {
+		return fmt.Sprintf("%dm", m)
+	}
+	return fmt.Sprintf("%dm%ds", m, s)
+}
+
+// formatPhaseDetails reads a phase's structured JSON result from state and
+// returns a one-line detail string. Returns "" on missing or unparseable data.
+func formatPhaseDetails(state *pipeline.State, phase string) string {
+	raw, err := state.ReadResult(phase)
+	if err != nil {
+		return ""
+	}
+
+	switch phase {
+	case "triage":
+		var out schemas.TriageOutput
+		if json.Unmarshal(raw, &out) != nil {
+			return ""
+		}
+		parts := []string{}
+		if out.Repo != "" {
+			parts = append(parts, "repo="+out.Repo)
+		}
+		if out.Complexity != "" {
+			parts = append(parts, "complexity="+out.Complexity)
+		}
+		if !out.Automatable {
+			reason := out.BlockReason
+			if reason == "" {
+				reason = "not automatable"
+			}
+			parts = append(parts, "BLOCKED: "+reason)
+		}
+		return strings.Join(parts, ", ")
+
+	case "plan":
+		var out schemas.PlanOutput
+		if json.Unmarshal(raw, &out) != nil {
+			return ""
+		}
+		return fmt.Sprintf("%d tasks", len(out.Tasks))
+
+	case "implement":
+		var out schemas.ImplementOutput
+		if json.Unmarshal(raw, &out) != nil {
+			return ""
+		}
+		return fmt.Sprintf("%d files changed, %d commits", len(out.FilesChanged), len(out.Commits))
+
+	case "verify":
+		var out schemas.VerifyOutput
+		if json.Unmarshal(raw, &out) != nil {
+			return ""
+		}
+		if strings.EqualFold(out.Verdict, "PASS") {
+			return "PASS — all criteria met"
+		}
+		fails := 0
+		for _, cr := range out.CriteriaResults {
+			if !cr.Passed {
+				fails++
+			}
+		}
+		if fails > 0 {
+			return fmt.Sprintf("FAIL — %d criteria not met", fails)
+		}
+		return "FAIL"
+
+	case "submit":
+		var out schemas.SubmitOutput
+		if json.Unmarshal(raw, &out) != nil {
+			return ""
+		}
+		if out.PRURL != "" {
+			return out.PRURL
+		}
+		return ""
+
+	case "monitor":
+		var out schemas.MonitorOutput
+		if json.Unmarshal(raw, &out) != nil {
+			return ""
+		}
+		return fmt.Sprintf("%d comments handled", len(out.CommentsHandled))
+	}
+
+	return ""
 }
 
 func printSummary(meta *pipeline.PipelineMeta, elapsed time.Duration) {
