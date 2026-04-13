@@ -491,7 +491,55 @@ func (e *Engine) buildPromptData(phase PhaseConfig) (PromptData, error) {
 		}
 	}
 
+	// When building the implement prompt, inject verify feedback if a
+	// previous verify run produced a FAIL verdict. This gives the
+	// implement phase actionable context on resume after verification
+	// failure.
+	if phase.Name == "implement" {
+		data.VerifyFeedback = e.extractVerifyFeedback()
+	}
+
 	return data, nil
+}
+
+// extractVerifyFeedback reads the verify result and returns a formatted
+// feedback string when the verdict is FAIL. Returns "" if no verify
+// result exists or the verdict is not FAIL.
+func (e *Engine) extractVerifyFeedback() string {
+	raw, err := e.state.ReadResult("verify")
+	if err != nil {
+		return ""
+	}
+	var result struct {
+		Verdict       string   `json:"verdict"`
+		FixesRequired []string `json:"fixes_required"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return ""
+	}
+	if !strings.EqualFold(result.Verdict, "FAIL") {
+		return ""
+	}
+
+	// Also include the verify artifact (raw text) for richer context.
+	artifact, _ := e.state.ReadArtifact("verify")
+
+	var sb strings.Builder
+	sb.WriteString("The previous verification failed.\n\nVerdict: FAIL\n")
+	if len(result.FixesRequired) > 0 {
+		sb.WriteString("\nFixes required:\n")
+		for _, fix := range result.FixesRequired {
+			sb.WriteString("- ")
+			sb.WriteString(fix)
+			sb.WriteString("\n")
+		}
+	}
+	if len(artifact) > 0 {
+		sb.WriteString("\nVerify phase output:\n")
+		sb.Write(artifact)
+		sb.WriteString("\n")
+	}
+	return sb.String()
 }
 
 // extractPRURL reads the submit result and extracts the pr_url field.
