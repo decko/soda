@@ -4,16 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strings"
 	"syscall"
+	"text/tabwriter"
 	"time"
 
 	"github.com/decko/soda/internal/config"
 	"github.com/decko/soda/internal/pipeline"
 	"github.com/decko/soda/internal/runner"
+	"github.com/decko/soda/schemas"
 	"github.com/spf13/cobra"
 )
 
@@ -147,6 +150,7 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 
 	// Build engine config — use a closure that captures the engine pointer
 	var engine *pipeline.Engine
+	skippedPhases := map[string]bool{}
 
 	engineCfg := pipeline.EngineConfig{
 		Pipeline:      pl,
@@ -161,6 +165,9 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 		MaxCostUSD:    cfg.Limits.MaxCostPerTicket,
 		Mode:          mode,
 		OnEvent: func(event pipeline.Event) {
+			if event.Kind == pipeline.EventPhaseSkipped || event.Kind == pipeline.EventMonitorSkipped {
+				skippedPhases[event.Phase] = true
+			}
 			handleEvent(ctx, cancel, engine, event)
 		},
 	}
@@ -186,7 +193,7 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 	}
 
 	// Print summary
-	printSummary(state.Meta(), time.Since(startTime))
+	printSummary(state, pl.Phases, t.Summary, time.Since(startTime), runErr, skippedPhases)
 
 	return runErr
 }
@@ -305,17 +312,218 @@ func runDryRun(cfg *config.Config, pl *pipeline.PhasePipeline, loader *pipeline.
 	return nil
 }
 
-func printSummary(meta *pipeline.PipelineMeta, elapsed time.Duration) {
-	fmt.Println()
-	fmt.Println("--- Summary ---")
-	fmt.Printf("Ticket:  %s\n", meta.Ticket)
-	fmt.Printf("Cost:    $%.2f\n", meta.TotalCost)
-	fmt.Printf("Elapsed: %s\n", elapsed.Truncate(time.Second))
+// formatDuration formats a millisecond duration into a human-readable string.
+// Returns "—" for zero/negative values.
+func formatDuration(ms int64) string {
+	if ms <= 0 {
+		return "—"
+	}
+	d := time.Duration(ms) * time.Millisecond
+	if d < time.Second {
+		return fmt.Sprintf("%dms", ms)
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	}
+	m := int(d.Minutes())
+	s := int(d.Seconds()) % 60
+	if s == 0 {
+		return fmt.Sprintf("%dm", m)
+	}
+	return fmt.Sprintf("%dm%ds", m, s)
+}
 
-	for name, ps := range meta.Phases {
-		if ps.Status == pipeline.PhaseFailed {
-			fmt.Printf("Failed:  %s — %s\n", name, ps.Error)
+// formatPhaseDetails reads a phase's structured JSON result from state and
+// returns a one-line detail string. Returns "" on missing or unparseable data.
+func formatPhaseDetails(state *pipeline.State, phase string) string {
+	raw, err := state.ReadResult(phase)
+	if err != nil {
+		return ""
+	}
+
+	switch phase {
+	case "triage":
+		var out schemas.TriageOutput
+		if json.Unmarshal(raw, &out) != nil {
+			return ""
 		}
+		parts := []string{}
+		if out.Repo != "" {
+			parts = append(parts, "repo="+out.Repo)
+		}
+		if out.Complexity != "" {
+			parts = append(parts, "complexity="+out.Complexity)
+		}
+		if !out.Automatable {
+			reason := out.BlockReason
+			if reason == "" {
+				reason = "not automatable"
+			}
+			parts = append(parts, "BLOCKED: "+reason)
+		}
+		return strings.Join(parts, ", ")
+
+	case "plan":
+		var out schemas.PlanOutput
+		if json.Unmarshal(raw, &out) != nil {
+			return ""
+		}
+		return fmt.Sprintf("%d tasks", len(out.Tasks))
+
+	case "implement":
+		var out schemas.ImplementOutput
+		if json.Unmarshal(raw, &out) != nil {
+			return ""
+		}
+		return fmt.Sprintf("%d files changed, %d commits", len(out.FilesChanged), len(out.Commits))
+
+	case "verify":
+		var out schemas.VerifyOutput
+		if json.Unmarshal(raw, &out) != nil {
+			return ""
+		}
+		if strings.EqualFold(out.Verdict, "PASS") {
+			return "PASS — all criteria met"
+		}
+		fails := 0
+		for _, cr := range out.CriteriaResults {
+			if !cr.Passed {
+				fails++
+			}
+		}
+		if fails > 0 {
+			return fmt.Sprintf("FAIL — %d criteria not met", fails)
+		}
+		return "FAIL"
+
+	case "submit":
+		var out schemas.SubmitOutput
+		if json.Unmarshal(raw, &out) != nil {
+			return ""
+		}
+		if out.PRURL != "" {
+			return out.PRURL
+		}
+		return ""
+
+	case "monitor":
+		var out schemas.MonitorOutput
+		if json.Unmarshal(raw, &out) != nil {
+			return ""
+		}
+		return fmt.Sprintf("%d comments handled", len(out.CommentsHandled))
+	}
+
+	return ""
+}
+
+func printSummary(state *pipeline.State, phases []pipeline.PhaseConfig, summary string, elapsed time.Duration, runErr error, skippedPhases map[string]bool) {
+	fprintSummary(os.Stdout, state, phases, summary, elapsed, runErr, skippedPhases)
+}
+
+// fprintSummary writes the detailed pipeline outcome report to w.
+// Extracted so tests can capture output without os.Pipe.
+func fprintSummary(w io.Writer, state *pipeline.State, phases []pipeline.PhaseConfig, summary string, elapsed time.Duration, runErr error, skippedPhases map[string]bool) {
+	meta := state.Meta()
+	success := runErr == nil
+
+	// Header
+	fmt.Fprintln(w)
+	if success {
+		fmt.Fprintln(w, "✅ Pipeline completed successfully")
+	} else {
+		fmt.Fprintln(w, "❌ Pipeline failed")
+	}
+	fmt.Fprintln(w)
+
+	// Ticket / branch / worktree info
+	fmt.Fprintf(w, "Ticket:   %s", meta.Ticket)
+	if summary != "" {
+		fmt.Fprintf(w, " — %s", summary)
+	}
+	fmt.Fprintln(w)
+	if meta.Branch != "" {
+		fmt.Fprintf(w, "Branch:   %s\n", meta.Branch)
+	}
+	if meta.Worktree != "" {
+		fmt.Fprintf(w, "Worktree: %s\n", meta.Worktree)
+	}
+	fmt.Fprintln(w)
+
+	// Phase table
+	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+	fmt.Fprintf(tw, "PHASE\tSTATUS\tDURATION\tCOST\tDETAILS\n")
+	fmt.Fprintf(tw, "─────\t──────\t────────\t────\t───────\n")
+
+	failedPhase := ""
+	failedIdx := -1
+	for i, phase := range phases {
+		ps := meta.Phases[phase.Name]
+
+		status := "·"
+		dur := "—"
+		cost := "—"
+		details := ""
+
+		if skippedPhases[phase.Name] {
+			status = "⏭"
+		} else if ps != nil {
+			switch ps.Status {
+			case pipeline.PhaseCompleted:
+				status = "✓"
+			case pipeline.PhaseFailed:
+				status = "✗"
+				failedPhase = phase.Name
+				failedIdx = i
+			case pipeline.PhaseRunning:
+				status = "▸"
+			default:
+				status = "·"
+			}
+			dur = formatDuration(ps.DurationMs)
+			if ps.Cost > 0 {
+				cost = fmt.Sprintf("$%.2f", ps.Cost)
+			}
+		}
+
+		// Details from structured output
+		if ps != nil && ps.Status == pipeline.PhaseCompleted {
+			details = formatPhaseDetails(state, phase.Name)
+		} else if ps != nil && ps.Status == pipeline.PhaseFailed {
+			details = formatPhaseDetails(state, phase.Name)
+			if details == "" && ps.Error != "" {
+				details = ps.Error
+			}
+		}
+
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", phase.Name, status, dur, cost, details)
+	}
+	tw.Flush()
+
+	// Totals
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "Total cost: $%.2f\n", meta.TotalCost)
+	fmt.Fprintf(w, "Elapsed:    %s\n", elapsed.Truncate(time.Second))
+
+	// PR URL on success
+	if success {
+		prDetails := formatPhaseDetails(state, "submit")
+		if prDetails != "" && strings.HasPrefix(prDetails, "http") {
+			fmt.Fprintln(w)
+			fmt.Fprintf(w, "PR: %s\n", prDetails)
+		}
+	}
+
+	// Actionable next steps on failure
+	if !success && failedPhase != "" {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Next steps:")
+		// Suggest resuming from the predecessor phase (whose output feeds the failed phase)
+		resumeFrom := failedPhase
+		if failedIdx > 0 {
+			resumeFrom = phases[failedIdx-1].Name
+		}
+		fmt.Fprintf(w, "  soda run %s --from %s\n", meta.Ticket, resumeFrom)
 	}
 }
 
