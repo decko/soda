@@ -22,6 +22,38 @@ type PromptData struct {
 	Branch         string
 	BaseBranch     string
 	ReviewComments string
+	ReworkFeedback *ReworkFeedback
+}
+
+// ReworkFeedback holds selective feedback from a failed verify phase,
+// injected into implement's prompt on resume.
+type ReworkFeedback struct {
+	Verdict        string
+	FixesRequired  []string
+	FailedCriteria []FailedCriterion
+	CodeIssues     []ReworkCodeIssue
+	FailedCommands []FailedCommand
+}
+
+// FailedCriterion is a single acceptance criterion that failed verification.
+type FailedCriterion struct {
+	Criterion string
+	Evidence  string
+}
+
+// ReworkCodeIssue is a critical or major code issue found during verification.
+type ReworkCodeIssue struct {
+	File     string
+	Line     int
+	Severity string
+	Issue    string
+}
+
+// FailedCommand is a verification command that failed, with truncated output.
+type FailedCommand struct {
+	Command  string
+	ExitCode int
+	Output   string
 }
 
 // TicketData holds ticket fields for prompt templates.
