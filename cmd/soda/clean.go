@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+	sodagit "github.com/decko/soda/internal/git"
 	"github.com/decko/soda/internal/pipeline"
 	"github.com/spf13/cobra"
 )
@@ -109,6 +110,22 @@ func cleanTicket(stateDir, ticketKey string, dryRun bool) error {
 		}
 	}
 
+	// Delete branch
+	if meta.Branch != "" {
+		if dryRun {
+			fmt.Printf("Would delete branch: %s\n", meta.Branch)
+		} else {
+			repoDir, err := resolveRepoDir()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: cannot resolve repo dir to delete branch %s: %v\n", meta.Branch, err)
+			} else if brErr := sodagit.DeleteBranch(repoDir, meta.Branch); brErr != nil {
+				fmt.Fprintf(os.Stderr, "Warning: git branch delete %s: %v\n", meta.Branch, brErr)
+			} else {
+				fmt.Printf("Deleted branch: %s\n", meta.Branch)
+			}
+		}
+	}
+
 	// Remove state directory
 	if dryRun {
 		fmt.Printf("Would remove state: %s\n", ticketDir)
@@ -137,6 +154,20 @@ func tryLock(lockPath string) bool {
 	}
 	syscall.Flock(int(fd.Fd()), syscall.LOCK_UN)
 	return true
+}
+
+// resolveRepoDir returns the top-level directory of the current git repository.
+func resolveRepoDir() (string, error) {
+	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		return "", fmt.Errorf("git rev-parse --show-toplevel: %w", err)
+	}
+	dir := string(out)
+	// Trim trailing newline
+	if len(dir) > 0 && dir[len(dir)-1] == '\n' {
+		dir = dir[:len(dir)-1]
+	}
+	return dir, nil
 }
 
 // isTerminal returns true if the pipeline is in a cleanable state.
