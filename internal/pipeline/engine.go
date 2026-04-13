@@ -72,12 +72,44 @@ func NewEngine(r runner.Runner, state *State, cfg EngineConfig) *Engine {
 	return e
 }
 
+// ensureWorktree creates a worktree if one hasn't been created yet and
+// WorktreeBase is configured. Called at the start of Run and Resume so
+// every phase executes inside the worktree.
+func (e *Engine) ensureWorktree(ctx context.Context) error {
+	if e.state.Meta().Worktree != "" || e.config.WorktreeBase == "" {
+		return nil
+	}
+
+	branch := "soda/" + e.config.Ticket.Key
+	baseBranch := e.config.BaseBranch
+	if baseBranch == "" {
+		baseBranch = "main"
+	}
+
+	wtPath, err := git.CreateWorktree(ctx, e.config.WorkDir, e.config.WorktreeBase, branch, baseBranch)
+	if err != nil {
+		return fmt.Errorf("engine: create worktree: %w", err)
+	}
+
+	e.state.Meta().Worktree = wtPath
+	e.state.Meta().Branch = branch
+	e.emit(Event{
+		Kind: EventWorktreeCreated,
+		Data: map[string]any{"worktree": wtPath, "branch": branch},
+	})
+	return nil
+}
+
 // Run executes the full pipeline from the beginning, skipping completed phases.
 func (e *Engine) Run(ctx context.Context) error {
 	if err := e.state.AcquireLock(); err != nil {
 		return fmt.Errorf("engine: %w", err)
 	}
 	defer e.state.ReleaseLock()
+
+	if err := e.ensureWorktree(ctx); err != nil {
+		return err
+	}
 
 	e.emit(Event{Kind: EventEngineStarted})
 
@@ -126,6 +158,10 @@ func (e *Engine) Resume(ctx context.Context, fromPhase string) error {
 		return fmt.Errorf("engine: %w", err)
 	}
 	defer e.state.ReleaseLock()
+
+	if err := e.ensureWorktree(ctx); err != nil {
+		return err
+	}
 
 	e.emit(Event{Kind: EventEngineStarted, Data: map[string]any{"resumed_from": fromPhase}})
 
@@ -184,28 +220,6 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 	// Check budget.
 	if err := e.checkBudget(phase); err != nil {
 		return err
-	}
-
-	// Create worktree for implement phase if needed.
-	if phase.Name == "implement" && e.state.Meta().Worktree == "" && e.config.WorktreeBase != "" {
-		branch := "soda/" + e.state.Meta().Ticket
-		baseBranch := e.config.BaseBranch
-		if baseBranch == "" {
-			baseBranch = "main"
-		}
-
-		wtPath, err := git.CreateWorktree(ctx, e.config.WorkDir, e.config.WorktreeBase, branch, baseBranch)
-		if err != nil {
-			return fmt.Errorf("engine: create worktree: %w", err)
-		}
-
-		e.state.Meta().Worktree = wtPath
-		e.state.Meta().Branch = branch
-		e.emit(Event{
-			Phase: phase.Name,
-			Kind:  EventWorktreeCreated,
-			Data:  map[string]any{"worktree": wtPath, "branch": branch},
-		})
 	}
 
 	// Mark phase running and notify callback.
