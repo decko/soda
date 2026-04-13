@@ -15,8 +15,10 @@ import (
 
 	"github.com/decko/soda/internal/config"
 	"github.com/decko/soda/internal/pipeline"
+	"github.com/decko/soda/internal/progress"
 	"github.com/decko/soda/internal/runner"
 	"github.com/decko/soda/schemas"
+	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 )
 
@@ -148,6 +150,10 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 	// Load project context files
 	promptContext := buildPromptContext(cfg)
 
+	// Set up progress display
+	isTTY := isatty.IsTerminal(os.Stdout.Fd()) || isatty.IsCygwinTerminal(os.Stdout.Fd())
+	prog := progress.New(os.Stdout, isTTY)
+
 	// Build engine config — use a closure that captures the engine pointer
 	var engine *pipeline.Engine
 	skippedPhases := map[string]bool{}
@@ -168,7 +174,7 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 			if event.Kind == pipeline.EventPhaseSkipped || event.Kind == pipeline.EventMonitorSkipped {
 				skippedPhases[event.Phase] = true
 			}
-			handleEvent(ctx, cancel, engine, event)
+			handleEvent(ctx, cancel, engine, state, prog, event)
 		},
 	}
 
@@ -225,35 +231,82 @@ func buildMockRunner() *runner.MockRunner {
 	}
 }
 
-func handleEvent(ctx context.Context, cancel context.CancelFunc, engine *pipeline.Engine, event pipeline.Event) {
+func handleEvent(ctx context.Context, cancel context.CancelFunc, engine *pipeline.Engine, state *pipeline.State, prog *progress.Progress, event pipeline.Event) {
 	switch event.Kind {
 	case pipeline.EventEngineStarted:
-		fmt.Println("Pipeline started")
+		prog.Message("Pipeline started")
+		prog.Message("")
+
 	case pipeline.EventEngineCompleted:
-		fmt.Println("Pipeline completed")
+		prog.Message("")
+		prog.Message("Pipeline completed")
+
+	case pipeline.EventPhaseStarted:
+		prog.PhaseStarted(event.Phase)
+
+	case pipeline.EventPhaseCompleted:
+		durationMs, _ := event.Data["duration_ms"].(int64)
+		if durationMs == 0 {
+			// Try float64 (JSON numbers default to float64)
+			if dFloat, ok := event.Data["duration_ms"].(float64); ok {
+				durationMs = int64(dFloat)
+			}
+		}
+		elapsed := time.Duration(durationMs) * time.Millisecond
+		cost, _ := event.Data["cost"].(float64)
+
+		// Extract summary from structured output
+		summary := ""
+		if result, err := state.ReadResult(event.Phase); err == nil {
+			summary = progress.PhaseSummary(event.Phase, result)
+		}
+
+		prog.PhaseCompleted(event.Phase, summary, elapsed, cost)
+
+	case pipeline.EventPhaseFailed:
+		errMsg, _ := event.Data["error"].(string)
+		durationMs, _ := event.Data["duration_ms"].(int64)
+		if durationMs == 0 {
+			if dFloat, ok := event.Data["duration_ms"].(float64); ok {
+				durationMs = int64(dFloat)
+			}
+		}
+		elapsed := time.Duration(durationMs) * time.Millisecond
+		prog.PhaseFailed(event.Phase, errMsg, elapsed)
+
 	case pipeline.EventPhaseSkipped:
-		fmt.Printf("⏭ %s  skipped\n", event.Phase)
+		prog.PhaseSkipped(event.Phase)
+
 	case pipeline.EventPhaseRetrying:
 		category, _ := event.Data["category"].(string)
 		attempt, _ := event.Data["attempt"].(int)
-		fmt.Printf("↻ %s  retrying (%s, attempt %d)\n", event.Phase, category, attempt)
+		if attempt == 0 {
+			if aFloat, ok := event.Data["attempt"].(float64); ok {
+				attempt = int(aFloat)
+			}
+		}
+		prog.PhaseRetrying(event.Phase, category, attempt)
+
 	case pipeline.EventBudgetWarning:
 		total, _ := event.Data["total_cost"].(float64)
 		limit, _ := event.Data["limit"].(float64)
-		fmt.Printf("⚠ Budget warning: $%.2f / $%.2f\n", total, limit)
+		prog.BudgetWarning(total, limit)
+
 	case pipeline.EventCheckpointPause:
-		fmt.Printf("⏸ %s completed. Continue? [y/N] ", event.Phase)
+		prog.Message(fmt.Sprintf("⏸ %s completed. Continue? [y/N] ", event.Phase))
 		if engine != nil && promptConfirm(ctx) {
 			engine.Confirm()
 		} else {
 			cancel()
 		}
+
 	case pipeline.EventWorktreeCreated:
 		wt, _ := event.Data["worktree"].(string)
 		branch, _ := event.Data["branch"].(string)
-		fmt.Printf("Created worktree: %s (%s)\n", wt, branch)
+		prog.Message(fmt.Sprintf("Created worktree: %s (%s)", wt, branch))
+
 	case pipeline.EventMonitorSkipped:
-		fmt.Printf("⏭ monitor  skipped (not yet implemented)\n")
+		prog.PhaseSkipped("monitor")
 	}
 }
 

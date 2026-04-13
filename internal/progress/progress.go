@@ -72,13 +72,16 @@ func (p *Progress) PhaseStarted(phase string) {
 	p.desc = desc
 	p.startTime = p.NowFunc()
 	p.frame = 0
-	p.mu.Unlock()
 
 	if p.isTTY {
-		p.stopCh = make(chan struct{})
-		p.stoppedCh = make(chan struct{})
-		go p.spin()
+		stopCh := make(chan struct{})
+		stoppedCh := make(chan struct{})
+		p.stopCh = stopCh
+		p.stoppedCh = stoppedCh
+		p.mu.Unlock()
+		go p.runSpinner(stopCh, stoppedCh)
 	} else {
+		p.mu.Unlock()
 		fmt.Fprintf(p.w, "%s — %s\n", phase, desc)
 	}
 }
@@ -161,16 +164,18 @@ func (p *Progress) Message(msg string) {
 	}
 }
 
-// spin runs the animated spinner in a goroutine.
-func (p *Progress) spin() {
-	defer close(p.stoppedCh)
+// runSpinner runs the animated spinner in a goroutine.
+// stopCh and stoppedCh are captured as local variables to avoid races
+// with stopSpinner nullifying the struct fields.
+func (p *Progress) runSpinner(stopCh <-chan struct{}, stoppedCh chan<- struct{}) {
+	defer close(stoppedCh)
 
 	ticker := time.NewTicker(p.TickInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-p.stopCh:
+		case <-stopCh:
 			return
 		case <-ticker.C:
 			p.mu.Lock()
