@@ -351,6 +351,10 @@ Issues are numbered in dependency order:
 
 Parallelizable: #1, #3, and #6 have no dependencies on each other.
 
+## Follow-up issues
+
+When discovering bugs, tech debt, or improvement opportunities during a task, file them as separate GitHub issues with the `triage-needed` label. Do not fix them inline — stay focused on the current ticket's scope.
+
 ## What NOT to do
 
 - Do not hardcode project-specific references (repo names, Jira projects, ticket keys)
