@@ -806,6 +806,21 @@ type reviewFinding struct {
 	Suggestion string `json:"suggestion"`
 }
 
+// reviewerMsg is sent from reviewer goroutines to the parent via channel.
+type reviewerMsg struct {
+	Event  *Event  // emit this event (nil if not an event)
+	Log    *reviewerLog // write this log (nil if not a log)
+	Result *reviewerResult // final result (nil if not done)
+	Index  int
+}
+
+// reviewerLog holds data for a deferred WriteLog call.
+type reviewerLog struct {
+	Phase   string
+	Name    string
+	Content []byte
+}
+
 // runParallelReview dispatches specialist reviewer subagents in parallel,
 // collects their findings, merges them into a single ReviewOutput, and
 // computes a verdict.
@@ -840,6 +855,15 @@ func (e *Engine) runParallelReview(ctx context.Context, phase PhaseConfig) error
 		return fmt.Errorf("engine: build prompt data for %s: %w", phase.Name, err)
 	}
 
+	// Snapshot budget before launching goroutines — avoid concurrent Meta() reads.
+	budgetRemaining := 0.0
+	if e.config.MaxCostUSD > 0 {
+		budgetRemaining = e.config.MaxCostUSD - e.state.Meta().TotalCost
+	}
+
+	// Channel for reviewer goroutines to send messages to the parent.
+	msgCh := make(chan reviewerMsg, len(phase.Reviewers)*10)
+
 	// Dispatch reviewers in parallel.
 	var wg sync.WaitGroup
 	results := make([]reviewerResult, len(phase.Reviewers))
@@ -848,10 +872,28 @@ func (e *Engine) runParallelReview(ctx context.Context, phase PhaseConfig) error
 		wg.Add(1)
 		go func(idx int, reviewer ReviewerConfig) {
 			defer wg.Done()
-			results[idx] = e.runReviewer(ctx, phase, reviewer, promptData)
+			e.runReviewer(ctx, phase, reviewer, promptData, budgetRemaining, idx, msgCh)
 		}(idx, reviewer)
 	}
-	wg.Wait()
+
+	// Close channel once all goroutines finish.
+	go func() {
+		wg.Wait()
+		close(msgCh)
+	}()
+
+	// Drain channel in the parent goroutine — all State access is serialized here.
+	for msg := range msgCh {
+		if msg.Event != nil {
+			e.emit(*msg.Event)
+		}
+		if msg.Log != nil {
+			_ = e.state.WriteLog(msg.Log.Phase, "prompt_"+msg.Log.Name, msg.Log.Content)
+		}
+		if msg.Result != nil {
+			results[msg.Index] = *msg.Result
+		}
+	}
 
 	// Check for context cancellation first.
 	if err := ctx.Err(); err != nil {
@@ -917,9 +959,18 @@ func (e *Engine) runParallelReview(ctx context.Context, phase PhaseConfig) error
 	return e.gatePhase(phase)
 }
 
-// runReviewer executes a single specialist reviewer and returns its findings.
-func (e *Engine) runReviewer(ctx context.Context, phase PhaseConfig, reviewer ReviewerConfig, promptData PromptData) reviewerResult {
-	e.emit(Event{
+// runReviewer executes a single specialist reviewer, sending events and results
+// through msgCh to avoid concurrent State access. budgetRemaining is a snapshot
+// taken before goroutines launch.
+func (e *Engine) runReviewer(ctx context.Context, phase PhaseConfig, reviewer ReviewerConfig, promptData PromptData, budgetRemaining float64, idx int, msgCh chan<- reviewerMsg) {
+	sendEvent := func(evt Event) {
+		msgCh <- reviewerMsg{Event: &evt, Index: idx}
+	}
+	sendResult := func(res reviewerResult) {
+		msgCh <- reviewerMsg{Result: &res, Index: idx}
+	}
+
+	sendEvent(Event{
 		Phase: phase.Name,
 		Kind:  EventReviewerStarted,
 		Data:  map[string]any{"reviewer": reviewer.Name, "focus": reviewer.Focus},
@@ -928,32 +979,28 @@ func (e *Engine) runReviewer(ctx context.Context, phase PhaseConfig, reviewer Re
 	// Load and render the reviewer's prompt template.
 	loadResult, err := e.config.Loader.LoadWithSource(reviewer.Prompt)
 	if err != nil {
-		e.emit(Event{
+		sendEvent(Event{
 			Phase: phase.Name,
 			Kind:  EventReviewerFailed,
 			Data:  map[string]any{"reviewer": reviewer.Name, "error": err.Error()},
 		})
-		return reviewerResult{Name: reviewer.Name, Err: fmt.Errorf("load template %s: %w", reviewer.Prompt, err)}
+		sendResult(reviewerResult{Name: reviewer.Name, Err: fmt.Errorf("load template %s: %w", reviewer.Prompt, err)})
+		return
 	}
 
 	rendered, err := RenderPrompt(loadResult.Content, promptData)
 	if err != nil {
-		e.emit(Event{
+		sendEvent(Event{
 			Phase: phase.Name,
 			Kind:  EventReviewerFailed,
 			Data:  map[string]any{"reviewer": reviewer.Name, "error": err.Error()},
 		})
-		return reviewerResult{Name: reviewer.Name, Err: fmt.Errorf("render prompt for %s: %w", reviewer.Name, err)}
+		sendResult(reviewerResult{Name: reviewer.Name, Err: fmt.Errorf("render prompt for %s: %w", reviewer.Name, err)})
+		return
 	}
 
-	_ = e.state.WriteLog(phase.Name, "prompt_"+reviewer.Name, []byte(rendered))
-
-	// Build runner opts for this reviewer. Use a per-reviewer phase name
-	// to keep logs distinct, but the budget is shared across the parent phase.
-	remaining := e.config.MaxCostUSD - e.state.Meta().TotalCost
-	if e.config.MaxCostUSD <= 0 {
-		remaining = 0
-	}
+	// Send log to parent for serialized WriteLog.
+	msgCh <- reviewerMsg{Log: &reviewerLog{Phase: phase.Name, Name: reviewer.Name, Content: []byte(rendered)}, Index: idx}
 
 	// Use the parent phase's schema for the reviewer findings.
 	opts := runner.RunOpts{
@@ -962,7 +1009,7 @@ func (e *Engine) runReviewer(ctx context.Context, phase PhaseConfig, reviewer Re
 		UserPrompt:   "Execute the review described in the system prompt.",
 		OutputSchema: phase.Schema,
 		AllowedTools: phase.Tools,
-		MaxBudgetUSD: remaining,
+		MaxBudgetUSD: budgetRemaining,
 		WorkDir:      e.workDir(phase),
 		Model:        e.config.Model,
 		Timeout:      phase.Timeout.Duration,
@@ -970,12 +1017,13 @@ func (e *Engine) runReviewer(ctx context.Context, phase PhaseConfig, reviewer Re
 
 	result, err := e.runner.Run(ctx, opts)
 	if err != nil {
-		e.emit(Event{
+		sendEvent(Event{
 			Phase: phase.Name,
 			Kind:  EventReviewerFailed,
 			Data:  map[string]any{"reviewer": reviewer.Name, "error": err.Error()},
 		})
-		return reviewerResult{Name: reviewer.Name, Err: fmt.Errorf("run %s: %w", reviewer.Name, err)}
+		sendResult(reviewerResult{Name: reviewer.Name, Err: fmt.Errorf("run %s: %w", reviewer.Name, err)})
+		return
 	}
 
 	// Parse findings from the structured output.
@@ -989,7 +1037,7 @@ func (e *Engine) runReviewer(ctx context.Context, phase PhaseConfig, reviewer Re
 		}
 	}
 
-	e.emit(Event{
+	sendEvent(Event{
 		Phase: phase.Name,
 		Kind:  EventReviewerCompleted,
 		Data: map[string]any{
@@ -999,11 +1047,11 @@ func (e *Engine) runReviewer(ctx context.Context, phase PhaseConfig, reviewer Re
 		},
 	})
 
-	return reviewerResult{
+	sendResult(reviewerResult{
 		Name:     reviewer.Name,
 		Findings: findings,
 		Cost:     result.CostUSD,
-	}
+	})
 }
 
 // mergedReviewOutput is the combined output from all reviewers.
