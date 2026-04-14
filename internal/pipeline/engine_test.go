@@ -16,6 +16,7 @@ import (
 
 	"github.com/decko/soda/internal/claude"
 	"github.com/decko/soda/internal/runner"
+	"github.com/decko/soda/internal/sandbox"
 )
 
 // flexMockRunner returns per-call responses, allowing multi-call test scenarios
@@ -699,6 +700,10 @@ func TestClassifyError(t *testing.T) {
 		{"semantic", &claude.SemanticError{Message: "bad"}, "semantic"},
 		{"unknown", fmt.Errorf("something else"), "unknown"},
 		{"wrapped_transient", fmt.Errorf("wrap: %w", &claude.TransientError{Reason: "r", Err: fmt.Errorf("x")}), "transient"},
+		{"sandbox_oom", &sandbox.ExitError{OOMKill: true, Signal: 9}, "transient"},
+		{"sandbox_signal", &sandbox.ExitError{Signal: 15}, "transient"},
+		{"sandbox_exit_code", &sandbox.ExitError{Code: 1}, "unknown"},
+		{"wrapped_sandbox_oom", fmt.Errorf("wrap: %w", &sandbox.ExitError{OOMKill: true}), "transient"},
 	}
 
 	for _, tt := range tests {
