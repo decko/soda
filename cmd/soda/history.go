@@ -199,7 +199,7 @@ func statusSymbol(status pipeline.PhaseStatus, superseded bool) string {
 		return "✗"
 	case pipeline.PhaseRunning:
 		return "⧗"
-	case "skipped":
+	case pipeline.PhaseSkipped:
 		return "⏭"
 	default:
 		return string(status)

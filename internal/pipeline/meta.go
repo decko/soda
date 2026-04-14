@@ -17,6 +17,7 @@ const (
 	PhaseFailed    PhaseStatus = "failed"
 	PhaseRetrying  PhaseStatus = "retrying"
 	PhasePaused    PhaseStatus = "paused"
+	PhaseSkipped   PhaseStatus = "skipped"
 )
 
 // PhaseState holds the status and metrics for a single phase.

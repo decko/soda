@@ -15,7 +15,7 @@ func TestStatusSymbol(t *testing.T) {
 		{pipeline.PhaseCompleted, false, "✓"},
 		{pipeline.PhaseFailed, false, "✗"},
 		{pipeline.PhaseRunning, false, "⧗"},
-		{"skipped", false, "⏭"},
+		{pipeline.PhaseSkipped, false, "⏭"},
 		{pipeline.PhasePending, false, "pending"},
 
 		// Superseded variants.

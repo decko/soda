@@ -151,10 +151,10 @@ func TestBuildHistory_MixedSkipAndRun(t *testing.T) {
 	}
 
 	// First two should be skipped.
-	if h.Entries[0].Status != "skipped" {
+	if h.Entries[0].Status != PhaseSkipped {
 		t.Errorf("triage status = %q, want skipped", h.Entries[0].Status)
 	}
-	if h.Entries[1].Status != "skipped" {
+	if h.Entries[1].Status != PhaseSkipped {
 		t.Errorf("plan status = %q, want skipped", h.Entries[1].Status)
 	}
 
