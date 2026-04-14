@@ -131,13 +131,13 @@ func loadPhaseDetails(phase string, generation int, stateDir string) string {
 		return ""
 	}
 
-	// Try the current result file first.
+	// Try archived path first for non-latest generations.
 	path := filepath.Join(stateDir, phase+".json")
-	data, err := os.ReadFile(path)
+	archivePath := fmt.Sprintf("%s.%d", path, generation)
+	data, err := os.ReadFile(archivePath)
 	if err != nil {
-		// Try archived path.
-		archivePath := fmt.Sprintf("%s.%d", path, generation)
-		data, err = os.ReadFile(archivePath)
+		// Fall back to current result file.
+		data, err = os.ReadFile(path)
 		if err != nil {
 			return ""
 		}

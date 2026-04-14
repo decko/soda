@@ -46,7 +46,10 @@ func runHistory(stateDir, ticketKey string) error {
 	fmt.Println()
 
 	// Try to read events for rich multi-generation history.
-	events, _ := pipeline.ReadEvents(ticketDir)
+	events, eventsErr := pipeline.ReadEvents(ticketDir)
+	if eventsErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not read events: %v\n", eventsErr)
+	}
 	if len(events) > 0 {
 		return renderEventsHistory(meta, events, ticketDir)
 	}
@@ -110,7 +113,9 @@ func renderEventsHistory(meta *pipeline.PipelineMeta, events []pipeline.Event, s
 	if h.SupersededCost > 0 {
 		fmt.Fprintf(tw, "\t\t\tSuperseded:\t$%.2f\t\n", h.SupersededCost)
 	}
-	tw.Flush()
+	if err := tw.Flush(); err != nil {
+		return fmt.Errorf("history: flush output: %w", err)
+	}
 
 	if lastFailPhase != "" {
 		fmt.Printf("\nLast failure (%s):\n  Error: %s\n", lastFailPhase, lastFailError)
@@ -164,7 +169,9 @@ func renderMetaHistory(meta *pipeline.PipelineMeta) error {
 	// Use meta.TotalCost as the authoritative total.
 	fmt.Fprintf(tw, "\t\t\t──────────\n")
 	fmt.Fprintf(tw, "\t\tTotal:\t$%.2f\n", meta.TotalCost)
-	tw.Flush()
+	if err := tw.Flush(); err != nil {
+		return fmt.Errorf("history: flush output: %w", err)
+	}
 
 	if lastFailPhase != "" {
 		fmt.Printf("\nLast failure (%s):\n  Error: %s\n", lastFailPhase, lastFailError)
