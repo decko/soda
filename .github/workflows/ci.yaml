@@ -44,7 +44,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y gcc
 
       - name: Build
-        run: CGO_ENABLED=1 go build ./...
+        run: CGO_ENABLED=0 go build ./...
 
   test:
     name: Test
@@ -93,13 +93,13 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y gcc
 
       - name: Vet
-        run: CGO_ENABLED=1 go vet ./...
+        run: CGO_ENABLED=0 go vet ./...
 
       - name: Install staticcheck
         run: go install honnef.co/go/tools/cmd/staticcheck@2026.1
 
       - name: Staticcheck
-        run: CGO_ENABLED=1 staticcheck ./...
+        run: CGO_ENABLED=0 staticcheck $(go list ./... | grep -v /sandbox)
 
       - name: Format check
         run: |

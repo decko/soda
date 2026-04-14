@@ -58,7 +58,7 @@ const (
 	EventReviewMerged             = "review_merged"
 	EventReviewReworkRouted       = "review_rework_routed"
 	EventReviewReworkMaxCycles    = "review_rework_max_cycles"
-	EventReviewerParseWarning    = "reviewer_parse_warning"
+	EventReviewerParseWarning     = "reviewer_parse_warning"
 )
 
 // ReadEvents reads and parses all events from the events.jsonl file in dir.
