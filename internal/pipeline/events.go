@@ -34,6 +34,10 @@ const (
 	EventReworkFeedbackInjected = "rework_feedback_injected"
 	EventReworkFeedbackSkipped  = "rework_feedback_skipped"
 	EventPromptLoaded           = "prompt_loaded"
+	EventReviewerStarted        = "reviewer_started"
+	EventReviewerCompleted      = "reviewer_completed"
+	EventReviewerFailed         = "reviewer_failed"
+	EventReviewMerged           = "review_merged"
 )
 
 // logEvent appends an event to the events.jsonl file in dir.
