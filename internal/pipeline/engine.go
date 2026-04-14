@@ -874,7 +874,7 @@ func (e *Engine) gatePhase(phase PhaseConfig) error {
 			} `json:"findings"`
 		}
 		if err := json.Unmarshal(raw, &result); err != nil {
-			return nil
+			return fmt.Errorf("engine: review gate: failed to unmarshal result: %w", err)
 		}
 		if strings.EqualFold(result.Verdict, "rework") {
 			// Rework routing is handled by the engine loop, not the gate.
@@ -1164,7 +1164,13 @@ func (e *Engine) runReviewer(ctx context.Context, phase PhaseConfig, reviewer Re
 		var parsed struct {
 			Findings []reviewFinding `json:"findings"`
 		}
-		if parseErr := json.Unmarshal(result.Output, &parsed); parseErr == nil {
+		if parseErr := json.Unmarshal(result.Output, &parsed); parseErr != nil {
+			sendEvent(Event{
+				Phase: phase.Name,
+				Kind:  EventReviewerParseWarning,
+				Data:  map[string]any{"reviewer": reviewer.Name, "error": parseErr.Error()},
+			})
+		} else {
 			findings = parsed.Findings
 		}
 	}
