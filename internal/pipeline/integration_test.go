@@ -13,8 +13,8 @@ import (
 	"github.com/decko/soda/internal/runner"
 )
 
-// fullPipelinePhases returns the production 6-phase pipeline config
-// (triage → plan → implement → verify → submit → monitor) matching
+// fullPipelinePhases returns the production 7-phase pipeline config
+// (triage → plan → implement → verify → review → submit → monitor) matching
 // the dependency graph in embeds/phases.yaml.
 func fullPipelinePhases() []PhaseConfig {
 	return []PhaseConfig{
@@ -46,10 +46,21 @@ func fullPipelinePhases() []PhaseConfig {
 			Retry:     RetryConfig{Transient: 2, Parse: 1, Semantic: 1},
 		},
 		{
+			Name:      "review",
+			Type:      "parallel-review",
+			Schema:    `{"type":"object","properties":{"findings":{"type":"array"},"verdict":{"type":"string"}},"required":["findings","verdict"]}`,
+			DependsOn: []string{"plan", "implement", "verify"},
+			Retry:     RetryConfig{Transient: 2, Parse: 1, Semantic: 1},
+			Reviewers: []ReviewerConfig{
+				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+				{Name: "ai-harness", Prompt: "prompts/review-harness.md", Focus: "AI harness"},
+			},
+		},
+		{
 			Name:      "submit",
 			Prompt:    "submit.md",
 			Schema:    `{"type":"object","properties":{"pr_url":{"type":"string"}},"required":["pr_url"]}`,
-			DependsOn: []string{"implement", "verify"},
+			DependsOn: []string{"implement", "verify", "review"},
 			Retry:     RetryConfig{Transient: 2, Parse: 1, Semantic: 0},
 		},
 		{
@@ -82,7 +93,7 @@ func mockFixtures() map[string]*runner.RunResult {
 		"plan": {
 			Output: json.RawMessage(`{
 				"ticket_key": "INT-1",
-				"approach": "Create integration tests with mock runner covering the full 6-phase pipeline",
+				"approach": "Create integration tests with mock runner covering the full 7-phase pipeline",
 				"tasks": [
 					{"id": "T1", "description": "Create mock runner integration test", "files": ["internal/pipeline/integration_test.go"], "done_when": "Test passes with mock runner"},
 					{"id": "T2", "description": "Create dry-run integration test", "files": ["internal/pipeline/integration_test.go"], "done_when": "Dry-run renders all prompts"},
@@ -135,6 +146,22 @@ func mockFixtures() map[string]*runner.RunResult {
 			}`),
 			RawText: "Verification passed: all criteria met, all commands pass",
 			CostUSD: 0.30,
+		},
+		"review/go-specialist": {
+			Output: json.RawMessage(`{
+				"findings": [],
+				"verdict": "pass"
+			}`),
+			RawText: "Go specialist: no issues found",
+			CostUSD: 0.15,
+		},
+		"review/ai-harness": {
+			Output: json.RawMessage(`{
+				"findings": [],
+				"verdict": "pass"
+			}`),
+			RawText: "AI harness: no issues found",
+			CostUSD: 0.10,
 		},
 		"submit": {
 			Output: json.RawMessage(`{
@@ -198,8 +225,24 @@ BaseBranch: {{.BaseBranch}}
 `,
 	}
 
+	// Review phase uses separate prompts per reviewer.
+	reviewTemplates := map[string]string{
+		"prompts/review-go.md":      "Go review for {{.Ticket.Key}}\nPlan:\n{{.Artifacts.Plan}}\nImplementation:\n{{.Artifacts.Implement}}\n",
+		"prompts/review-harness.md": "Harness review for {{.Ticket.Key}}\nPlan:\n{{.Artifacts.Plan}}\nVerify:\n{{.Artifacts.Verify}}\n",
+	}
+
 	for name, content := range templates {
 		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("write prompt %s: %v", name, err)
+		}
+	}
+
+	for name, content := range reviewTemplates {
+		path := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatalf("mkdir for %s: %v", name, err)
+		}
 		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 			t.Fatalf("write prompt %s: %v", name, err)
 		}
@@ -278,16 +321,17 @@ func TestIntegration_MockFullPipeline(t *testing.T) {
 	}
 
 	// --- Verify all phases completed ---
-	for _, name := range []string{"triage", "plan", "implement", "verify", "submit", "monitor"} {
+	for _, name := range []string{"triage", "plan", "implement", "verify", "review", "submit", "monitor"} {
 		if !state.IsCompleted(name) {
 			t.Errorf("phase %q should be completed", name)
 		}
 	}
 
 	// --- Verify cost accumulation ---
-	// triage(0.05) + plan(0.12) + implement(1.50) + verify(0.30) + submit(0.08) = 2.05
+	// triage(0.05) + plan(0.12) + implement(1.50) + verify(0.30) +
+	// review(0.15+0.10) + submit(0.08) = 2.30
 	// monitor is a polling stub with no runner cost.
-	expectedCost := 0.05 + 0.12 + 1.50 + 0.30 + 0.08
+	expectedCost := 0.05 + 0.12 + 1.50 + 0.30 + 0.15 + 0.10 + 0.08
 	if !approxEqual(state.Meta().TotalCost, expectedCost) {
 		t.Errorf("TotalCost = %v, want %v", state.Meta().TotalCost, expectedCost)
 	}
@@ -298,6 +342,7 @@ func TestIntegration_MockFullPipeline(t *testing.T) {
 		"plan":      0.12,
 		"implement": 1.50,
 		"verify":    0.30,
+		"review":    0.25, // 0.15 + 0.10
 		"submit":    0.08,
 	}
 	for name, wantCost := range phaseCosts {
@@ -311,14 +356,16 @@ func TestIntegration_MockFullPipeline(t *testing.T) {
 		}
 	}
 
-	// --- Verify runner was called for non-polling phases (5 calls, not 6) ---
-	if len(mock.calls) != 5 {
-		t.Errorf("runner called %d times, want 5 (monitor is polling stub); phases: %v",
+	// --- Verify runner was called for non-polling phases ---
+	// 5 regular phases + 2 review subagents = 7 calls (monitor is polling stub).
+	if len(mock.calls) != 7 {
+		t.Errorf("runner called %d times, want 7 (monitor is polling stub); phases: %v",
 			len(mock.calls), phaseNames(mock.calls))
 	}
 
 	// --- Verify correct phase ordering in runner calls ---
-	wantOrder := []string{"triage", "plan", "implement", "verify", "submit"}
+	// Review subagents run in parallel so their order may vary.
+	wantOrder := []string{"triage", "plan", "implement", "verify"}
 	gotOrder := phaseNames(mock.calls)
 	for i, want := range wantOrder {
 		if i >= len(gotOrder) {
@@ -327,6 +374,22 @@ func TestIntegration_MockFullPipeline(t *testing.T) {
 		}
 		if gotOrder[i] != want {
 			t.Errorf("runner call[%d] = %q, want %q", i, gotOrder[i], want)
+		}
+	}
+	// After the first 4, we expect 2 review calls and 1 submit call (in some order for reviews).
+	if len(gotOrder) >= 7 {
+		reviewCalls := map[string]bool{}
+		for _, name := range gotOrder[4:6] {
+			reviewCalls[name] = true
+		}
+		if !reviewCalls["review/go-specialist"] {
+			t.Error("expected review/go-specialist call")
+		}
+		if !reviewCalls["review/ai-harness"] {
+			t.Error("expected review/ai-harness call")
+		}
+		if gotOrder[6] != "submit" {
+			t.Errorf("runner call[6] = %q, want %q", gotOrder[6], "submit")
 		}
 	}
 
@@ -381,12 +444,12 @@ func TestIntegration_MockFullPipeline(t *testing.T) {
 		t.Errorf("engine_completed events = %d, want 1", eventKinds[EventEngineCompleted])
 	}
 
-	// 5 non-polling phases started + 1 monitor = 6 phase_started events
-	if eventKinds[EventPhaseStarted] != 6 {
-		t.Errorf("phase_started events = %d, want 6", eventKinds[EventPhaseStarted])
+	// 6 non-polling phases started + 1 monitor = 7 phase_started events
+	if eventKinds[EventPhaseStarted] != 7 {
+		t.Errorf("phase_started events = %d, want 7", eventKinds[EventPhaseStarted])
 	}
-	if eventKinds[EventPhaseCompleted] != 6 {
-		t.Errorf("phase_completed events = %d, want 6", eventKinds[EventPhaseCompleted])
+	if eventKinds[EventPhaseCompleted] != 7 {
+		t.Errorf("phase_completed events = %d, want 7", eventKinds[EventPhaseCompleted])
 	}
 
 	// Monitor should emit monitor_skipped.
@@ -395,7 +458,7 @@ func TestIntegration_MockFullPipeline(t *testing.T) {
 	}
 
 	// --- Verify artifacts persisted to disk ---
-	for _, name := range []string{"triage", "plan", "implement", "verify", "submit"} {
+	for _, name := range []string{"triage", "plan", "implement", "verify", "review", "submit"} {
 		artifact, err := state.ReadArtifact(name)
 		if err != nil {
 			t.Errorf("ReadArtifact(%q): %v", name, err)
@@ -407,7 +470,7 @@ func TestIntegration_MockFullPipeline(t *testing.T) {
 	}
 
 	// --- Verify structured results persisted to disk ---
-	for _, name := range []string{"triage", "plan", "implement", "verify", "submit"} {
+	for _, name := range []string{"triage", "plan", "implement", "verify", "review", "submit"} {
 		result, err := state.ReadResult(name)
 		if err != nil {
 			t.Errorf("ReadResult(%q): %v", name, err)
@@ -527,7 +590,7 @@ func TestIntegration_MockGateBlocksDownstream(t *testing.T) {
 	}
 
 	// Downstream phases should not be started.
-	for _, name := range []string{"plan", "implement", "verify", "submit", "monitor"} {
+	for _, name := range []string{"plan", "implement", "verify", "review", "submit", "monitor"} {
 		if state.IsCompleted(name) {
 			t.Errorf("phase %q should NOT be completed", name)
 		}
@@ -757,6 +820,7 @@ func TestIntegration_DryRunRendersAllPrompts(t *testing.T) {
 			Plan:      "Plan: 2 tasks identified",
 			Implement: "Implementation: 3 files changed, tests pass",
 			Verify:    "Verification: PASS",
+			Review:    "Review: pass — no issues found",
 			Submit:    SubmitArtifact{PRURL: "https://github.com/example/pull/1"},
 		},
 	}
@@ -764,6 +828,28 @@ func TestIntegration_DryRunRendersAllPrompts(t *testing.T) {
 	renderedPrompts := make(map[string]string)
 
 	for _, phase := range phases {
+		// Skip parallel-review phases (they use reviewer prompts, not phase prompts).
+		if phase.Type == "parallel-review" {
+			// Render each reviewer prompt instead.
+			for _, reviewer := range phase.Reviewers {
+				tmplContent, err := loader.Load(reviewer.Prompt)
+				if err != nil {
+					t.Errorf("Load(%q): %v", reviewer.Prompt, err)
+					continue
+				}
+				rendered, err := RenderPrompt(tmplContent, promptData)
+				if err != nil {
+					t.Errorf("RenderPrompt(%q): %v", reviewer.Name, err)
+					continue
+				}
+				if rendered == "" {
+					t.Errorf("reviewer %q rendered to empty string", reviewer.Name)
+				}
+				renderedPrompts[phase.Name+"/"+reviewer.Name] = rendered
+			}
+			continue
+		}
+
 		tmplContent, err := loader.Load(phase.Prompt)
 		if err != nil {
 			t.Errorf("Load(%q): %v", phase.Prompt, err)
@@ -783,9 +869,10 @@ func TestIntegration_DryRunRendersAllPrompts(t *testing.T) {
 		renderedPrompts[phase.Name] = rendered
 	}
 
-	// Verify all 6 phases were rendered.
-	if len(renderedPrompts) != 6 {
-		t.Errorf("rendered %d prompts, want 6", len(renderedPrompts))
+	// Verify all phases were rendered:
+	// 6 regular phases + 2 reviewer prompts = 8 rendered prompts.
+	if len(renderedPrompts) != 8 {
+		t.Errorf("rendered %d prompts, want 8; keys: %v", len(renderedPrompts), mapKeys(renderedPrompts))
 	}
 
 	// Verify ticket data appears in triage prompt.
@@ -889,21 +976,21 @@ func TestIntegration_MockCheckpointMode(t *testing.T) {
 	}
 
 	// All phases completed.
-	for _, name := range []string{"triage", "plan", "implement", "verify", "submit", "monitor"} {
+	for _, name := range []string{"triage", "plan", "implement", "verify", "review", "submit", "monitor"} {
 		if !state.IsCompleted(name) {
 			t.Errorf("phase %q should be completed in checkpoint mode", name)
 		}
 	}
 
-	// Should have 6 checkpoint_pause events (one per phase).
+	// Should have 7 checkpoint_pause events (one per phase).
 	checkpointCount := 0
 	for _, e := range events {
 		if e.Kind == EventCheckpointPause {
 			checkpointCount++
 		}
 	}
-	if checkpointCount != 6 {
-		t.Errorf("checkpoint_pause events = %d, want 6", checkpointCount)
+	if checkpointCount != 7 {
+		t.Errorf("checkpoint_pause events = %d, want 7", checkpointCount)
 	}
 }
 
@@ -1083,4 +1170,13 @@ Respond with a JSON object containing:
 		t.Error("TotalCost should be positive for real API call")
 	}
 	t.Logf("Real API cost: $%.4f", state.Meta().TotalCost)
+}
+
+// mapKeys returns the keys of a string map for test error messages.
+func mapKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
