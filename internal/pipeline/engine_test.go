@@ -857,6 +857,38 @@ func TestEngine_GatePhase_TriageNotAutomatable(t *testing.T) {
 	}
 }
 
+func TestEngine_GatePhase_ReviewUnmarshalError(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "review",
+			Prompt: "review.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"review": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`not valid json`),
+					RawText: "corrupt output",
+					CostUSD: 0.01,
+				},
+			}},
+		},
+	}
+
+	engine, _ := setupEngine(t, phases, mock)
+
+	err := engine.Run(context.Background())
+	if err == nil {
+		t.Fatal("expected error for corrupt review result, got nil")
+	}
+	if !strings.Contains(err.Error(), "review gate") {
+		t.Errorf("error should mention review gate, got: %v", err)
+	}
+}
+
 func TestEngineFullLifecycle(t *testing.T) {
 	// A realistic 4-phase pipeline: triage -> plan -> implement -> verify.
 	// Each phase depends on the previous one. Prompt templates reference
