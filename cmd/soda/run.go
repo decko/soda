@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/decko/soda/internal/claude"
 	"github.com/decko/soda/internal/config"
 	"github.com/decko/soda/internal/pipeline"
 	"github.com/decko/soda/internal/progress"
@@ -568,16 +570,107 @@ func fprintSummary(w io.Writer, state *pipeline.State, phases []pipeline.PhaseCo
 	}
 
 	// Actionable next steps on failure
-	if !success && failedPhase != "" {
-		fmt.Fprintln(w)
-		fmt.Fprintln(w, "Next steps:")
-		// Suggest resuming from the predecessor phase (whose output feeds the failed phase)
+	if !success {
+		formatNextSteps(w, meta, phases, failedPhase, failedIdx, runErr)
+	}
+}
+
+// formatNextSteps writes context-aware recovery suggestions based on the error
+// type. It uses errors.As to classify the failure and tailors the advice
+// accordingly.
+func formatNextSteps(w io.Writer, meta *pipeline.PipelineMeta, phases []pipeline.PhaseConfig, failedPhase string, failedIdx int, runErr error) {
+	if runErr == nil {
+		return
+	}
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Next steps:")
+
+	ticket := meta.Ticket
+	worktree := meta.Worktree
+
+	switch {
+	case isVerifyGateError(runErr):
+		// Verify gate: the implementation didn't pass verification.
+		fmt.Fprintf(w, "  1. Review the verify output above for failing criteria\n")
+		if worktree != "" {
+			fmt.Fprintf(w, "  2. cd %s\n", worktree)
+			fmt.Fprintf(w, "  3. Fix the issues manually, then re-run:\n")
+		} else {
+			fmt.Fprintf(w, "  2. Fix the issues manually, then re-run:\n")
+		}
+		fmt.Fprintf(w, "     soda run %s --from implement  (re-implement with updated context)\n", ticket)
+		fmt.Fprintf(w, "     soda run %s --from verify     (re-verify after manual fixes)\n", ticket)
+
+	case isPhaseGateError(runErr):
+		var ge *pipeline.PhaseGateError
+		errors.As(runErr, &ge)
+		fmt.Fprintf(w, "  Phase %q was gated: %s\n", ge.Phase, ge.Reason)
+		fmt.Fprintf(w, "  • Re-run from that phase after addressing the issue:\n")
+		fmt.Fprintf(w, "    soda run %s --from %s  (retry after fixing the gate condition)\n", ticket, ge.Phase)
+
+	case isBudgetExceededError(runErr):
+		var be *pipeline.BudgetExceededError
+		errors.As(runErr, &be)
+		fmt.Fprintf(w, "  Budget limit ($%.2f) reached at $%.2f in phase %q.\n", be.Limit, be.Actual, be.Phase)
+		fmt.Fprintf(w, "  • Increase the limit in soda.yaml (limits.max_cost_per_ticket) and resume:\n")
+		fmt.Fprintf(w, "    soda run %s --from %s  (resume with higher budget)\n", ticket, be.Phase)
+
+	case isTransientError(runErr):
+		resumeFrom := failedPhase
+		fmt.Fprintf(w, "  A transient error occurred (network, rate-limit, or timeout).\n")
+		fmt.Fprintf(w, "  • Wait a moment and retry:\n")
+		fmt.Fprintf(w, "    soda run %s --from %s  (retry the failed phase)\n", ticket, resumeFrom)
+
+	case isParseError(runErr):
+		resumeFrom := failedPhase
+		fmt.Fprintf(w, "  The model returned output that could not be parsed.\n")
+		fmt.Fprintf(w, "  • Retry (the model may produce valid output on the next attempt):\n")
+		fmt.Fprintf(w, "    soda run %s --from %s  (retry with a fresh attempt)\n", ticket, resumeFrom)
+
+	default:
+		// Generic fallback: suggest resuming from predecessor or failed phase.
 		resumeFrom := failedPhase
 		if failedIdx > 0 {
 			resumeFrom = phases[failedIdx-1].Name
 		}
-		fmt.Fprintf(w, "  soda run %s --from %s\n", meta.Ticket, resumeFrom)
+		if failedPhase != "" {
+			fmt.Fprintf(w, "  • Resume the pipeline:\n")
+			fmt.Fprintf(w, "    soda run %s --from %s\n", ticket, resumeFrom)
+			if worktree != "" {
+				fmt.Fprintf(w, "  • Inspect the worktree:\n")
+				fmt.Fprintf(w, "    cd %s\n", worktree)
+			}
+		} else {
+			fmt.Fprintf(w, "  • Re-run the pipeline:\n")
+			fmt.Fprintf(w, "    soda run %s\n", ticket)
+		}
 	}
+}
+
+func isVerifyGateError(err error) bool {
+	var ge *pipeline.PhaseGateError
+	return errors.As(err, &ge) && ge.Phase == "verify"
+}
+
+func isPhaseGateError(err error) bool {
+	var ge *pipeline.PhaseGateError
+	return errors.As(err, &ge)
+}
+
+func isBudgetExceededError(err error) bool {
+	var be *pipeline.BudgetExceededError
+	return errors.As(err, &be)
+}
+
+func isTransientError(err error) bool {
+	var te *claude.TransientError
+	return errors.As(err, &te)
+}
+
+func isParseError(err error) bool {
+	var pe *claude.ParseError
+	return errors.As(err, &pe)
 }
 
 func buildPromptConfig(cfg *config.Config) pipeline.PromptConfigData {
