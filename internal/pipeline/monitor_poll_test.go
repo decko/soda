@@ -2,7 +2,6 @@ package pipeline
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -89,8 +88,8 @@ func setupMonitorEngine(t *testing.T, poller PRPoller, pollingConfig *PollingCon
 	workDir := t.TempDir()
 
 	// Write minimal prompt templates.
-	submitPrompt := fmt.Sprintf("Phase: submit\nTicket: {{.Ticket.Key}}\n")
-	monitorPrompt := fmt.Sprintf("Phase: monitor\nTicket: {{.Ticket.Key}}\n")
+	submitPrompt := "Phase: submit\nTicket: {{.Ticket.Key}}\n"
+	monitorPrompt := "Phase: monitor\nTicket: {{.Ticket.Key}}\n"
 	os.MkdirAll(promptDir+"/prompts", 0755)
 	os.WriteFile(promptDir+"/prompts/submit.md", []byte(submitPrompt), 0644)
 	os.WriteFile(promptDir+"/prompts/monitor.md", []byte(monitorPrompt), 0644)
