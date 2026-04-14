@@ -99,10 +99,7 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 		return fmt.Errorf("engine: write initial monitor state: %w", err)
 	}
 
-	startTime := time.Now()
-	if e.config.NowFunc != nil {
-		startTime = e.config.NowFunc()
-	}
+	startTime := e.now()
 
 	// Polling loop.
 	for {
@@ -114,10 +111,7 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 		}
 
 		// Check max duration timeout.
-		now := time.Now()
-		if e.config.NowFunc != nil {
-			now = e.config.NowFunc()
-		}
+		now := e.now()
 		if now.Sub(startTime) >= polling.MaxDuration.Duration {
 			monState.Status = MonitorFailed
 			_ = e.state.WriteMonitorState(monState)

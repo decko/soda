@@ -1326,6 +1326,14 @@ func (e *Engine) runMonitorStub(phase PhaseConfig) error {
 	return nil
 }
 
+// now returns the current time, using NowFunc if configured for testability.
+func (e *Engine) now() time.Time {
+	if e.config.NowFunc != nil {
+		return e.config.NowFunc()
+	}
+	return time.Now()
+}
+
 // workDir returns the working directory for a phase, preferring the worktree
 // if one has been created.
 func (e *Engine) workDir(phase PhaseConfig) string {
