@@ -532,6 +532,44 @@ func TestPrintSummaryVerifyGateNoWorktree(t *testing.T) {
 	}
 }
 
+func TestPrintSummaryNonVerifyPhaseGateError(t *testing.T) {
+	dir := t.TempDir()
+	state, _ := pipeline.LoadOrCreate(dir, "PROJ-15")
+	meta := state.Meta()
+	meta.Branch = "soda/PROJ-15"
+	meta.TotalCost = 0.30
+
+	meta.Phases["triage"] = &pipeline.PhaseState{Status: pipeline.PhaseFailed, DurationMs: 10000, Cost: 0.30, Error: "not automatable"}
+
+	gateErr := &pipeline.PhaseGateError{Phase: "triage", Reason: "not automatable"}
+	var buf bytes.Buffer
+	fprintSummary(&buf, state, testPhases(), "Non-verify gate test", 30*time.Second, gateErr, nil)
+	output := buf.String()
+
+	if !strings.Contains(output, "Next steps") {
+		t.Error("expected next steps section")
+	}
+	if !strings.Contains(output, `Phase "triage" was gated`) {
+		t.Error("expected gated phase description mentioning triage")
+	}
+	if !strings.Contains(output, "not automatable") {
+		t.Error("expected gate reason in output")
+	}
+	if !strings.Contains(output, "Re-run from that phase") {
+		t.Error("expected 're-run from that phase' suggestion")
+	}
+	if !strings.Contains(output, "--from triage") {
+		t.Error("expected --from triage suggestion")
+	}
+	if !strings.Contains(output, "retry after fixing the gate condition") {
+		t.Error("expected parenthetical explaining retry")
+	}
+	// Should NOT contain verify-specific advice
+	if strings.Contains(output, "Review the verify output") {
+		t.Error("should not contain verify-specific advice for non-verify gate error")
+	}
+}
+
 func TestPrintSummaryBudgetExceeded(t *testing.T) {
 	dir := t.TempDir()
 	state, _ := pipeline.LoadOrCreate(dir, "PROJ-20")
