@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"text/tabwriter"
 	"time"
 
@@ -96,6 +97,10 @@ func runStatus(stateDir string) error {
 		return nil
 	}
 
+	// Sort: running/stale first (group 0), then completed/failed (group 1);
+	// within each group, most recently started first.
+	sortEntries(rows)
+
 	// Render collected entries.
 	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, "TICKET\tPHASE\tSTATUS\tELAPSED\tCOST")
@@ -175,6 +180,30 @@ func pipelineStatus(meta *pipeline.PipelineMeta, lockInfo *pipeline.LockInfo) st
 		return "pending"
 	}
 	return status
+}
+
+// sortEntries sorts pipeline entries: running/stale pipelines first, then
+// completed/failed. Within each group, entries are sorted by StartedAt
+// descending (newest first).
+func sortEntries(rows []pipelineEntry) {
+	sort.SliceStable(rows, func(i, j int) bool {
+		gi, gj := statusGroup(rows[i].status), statusGroup(rows[j].status)
+		if gi != gj {
+			return gi < gj
+		}
+		return rows[i].startedAt.After(rows[j].startedAt)
+	})
+}
+
+// statusGroup returns 0 for active/in-progress pipelines (shown first)
+// and 1 for terminal states (shown after).
+func statusGroup(status string) int {
+	switch status {
+	case "running", "stale", "retrying", "pending":
+		return 0
+	default:
+		return 1
+	}
 }
 
 func phaseRank(status pipeline.PhaseStatus) int {
