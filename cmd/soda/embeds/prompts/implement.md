@@ -24,7 +24,7 @@ You MUST address every critical and major finding below. Do not repeat the same 
 {{- end}}
 
 After implementing, verify that each finding above is addressed before reporting completion.
-If any feedback above contradicts the Implementation Plan, the feedback takes precedence.
+If any feedback above contradicts the Implementation Plan, the feedback takes precedence — it reflects issues found in the actual implementation.
 {{- else}}
 
 ## MANDATORY: Previous Verification Failures
@@ -64,7 +64,7 @@ You MUST address every item below. Do not repeat the same mistakes.
 {{end}}
 {{- end}}
 
-If any feedback above contradicts the Implementation Plan, the feedback takes precedence.
+If any feedback above contradicts the Implementation Plan, the feedback takes precedence — it reflects issues found in the actual implementation.
 After implementing, verify that each fix above is addressed before reporting completion.
 {{- end}}
 {{- end}}
