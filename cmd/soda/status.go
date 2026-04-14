@@ -76,6 +76,7 @@ func runStatus(stateDir string) error {
 		}
 
 		elapsed := formatElapsed(meta)
+		// Use meta.TotalCost — the authoritative accumulated total across all generations.
 		cost := fmt.Sprintf("$%.2f", meta.TotalCost)
 
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", meta.Ticket, phase, status, elapsed, cost)
