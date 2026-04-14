@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/decko/soda/internal/claude"
 	"github.com/decko/soda/internal/pipeline"
 )
 
@@ -409,13 +410,16 @@ func TestPrintSummaryFailure(t *testing.T) {
 		t.Error("expected error message in failed phase details")
 	}
 
-	// Check next steps
+	// Check next steps — generic error should suggest --from plan (predecessor)
 	if !strings.Contains(output, "Next steps") {
 		t.Error("expected next steps section")
 	}
-	// Should suggest --from plan (predecessor of implement)
 	if !strings.Contains(output, "--from plan") {
 		t.Error("expected --from plan in next steps")
+	}
+	// Generic error should show "Resume the pipeline"
+	if !strings.Contains(output, "Resume the pipeline") {
+		t.Error("expected 'Resume the pipeline' suggestion for generic error")
 	}
 }
 
@@ -455,5 +459,202 @@ func TestPrintSummarySkippedPhases(t *testing.T) {
 	// Triage should show blocked details
 	if !strings.Contains(output, "BLOCKED: needs design review") {
 		t.Error("expected blocked details for triage")
+	}
+}
+
+func TestPrintSummaryVerifyGate(t *testing.T) {
+	dir := t.TempDir()
+	state, _ := pipeline.LoadOrCreate(dir, "PROJ-10")
+	meta := state.Meta()
+	meta.Branch = "soda/PROJ-10"
+	meta.Worktree = "/tmp/worktrees/PROJ-10"
+	meta.TotalCost = 3.00
+
+	meta.Phases["triage"] = &pipeline.PhaseState{Status: pipeline.PhaseCompleted, DurationMs: 10000, Cost: 0.30}
+	meta.Phases["plan"] = &pipeline.PhaseState{Status: pipeline.PhaseCompleted, DurationMs: 20000, Cost: 0.50}
+	meta.Phases["implement"] = &pipeline.PhaseState{Status: pipeline.PhaseCompleted, DurationMs: 50000, Cost: 1.20}
+	meta.Phases["verify"] = &pipeline.PhaseState{Status: pipeline.PhaseFailed, DurationMs: 30000, Cost: 1.00, Error: "verification failed"}
+
+	state.WriteResult("verify", json.RawMessage(`{"ticket_key":"PROJ-10","verdict":"FAIL","criteria_results":[{"criterion":"tests pass","passed":false,"evidence":"2 failures"}],"command_results":[]}`))
+
+	gateErr := &pipeline.PhaseGateError{Phase: "verify", Reason: "verification failed: tests pass"}
+	var buf bytes.Buffer
+	fprintSummary(&buf, state, testPhases(), "Verify gate test", 3*time.Minute, gateErr, nil)
+	output := buf.String()
+
+	if !strings.Contains(output, "Next steps") {
+		t.Error("expected next steps section")
+	}
+	if !strings.Contains(output, "Review the verify output") {
+		t.Error("expected 'Review the verify output' suggestion")
+	}
+	if !strings.Contains(output, "cd /tmp/worktrees/PROJ-10") {
+		t.Error("expected cd to worktree path")
+	}
+	if !strings.Contains(output, "--from implement") {
+		t.Error("expected --from implement suggestion")
+	}
+	if !strings.Contains(output, "--from verify") {
+		t.Error("expected --from verify suggestion")
+	}
+	if !strings.Contains(output, "re-implement with updated context") {
+		t.Error("expected parenthetical explaining --from implement")
+	}
+	if !strings.Contains(output, "re-verify after manual fixes") {
+		t.Error("expected parenthetical explaining --from verify")
+	}
+}
+
+func TestPrintSummaryVerifyGateNoWorktree(t *testing.T) {
+	dir := t.TempDir()
+	state, _ := pipeline.LoadOrCreate(dir, "PROJ-11")
+	meta := state.Meta()
+	meta.Branch = "soda/PROJ-11"
+	// No worktree set
+	meta.TotalCost = 2.00
+
+	meta.Phases["triage"] = &pipeline.PhaseState{Status: pipeline.PhaseCompleted, DurationMs: 10000, Cost: 0.30}
+	meta.Phases["plan"] = &pipeline.PhaseState{Status: pipeline.PhaseCompleted, DurationMs: 20000, Cost: 0.50}
+	meta.Phases["implement"] = &pipeline.PhaseState{Status: pipeline.PhaseCompleted, DurationMs: 50000, Cost: 0.70}
+	meta.Phases["verify"] = &pipeline.PhaseState{Status: pipeline.PhaseFailed, DurationMs: 30000, Cost: 0.50, Error: "verification failed"}
+
+	gateErr := &pipeline.PhaseGateError{Phase: "verify", Reason: "verification failed"}
+	var buf bytes.Buffer
+	fprintSummary(&buf, state, testPhases(), "Verify no worktree", 2*time.Minute, gateErr, nil)
+	output := buf.String()
+
+	// Should NOT contain cd line when no worktree
+	if strings.Contains(output, "cd ") {
+		t.Error("should not contain cd line when no worktree is set")
+	}
+	if !strings.Contains(output, "--from implement") {
+		t.Error("expected --from implement suggestion")
+	}
+}
+
+func TestPrintSummaryBudgetExceeded(t *testing.T) {
+	dir := t.TempDir()
+	state, _ := pipeline.LoadOrCreate(dir, "PROJ-20")
+	meta := state.Meta()
+	meta.Branch = "soda/PROJ-20"
+	meta.TotalCost = 5.00
+
+	meta.Phases["triage"] = &pipeline.PhaseState{Status: pipeline.PhaseCompleted, DurationMs: 10000, Cost: 0.50}
+	meta.Phases["plan"] = &pipeline.PhaseState{Status: pipeline.PhaseCompleted, DurationMs: 20000, Cost: 0.50}
+	meta.Phases["implement"] = &pipeline.PhaseState{Status: pipeline.PhaseFailed, DurationMs: 60000, Cost: 4.00, Error: "budget exceeded"}
+
+	budgetErr := &pipeline.BudgetExceededError{Limit: 5.00, Actual: 5.00, Phase: "implement"}
+	var buf bytes.Buffer
+	fprintSummary(&buf, state, testPhases(), "Budget test", 4*time.Minute, budgetErr, nil)
+	output := buf.String()
+
+	if !strings.Contains(output, "Next steps") {
+		t.Error("expected next steps section")
+	}
+	if !strings.Contains(output, "Budget limit ($5.00)") {
+		t.Error("expected budget limit in output")
+	}
+	if !strings.Contains(output, "limits.max_cost_per_ticket") {
+		t.Error("expected config key suggestion")
+	}
+	if !strings.Contains(output, "--from implement") {
+		t.Error("expected --from implement suggestion")
+	}
+	if !strings.Contains(output, "resume with higher budget") {
+		t.Error("expected parenthetical explaining --from suggestion")
+	}
+}
+
+func TestPrintSummaryTransientError(t *testing.T) {
+	dir := t.TempDir()
+	state, _ := pipeline.LoadOrCreate(dir, "PROJ-30")
+	meta := state.Meta()
+	meta.Branch = "soda/PROJ-30"
+	meta.TotalCost = 1.00
+
+	meta.Phases["triage"] = &pipeline.PhaseState{Status: pipeline.PhaseCompleted, DurationMs: 10000, Cost: 0.30}
+	meta.Phases["plan"] = &pipeline.PhaseState{Status: pipeline.PhaseFailed, DurationMs: 5000, Cost: 0.70, Error: "timeout"}
+
+	transientErr := fmt.Errorf("engine: phase plan failed (transient, no retries left): %w",
+		&claude.TransientError{Reason: "timeout", Err: fmt.Errorf("connection reset")})
+	var buf bytes.Buffer
+	fprintSummary(&buf, state, testPhases(), "Transient test", 1*time.Minute, transientErr, nil)
+	output := buf.String()
+
+	if !strings.Contains(output, "Next steps") {
+		t.Error("expected next steps section")
+	}
+	if !strings.Contains(output, "transient error") {
+		t.Error("expected transient error description")
+	}
+	if !strings.Contains(output, "--from plan") {
+		t.Error("expected --from plan suggestion")
+	}
+	if !strings.Contains(output, "retry the failed phase") {
+		t.Error("expected parenthetical explaining retry")
+	}
+}
+
+func TestPrintSummaryParseError(t *testing.T) {
+	dir := t.TempDir()
+	state, _ := pipeline.LoadOrCreate(dir, "PROJ-40")
+	meta := state.Meta()
+	meta.Branch = "soda/PROJ-40"
+	meta.TotalCost = 0.80
+
+	meta.Phases["triage"] = &pipeline.PhaseState{Status: pipeline.PhaseFailed, DurationMs: 15000, Cost: 0.80, Error: "parse error"}
+
+	parseErr := fmt.Errorf("engine: phase triage failed (parse, no retries left): %w",
+		&claude.ParseError{Raw: []byte("bad output"), Err: fmt.Errorf("invalid JSON")})
+	var buf bytes.Buffer
+	fprintSummary(&buf, state, testPhases(), "Parse test", 30*time.Second, parseErr, nil)
+	output := buf.String()
+
+	if !strings.Contains(output, "Next steps") {
+		t.Error("expected next steps section")
+	}
+	if !strings.Contains(output, "could not be parsed") {
+		t.Error("expected parse error description")
+	}
+	if !strings.Contains(output, "--from triage") {
+		t.Error("expected --from triage suggestion")
+	}
+	if !strings.Contains(output, "retry with a fresh attempt") {
+		t.Error("expected parenthetical explaining retry")
+	}
+}
+
+func TestPrintSummaryGenericError(t *testing.T) {
+	dir := t.TempDir()
+	state, _ := pipeline.LoadOrCreate(dir, "PROJ-60")
+	meta := state.Meta()
+	meta.Branch = "soda/PROJ-60"
+	meta.Worktree = "/tmp/worktrees/PROJ-60"
+	meta.TotalCost = 1.50
+
+	meta.Phases["triage"] = &pipeline.PhaseState{Status: pipeline.PhaseCompleted, DurationMs: 10000, Cost: 0.50}
+	meta.Phases["plan"] = &pipeline.PhaseState{Status: pipeline.PhaseCompleted, DurationMs: 20000, Cost: 0.50}
+	meta.Phases["implement"] = &pipeline.PhaseState{Status: pipeline.PhaseFailed, DurationMs: 40000, Cost: 0.50, Error: "unknown failure"}
+
+	genericErr := fmt.Errorf("engine: phase implement failed: something unexpected")
+	var buf bytes.Buffer
+	fprintSummary(&buf, state, testPhases(), "Generic error test", 2*time.Minute, genericErr, nil)
+	output := buf.String()
+
+	if !strings.Contains(output, "Next steps") {
+		t.Error("expected next steps section")
+	}
+	if !strings.Contains(output, "Resume the pipeline") {
+		t.Error("expected 'Resume the pipeline' suggestion")
+	}
+	// Generic error on implement (idx=2) suggests --from plan (predecessor)
+	if !strings.Contains(output, "--from plan") {
+		t.Error("expected --from plan in generic error next steps")
+	}
+	if !strings.Contains(output, "Inspect the worktree") {
+		t.Error("expected worktree inspection suggestion")
+	}
+	if !strings.Contains(output, "cd /tmp/worktrees/PROJ-60") {
+		t.Error("expected cd to worktree path")
 	}
 }
