@@ -44,6 +44,8 @@ func PhaseSummary(phase string, result json.RawMessage) string {
 		return verifySummary(result)
 	case "submit":
 		return submitSummary(result)
+	case "monitor":
+		return monitorSummary(result)
 	default:
 		return ""
 	}
@@ -151,4 +153,21 @@ func submitSummary(data json.RawMessage) string {
 		return "PR #" + parts[len(parts)-1]
 	}
 	return result.PRURL
+}
+
+func monitorSummary(data json.RawMessage) string {
+	var result struct {
+		CommentsHandled []json.RawMessage `json:"comments_handled"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return ""
+	}
+	count := len(result.CommentsHandled)
+	if count == 0 {
+		return "no comments handled"
+	}
+	if count == 1 {
+		return "1 comment handled"
+	}
+	return fmt.Sprintf("%d comments handled", count)
 }
