@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/decko/soda/schemas"
 )
 
 func TestPromptLoader(t *testing.T) {
@@ -443,6 +445,74 @@ Verdict: {{.ReworkFeedback.Verdict}}
 		}
 		if strings.Contains(result, "Rework Feedback") {
 			t.Errorf("result should not contain feedback section when nil, got: %s", result)
+		}
+	})
+
+	t.Run("rework_feedback_takes_precedence_over_plan_review_source", func(t *testing.T) {
+		// Read the actual embedded implement.md template.
+		tmplBytes, err := os.ReadFile(filepath.Join("..", "..", "cmd", "soda", "embeds", "prompts", "implement.md"))
+		if err != nil {
+			t.Skipf("skipping: cannot read embedded implement.md: %v", err)
+		}
+		tmpl := string(tmplBytes)
+
+		data := PromptData{
+			Ticket:       TicketData{Key: "TEST-1", Summary: "test"},
+			WorktreePath: "/tmp/wt",
+			Branch:       "soda/TEST-1",
+			BaseBranch:   "main",
+			Config:       PromptConfigData{Formatter: "gofmt -w .", TestCommand: "go test ./..."},
+			ReworkFeedback: &ReworkFeedback{
+				Source:  "review",
+				Verdict: "rework",
+				ReviewFindings: []schemas.ReviewFinding{
+					{Severity: "critical", File: "x.go", Line: 1, Issue: "bad", Suggestion: "fix it", Source: "go-specialist"},
+				},
+			},
+		}
+
+		result, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+		if strings.Contains(result, "the plan takes precedence") {
+			t.Error("implement prompt should NOT say 'the plan takes precedence' for review rework feedback")
+		}
+		if !strings.Contains(result, "the feedback takes precedence") {
+			t.Error("implement prompt should say 'the feedback takes precedence' for review rework feedback")
+		}
+	})
+
+	t.Run("rework_feedback_takes_precedence_over_plan_verify_source", func(t *testing.T) {
+		// Read the actual embedded implement.md template.
+		tmplBytes, err := os.ReadFile(filepath.Join("..", "..", "cmd", "soda", "embeds", "prompts", "implement.md"))
+		if err != nil {
+			t.Skipf("skipping: cannot read embedded implement.md: %v", err)
+		}
+		tmpl := string(tmplBytes)
+
+		data := PromptData{
+			Ticket:       TicketData{Key: "TEST-1", Summary: "test"},
+			WorktreePath: "/tmp/wt",
+			Branch:       "soda/TEST-1",
+			BaseBranch:   "main",
+			Config:       PromptConfigData{Formatter: "gofmt -w .", TestCommand: "go test ./..."},
+			ReworkFeedback: &ReworkFeedback{
+				Source:        "verify",
+				Verdict:       "FAIL",
+				FixesRequired: []string{"fix the failing test"},
+			},
+		}
+
+		result, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+		if strings.Contains(result, "the plan takes precedence") {
+			t.Error("implement prompt should NOT say 'the plan takes precedence' for verify rework feedback")
+		}
+		if !strings.Contains(result, "the feedback takes precedence") {
+			t.Error("implement prompt should say 'the feedback takes precedence' for verify rework feedback")
 		}
 	})
 
