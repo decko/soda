@@ -160,6 +160,9 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 	var engine *pipeline.Engine
 	skippedPhases := map[string]bool{}
 
+	// Set up PR poller for monitor phase.
+	prPoller := pipeline.NewGitHubPRPoller("")
+
 	engineCfg := pipeline.EngineConfig{
 		Pipeline:      pl,
 		Loader:        loader,
@@ -172,6 +175,7 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 		BaseBranch:    "main",
 		MaxCostUSD:    cfg.Limits.MaxCostPerTicket,
 		Mode:          mode,
+		PRPoller:      prPoller,
 		OnEvent: func(event pipeline.Event) {
 			if event.Kind == pipeline.EventPhaseSkipped || event.Kind == pipeline.EventMonitorSkipped {
 				skippedPhases[event.Phase] = true
@@ -309,6 +313,56 @@ func handleEvent(ctx context.Context, cancel context.CancelFunc, engine *pipelin
 
 	case pipeline.EventMonitorSkipped:
 		prog.PhaseSkipped("monitor")
+
+	case pipeline.EventMonitorPolling:
+		pollCount, _ := event.Data["poll_count"].(int)
+		rounds, _ := event.Data["response_rounds"].(int)
+		prog.Message(fmt.Sprintf("  📡 poll #%d (rounds: %d)", pollCount, rounds))
+
+	case pipeline.EventMonitorNewComments:
+		count, _ := event.Data["count"].(int)
+		rounds, _ := event.Data["response_rounds"].(int)
+		prog.Message(fmt.Sprintf("  💬 %d new comment(s) — round %d", count, rounds))
+
+	case pipeline.EventMonitorCIChange:
+		prev, _ := event.Data["previous"].(string)
+		curr, _ := event.Data["current"].(string)
+		prog.Message(fmt.Sprintf("  🔄 CI status: %s → %s", prev, curr))
+
+	case pipeline.EventMonitorCIFailure:
+		failedJobs, _ := event.Data["failed_jobs"].([]string)
+		if len(failedJobs) > 0 {
+			prog.Message(fmt.Sprintf("  ❌ CI failed: %s", strings.Join(failedJobs, ", ")))
+		} else {
+			prog.Message("  ❌ CI failed")
+		}
+
+	case pipeline.EventMonitorConflict:
+		baseBranch, _ := event.Data["base_branch"].(string)
+		prog.Message(fmt.Sprintf("  ⚠️  Merge conflict detected with %s", baseBranch))
+
+	case pipeline.EventMonitorRebaseOK:
+		prog.Message("  ✅ Auto-rebase succeeded, pushed")
+
+	case pipeline.EventMonitorRebaseFailed:
+		errMsg, _ := event.Data["error"].(string)
+		prog.Message(fmt.Sprintf("  ❌ Auto-rebase failed: %s", errMsg))
+
+	case pipeline.EventMonitorPRApproved:
+		state, _ := event.Data["state"].(string)
+		prog.Message(fmt.Sprintf("  ✅ PR %s — pipeline complete", state))
+
+	case pipeline.EventMonitorPRClosed:
+		prog.Message("  ❌ PR closed/rejected — pipeline failed")
+
+	case pipeline.EventMonitorMaxRounds:
+		rounds, _ := event.Data["response_rounds"].(int)
+		maxRounds, _ := event.Data["max_response_rounds"].(int)
+		prog.Message(fmt.Sprintf("  ⏹  Max response rounds reached (%d/%d)", rounds, maxRounds))
+
+	case pipeline.EventMonitorTimeout:
+		duration, _ := event.Data["duration"].(string)
+		prog.Message(fmt.Sprintf("  ⏹  Monitor timeout after %s", duration))
 	}
 }
 

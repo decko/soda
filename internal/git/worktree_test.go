@@ -147,3 +147,189 @@ func TestDeleteBranch(t *testing.T) {
 		}
 	})
 }
+
+func TestNeedsMergeWithBase(t *testing.T) {
+	t.Run("no_conflicts_when_base_unchanged", func(t *testing.T) {
+		repoDir := initGitRepo(t)
+
+		// Create a feature branch and make a commit on it.
+		run(t, repoDir, "git", "checkout", "-b", "feat/test")
+		writeFile(t, repoDir, "feature.txt", "feature content")
+		run(t, repoDir, "git", "add", "feature.txt")
+		run(t, repoDir, "git", "commit", "-m", "add feature")
+
+		hasConflicts, err := NeedsMergeWithBase(context.Background(), repoDir, "main")
+		if err != nil {
+			t.Fatalf("NeedsMergeWithBase: %v", err)
+		}
+		if hasConflicts {
+			t.Error("expected no conflicts when base is unchanged")
+		}
+	})
+
+	t.Run("no_conflicts_when_base_has_non_overlapping_changes", func(t *testing.T) {
+		repoDir := initGitRepo(t)
+
+		// Create a file on main.
+		writeFile(t, repoDir, "base.txt", "original content")
+		run(t, repoDir, "git", "add", "base.txt")
+		run(t, repoDir, "git", "commit", "-m", "add base file")
+
+		// Create feature branch.
+		run(t, repoDir, "git", "checkout", "-b", "feat/no-conflict")
+		writeFile(t, repoDir, "feature.txt", "feature content")
+		run(t, repoDir, "git", "add", "feature.txt")
+		run(t, repoDir, "git", "commit", "-m", "add feature")
+
+		// Go back to main and make a non-overlapping change.
+		run(t, repoDir, "git", "checkout", "main")
+		writeFile(t, repoDir, "other.txt", "other content")
+		run(t, repoDir, "git", "add", "other.txt")
+		run(t, repoDir, "git", "commit", "-m", "add other file")
+
+		// Switch back to feature branch.
+		run(t, repoDir, "git", "checkout", "feat/no-conflict")
+
+		hasConflicts, err := NeedsMergeWithBase(context.Background(), repoDir, "main")
+		if err != nil {
+			t.Fatalf("NeedsMergeWithBase: %v", err)
+		}
+		if hasConflicts {
+			t.Error("expected no conflicts with non-overlapping changes")
+		}
+	})
+
+	t.Run("detects_conflicts", func(t *testing.T) {
+		repoDir := initGitRepo(t)
+
+		// Create a file on main.
+		writeFile(t, repoDir, "shared.txt", "original content")
+		run(t, repoDir, "git", "add", "shared.txt")
+		run(t, repoDir, "git", "commit", "-m", "add shared file")
+
+		// Create feature branch with conflicting change.
+		run(t, repoDir, "git", "checkout", "-b", "feat/conflict")
+		writeFile(t, repoDir, "shared.txt", "feature version")
+		run(t, repoDir, "git", "add", "shared.txt")
+		run(t, repoDir, "git", "commit", "-m", "modify on feature")
+
+		// Go back to main and make a conflicting change.
+		run(t, repoDir, "git", "checkout", "main")
+		writeFile(t, repoDir, "shared.txt", "main version")
+		run(t, repoDir, "git", "add", "shared.txt")
+		run(t, repoDir, "git", "commit", "-m", "modify on main")
+
+		// Switch back to feature.
+		run(t, repoDir, "git", "checkout", "feat/conflict")
+
+		hasConflicts, err := NeedsMergeWithBase(context.Background(), repoDir, "main")
+		if err != nil {
+			t.Fatalf("NeedsMergeWithBase: %v", err)
+		}
+		if !hasConflicts {
+			t.Error("expected conflicts when both branches modify the same file")
+		}
+	})
+}
+
+func TestRebase(t *testing.T) {
+	t.Run("clean_rebase", func(t *testing.T) {
+		repoDir := initGitRepo(t)
+
+		// Create a file on main.
+		writeFile(t, repoDir, "base.txt", "base content")
+		run(t, repoDir, "git", "add", "base.txt")
+		run(t, repoDir, "git", "commit", "-m", "add base")
+
+		// Create feature branch.
+		run(t, repoDir, "git", "checkout", "-b", "feat/rebase-clean")
+		writeFile(t, repoDir, "feature.txt", "feature content")
+		run(t, repoDir, "git", "add", "feature.txt")
+		run(t, repoDir, "git", "commit", "-m", "add feature")
+
+		// Add another commit to main.
+		run(t, repoDir, "git", "checkout", "main")
+		writeFile(t, repoDir, "other.txt", "other content")
+		run(t, repoDir, "git", "add", "other.txt")
+		run(t, repoDir, "git", "commit", "-m", "add other")
+
+		// Rebase feature onto main.
+		run(t, repoDir, "git", "checkout", "feat/rebase-clean")
+
+		err := Rebase(context.Background(), repoDir, "main")
+		if err != nil {
+			t.Fatalf("Rebase: %v", err)
+		}
+
+		// Verify both files exist after rebase.
+		if _, err := os.Stat(filepath.Join(repoDir, "feature.txt")); err != nil {
+			t.Error("feature.txt should exist after clean rebase")
+		}
+		if _, err := os.Stat(filepath.Join(repoDir, "other.txt")); err != nil {
+			t.Error("other.txt should exist after clean rebase")
+		}
+	})
+
+	t.Run("conflicting_rebase_aborts", func(t *testing.T) {
+		repoDir := initGitRepo(t)
+
+		// Create a file on main.
+		writeFile(t, repoDir, "shared.txt", "original")
+		run(t, repoDir, "git", "add", "shared.txt")
+		run(t, repoDir, "git", "commit", "-m", "add shared")
+
+		// Create feature branch with conflicting change.
+		run(t, repoDir, "git", "checkout", "-b", "feat/rebase-conflict")
+		writeFile(t, repoDir, "shared.txt", "feature version")
+		run(t, repoDir, "git", "add", "shared.txt")
+		run(t, repoDir, "git", "commit", "-m", "modify on feature")
+
+		// Add conflicting commit to main.
+		run(t, repoDir, "git", "checkout", "main")
+		writeFile(t, repoDir, "shared.txt", "main version")
+		run(t, repoDir, "git", "add", "shared.txt")
+		run(t, repoDir, "git", "commit", "-m", "modify on main")
+
+		// Try to rebase.
+		run(t, repoDir, "git", "checkout", "feat/rebase-conflict")
+
+		err := Rebase(context.Background(), repoDir, "main")
+		if err == nil {
+			t.Fatal("expected error from conflicting rebase")
+		}
+
+		// Verify the rebase was aborted (no .git/rebase-merge dir).
+		rebaseMergeDir := filepath.Join(repoDir, ".git", "rebase-merge")
+		if _, err := os.Stat(rebaseMergeDir); err == nil {
+			t.Error("rebase should have been aborted, but rebase-merge dir exists")
+		}
+
+		// Verify the working tree is clean (original feature content restored).
+		content, err := os.ReadFile(filepath.Join(repoDir, "shared.txt"))
+		if err != nil {
+			t.Fatalf("ReadFile: %v", err)
+		}
+		if string(content) != "feature version" {
+			t.Errorf("shared.txt = %q, want %q (should be restored after abort)", string(content), "feature version")
+		}
+	})
+}
+
+// Test helpers
+
+func run(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command(args[0], args[1:]...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v failed: %s: %v", args, out, err)
+	}
+}
+
+func writeFile(t *testing.T, dir, name, content string) {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("WriteFile %s: %v", path, err)
+	}
+}
