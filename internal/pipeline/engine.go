@@ -26,24 +26,36 @@ const (
 	Checkpoint
 )
 
+// DefaultMaxReworkCycles is the default limit for review→implement rework loops.
+const DefaultMaxReworkCycles = 2
+
 // EngineConfig holds everything needed to construct an Engine.
 type EngineConfig struct {
-	Pipeline      *PhasePipeline
-	Loader        *PromptLoader
-	Ticket        TicketData
-	PromptConfig  PromptConfigData
-	PromptContext ContextData
-	Model         string
-	WorkDir       string
-	WorktreeBase  string
-	BaseBranch    string
-	MaxCostUSD    float64
-	Mode          Mode
-	OnEvent       func(Event)
-	SleepFunc     func(time.Duration)
-	JitterFunc    func(max time.Duration) time.Duration
-	PRPoller      PRPoller         // for monitor phase polling; nil disables monitor
-	NowFunc       func() time.Time // for testability; defaults to time.Now
+	Pipeline        *PhasePipeline
+	Loader          *PromptLoader
+	Ticket          TicketData
+	PromptConfig    PromptConfigData
+	PromptContext   ContextData
+	Model           string
+	WorkDir         string
+	WorktreeBase    string
+	BaseBranch      string
+	MaxCostUSD      float64
+	MaxReworkCycles int // max review→implement rework loops; 0 means use default (2)
+	Mode            Mode
+	OnEvent         func(Event)
+	SleepFunc       func(time.Duration)
+	JitterFunc      func(max time.Duration) time.Duration
+	PRPoller        PRPoller         // for monitor phase polling; nil disables monitor
+	NowFunc         func() time.Time // for testability; defaults to time.Now
+}
+
+// maxReworkCycles returns the configured max rework cycles, defaulting to DefaultMaxReworkCycles.
+func (c *EngineConfig) maxReworkCycles() int {
+	if c.MaxReworkCycles > 0 {
+		return c.MaxReworkCycles
+	}
+	return DefaultMaxReworkCycles
 }
 
 // Engine orchestrates a pipeline run, tying together the runner,
