@@ -527,17 +527,29 @@ func (e *Engine) buildPromptData(phase PhaseConfig) (PromptData, error) {
 		}
 	}
 
-	// When building the implement prompt, inject verify feedback if a
-	// previous verify run produced a FAIL verdict. This gives the
-	// implement phase actionable context on resume after verification
-	// failure.
+	// When building the implement prompt, inject rework feedback from
+	// either a failed verify or a review-rework verdict. Review feedback
+	// takes precedence since it comes later in the pipeline and is more
+	// specific.
 	if phase.Name == "implement" {
-		if fb := e.extractReworkFeedback(); fb != nil {
+		if fb := e.extractReviewReworkFeedback(); fb != nil {
 			data.ReworkFeedback = fb
 			e.emit(Event{
 				Phase: phase.Name,
 				Kind:  EventReworkFeedbackInjected,
 				Data: map[string]any{
+					"source":          fb.Source,
+					"verdict":         fb.Verdict,
+					"review_findings": len(fb.ReviewFindings),
+				},
+			})
+		} else if fb := e.extractReworkFeedback(); fb != nil {
+			data.ReworkFeedback = fb
+			e.emit(Event{
+				Phase: phase.Name,
+				Kind:  EventReworkFeedbackInjected,
+				Data: map[string]any{
+					"source":          fb.Source,
 					"verdict":         fb.Verdict,
 					"fixes_count":     len(fb.FixesRequired),
 					"failed_criteria": len(fb.FailedCriteria),
@@ -607,6 +619,7 @@ func (e *Engine) extractReworkFeedback() *ReworkFeedback {
 
 	fb := &ReworkFeedback{
 		Verdict:       result.Verdict,
+		Source:        "verify",
 		FixesRequired: result.FixesRequired,
 	}
 
@@ -640,6 +653,56 @@ func (e *Engine) extractReworkFeedback() *ReworkFeedback {
 				Command:  cmd.Command,
 				ExitCode: cmd.ExitCode,
 				Output:   truncateLines(cmd.Output, 50),
+			})
+		}
+	}
+
+	return fb
+}
+
+// extractReviewReworkFeedback reads the review result and returns
+// structured feedback when the verdict is "rework". Returns nil if no
+// review result exists or the verdict is not "rework".
+func (e *Engine) extractReviewReworkFeedback() *ReworkFeedback {
+	raw, err := e.state.ReadResult("review")
+	if err != nil {
+		return nil
+	}
+
+	var result struct {
+		Verdict  string `json:"verdict"`
+		Findings []struct {
+			Source     string `json:"source"`
+			Severity   string `json:"severity"`
+			File       string `json:"file"`
+			Line       int    `json:"line,omitempty"`
+			Issue      string `json:"issue"`
+			Suggestion string `json:"suggestion"`
+		} `json:"findings"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil
+	}
+	if !strings.EqualFold(result.Verdict, "rework") {
+		return nil
+	}
+
+	fb := &ReworkFeedback{
+		Verdict: result.Verdict,
+		Source:  "review",
+	}
+
+	// Only include critical and major findings.
+	for _, finding := range result.Findings {
+		sev := strings.ToLower(finding.Severity)
+		if sev == "critical" || sev == "major" {
+			fb.ReviewFindings = append(fb.ReviewFindings, ReviewReworkFinding{
+				Source:     finding.Source,
+				Severity:   finding.Severity,
+				File:       finding.File,
+				Line:       finding.Line,
+				Issue:      finding.Issue,
+				Suggestion: finding.Suggestion,
 			})
 		}
 	}
@@ -810,8 +873,8 @@ type reviewFinding struct {
 
 // reviewerMsg is sent from reviewer goroutines to the parent via channel.
 type reviewerMsg struct {
-	Event  *Event  // emit this event (nil if not an event)
-	Log    *reviewerLog // write this log (nil if not a log)
+	Event  *Event          // emit this event (nil if not an event)
+	Log    *reviewerLog    // write this log (nil if not a log)
 	Result *reviewerResult // final result (nil if not done)
 	Index  int
 }
