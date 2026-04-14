@@ -3476,3 +3476,679 @@ func TestComputeReviewVerdict(t *testing.T) {
 		})
 	}
 }
+
+func TestEngine_ReviewReworkRouting(t *testing.T) {
+	t.Run("rework_routes_back_to_implement", func(t *testing.T) {
+		// Pipeline: implement → verify → review → submit
+		// Review produces "rework" verdict → engine routes back to implement.
+		// Second cycle: review passes → submit proceeds.
+		phases := []PhaseConfig{
+			{
+				Name:   "implement",
+				Prompt: "implement.md",
+				Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+			{
+				Name:      "verify",
+				Prompt:    "verify.md",
+				DependsOn: []string{"implement"},
+				Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+			{
+				Name:      "review",
+				Type:      "parallel-review",
+				DependsOn: []string{"implement", "verify"},
+				Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+				Reviewers: []ReviewerConfig{
+					{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+				},
+			},
+			{
+				Name:      "submit",
+				Prompt:    "submit.md",
+				DependsOn: []string{"review"},
+				Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+		}
+
+		mock := &flexMockRunner{
+			responses: map[string][]flexResponse{
+				// First implement run.
+				"implement": {
+					{result: &runner.RunResult{
+						Output:  json.RawMessage(`{"tests_passed":true,"commits":1}`),
+						RawText: "Impl v1",
+						CostUSD: 0.50,
+					}},
+					// Second implement run (rework).
+					{result: &runner.RunResult{
+						Output:  json.RawMessage(`{"tests_passed":true,"commits":2}`),
+						RawText: "Impl v2 with fixes",
+						CostUSD: 0.60,
+					}},
+				},
+				// Verify runs twice (once per cycle).
+				"verify": {
+					{result: &runner.RunResult{
+						Output:  json.RawMessage(`{"verdict":"PASS"}`),
+						RawText: "Verify v1",
+						CostUSD: 0.15,
+					}},
+					{result: &runner.RunResult{
+						Output:  json.RawMessage(`{"verdict":"PASS"}`),
+						RawText: "Verify v2",
+						CostUSD: 0.15,
+					}},
+				},
+				// First review: rework.
+				"review/go-specialist": {
+					{result: &runner.RunResult{
+						Output:  json.RawMessage(`{"findings":[{"severity":"critical","file":"handler.go","line":42,"issue":"nil deref","suggestion":"add nil check"}]}`),
+						RawText: "Critical issue found",
+						CostUSD: 0.20,
+					}},
+					// Second review: pass.
+					{result: &runner.RunResult{
+						Output:  json.RawMessage(`{"findings":[]}`),
+						RawText: "No issues",
+						CostUSD: 0.15,
+					}},
+				},
+				"submit": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"pr_url":"https://github.com/org/repo/pull/1"}`),
+						RawText: "PR created",
+						CostUSD: 0.05,
+					},
+				}},
+			},
+		}
+
+		var events []Event
+		engine, state := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
+			cfg.OnEvent = func(e Event) {
+				events = append(events, e)
+			}
+		})
+
+		if err := engine.Run(context.Background()); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+
+		// All phases should be completed.
+		for _, name := range []string{"implement", "verify", "review", "submit"} {
+			if !state.IsCompleted(name) {
+				t.Errorf("phase %q should be completed", name)
+			}
+		}
+
+		// Rework cycle counter should be 1.
+		if state.Meta().ReworkCycles != 1 {
+			t.Errorf("ReworkCycles = %d, want 1", state.Meta().ReworkCycles)
+		}
+
+		// Should have review_rework_routed event.
+		hasRouted := false
+		for _, e := range events {
+			if e.Kind == EventReviewReworkRouted {
+				hasRouted = true
+				routingTo, _ := e.Data["routing_to"].(string)
+				if routingTo != "implement" {
+					t.Errorf("routing_to = %q, want %q", routingTo, "implement")
+				}
+			}
+		}
+		if !hasRouted {
+			t.Error("review_rework_routed event not emitted")
+		}
+
+		// Implement should have been called twice (original + rework).
+		implCalls := 0
+		for _, call := range mock.calls {
+			if call.Phase == "implement" {
+				implCalls++
+			}
+		}
+		if implCalls != 2 {
+			t.Errorf("implement called %d times, want 2", implCalls)
+		}
+	})
+
+	t.Run("max_rework_cycles_blocks", func(t *testing.T) {
+		// Pipeline: implement → review
+		// Review always returns "rework", max cycles = 1.
+		// First cycle routes back, second cycle gates.
+		phases := []PhaseConfig{
+			{
+				Name:   "implement",
+				Prompt: "implement.md",
+				Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+			{
+				Name:      "review",
+				Type:      "parallel-review",
+				DependsOn: []string{"implement"},
+				Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+				Reviewers: []ReviewerConfig{
+					{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+				},
+			},
+		}
+
+		reworkFindings := `{"findings":[{"severity":"major","file":"x.go","line":1,"issue":"error not wrapped","suggestion":"use fmt.Errorf"}]}`
+
+		mock := &flexMockRunner{
+			responses: map[string][]flexResponse{
+				"implement": {
+					{result: &runner.RunResult{
+						Output:  json.RawMessage(`{"tests_passed":true,"commits":1}`),
+						RawText: "Impl v1",
+						CostUSD: 0.50,
+					}},
+					{result: &runner.RunResult{
+						Output:  json.RawMessage(`{"tests_passed":true,"commits":2}`),
+						RawText: "Impl v2",
+						CostUSD: 0.50,
+					}},
+				},
+				"review/go-specialist": {
+					{result: &runner.RunResult{
+						Output:  json.RawMessage(reworkFindings),
+						RawText: "Rework needed",
+						CostUSD: 0.15,
+					}},
+					{result: &runner.RunResult{
+						Output:  json.RawMessage(reworkFindings),
+						RawText: "Still needs rework",
+						CostUSD: 0.15,
+					}},
+				},
+			},
+		}
+
+		var events []Event
+		engine, state := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
+			cfg.MaxReworkCycles = 1
+			cfg.OnEvent = func(e Event) {
+				events = append(events, e)
+			}
+		})
+
+		err := engine.Run(context.Background())
+		if err == nil {
+			t.Fatal("expected PhaseGateError after max rework cycles")
+		}
+
+		var gateErr *PhaseGateError
+		if !errors.As(err, &gateErr) {
+			t.Fatalf("expected PhaseGateError, got: %T: %v", err, err)
+		}
+		if gateErr.Phase != "review" {
+			t.Errorf("gate error phase = %q, want %q", gateErr.Phase, "review")
+		}
+		if !strings.Contains(gateErr.Reason, "max cycles") {
+			t.Errorf("gate error should mention max cycles, got: %q", gateErr.Reason)
+		}
+
+		// Should have 1 rework cycle.
+		if state.Meta().ReworkCycles != 1 {
+			t.Errorf("ReworkCycles = %d, want 1", state.Meta().ReworkCycles)
+		}
+
+		// Should have both routing and max cycles events.
+		hasRouted := false
+		hasMaxCycles := false
+		for _, e := range events {
+			if e.Kind == EventReviewReworkRouted {
+				hasRouted = true
+			}
+			if e.Kind == EventReviewReworkMaxCycles {
+				hasMaxCycles = true
+			}
+		}
+		if !hasRouted {
+			t.Error("review_rework_routed event not emitted")
+		}
+		if !hasMaxCycles {
+			t.Error("review_rework_max_cycles event not emitted")
+		}
+	})
+
+	t.Run("pass_with_follow_ups_proceeds", func(t *testing.T) {
+		// Minor-only findings should not block and should proceed to submit.
+		phases := []PhaseConfig{
+			{
+				Name:   "implement",
+				Prompt: "implement.md",
+				Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+			{
+				Name:      "review",
+				Type:      "parallel-review",
+				DependsOn: []string{"implement"},
+				Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+				Reviewers: []ReviewerConfig{
+					{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+				},
+			},
+			{
+				Name:      "submit",
+				Prompt:    "submit.md",
+				DependsOn: []string{"review"},
+				Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+		}
+
+		mock := &flexMockRunner{
+			responses: map[string][]flexResponse{
+				"implement": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"tests_passed":true,"commits":1}`),
+						RawText: "Impl done",
+						CostUSD: 0.50,
+					},
+				}},
+				"review/go-specialist": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"findings":[{"severity":"minor","file":"util.go","issue":"naming style","suggestion":"rename var"}]}`),
+						RawText: "Minor issues only",
+						CostUSD: 0.10,
+					},
+				}},
+				"submit": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"pr_url":"https://github.com/org/repo/pull/1"}`),
+						RawText: "PR created",
+						CostUSD: 0.05,
+					},
+				}},
+			},
+		}
+
+		engine, state := setupReviewEngine(t, phases, mock)
+
+		if err := engine.Run(context.Background()); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+
+		// All phases including submit should complete.
+		for _, name := range []string{"implement", "review", "submit"} {
+			if !state.IsCompleted(name) {
+				t.Errorf("phase %q should be completed", name)
+			}
+		}
+
+		// No rework cycles should have occurred.
+		if state.Meta().ReworkCycles != 0 {
+			t.Errorf("ReworkCycles = %d, want 0", state.Meta().ReworkCycles)
+		}
+
+		// Verify verdict is pass-with-follow-ups.
+		result, err := state.ReadResult("review")
+		if err != nil {
+			t.Fatalf("ReadResult: %v", err)
+		}
+		var reviewOutput struct {
+			Verdict string `json:"verdict"`
+		}
+		if err := json.Unmarshal(result, &reviewOutput); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if reviewOutput.Verdict != "pass-with-follow-ups" {
+			t.Errorf("verdict = %q, want %q", reviewOutput.Verdict, "pass-with-follow-ups")
+		}
+	})
+
+	t.Run("no_findings_passes", func(t *testing.T) {
+		// No findings → proceed to submit without rework.
+		phases := []PhaseConfig{
+			{
+				Name:   "implement",
+				Prompt: "implement.md",
+				Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+			{
+				Name:      "review",
+				Type:      "parallel-review",
+				DependsOn: []string{"implement"},
+				Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+				Reviewers: []ReviewerConfig{
+					{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+				},
+			},
+			{
+				Name:      "submit",
+				Prompt:    "submit.md",
+				DependsOn: []string{"review"},
+				Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+		}
+
+		mock := &flexMockRunner{
+			responses: map[string][]flexResponse{
+				"implement": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"tests_passed":true,"commits":1}`),
+						RawText: "Impl done",
+						CostUSD: 0.50,
+					},
+				}},
+				"review/go-specialist": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"findings":[]}`),
+						RawText: "No issues",
+						CostUSD: 0.10,
+					},
+				}},
+				"submit": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"pr_url":"https://github.com/org/repo/pull/1"}`),
+						RawText: "PR created",
+						CostUSD: 0.05,
+					},
+				}},
+			},
+		}
+
+		engine, state := setupReviewEngine(t, phases, mock)
+
+		if err := engine.Run(context.Background()); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+
+		for _, name := range []string{"implement", "review", "submit"} {
+			if !state.IsCompleted(name) {
+				t.Errorf("phase %q should be completed", name)
+			}
+		}
+
+		if state.Meta().ReworkCycles != 0 {
+			t.Errorf("ReworkCycles = %d, want 0", state.Meta().ReworkCycles)
+		}
+	})
+}
+
+func TestEngine_ReviewReworkFeedbackInjected(t *testing.T) {
+	// When review rework routes back to implement, the implement prompt
+	// should contain the review findings.
+	phases := []PhaseConfig{
+		{
+			Name:   "implement",
+			Prompt: "implement.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "review",
+			Type:      "parallel-review",
+			DependsOn: []string{"implement"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Reviewers: []ReviewerConfig{
+				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+				{Name: "ai-harness", Prompt: "prompts/review-harness.md", Focus: "AI harness"},
+			},
+		},
+	}
+
+	goFindings := `{"findings":[
+		{"severity":"critical","file":"handler.go","line":42,"issue":"nil pointer dereference","suggestion":"add nil check"}
+	]}`
+
+	harnessFindings := `{"findings":[
+		{"severity":"major","file":"prompts/plan.md","line":0,"issue":"missing template guard","suggestion":"add if block"}
+	]}`
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true,"commits":1}`),
+					RawText: "Impl v1",
+					CostUSD: 0.50,
+				}},
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true,"commits":2}`),
+					RawText: "Impl v2",
+					CostUSD: 0.60,
+				}},
+			},
+			"review/go-specialist": {
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(goFindings),
+					RawText: "Critical issue",
+					CostUSD: 0.15,
+				}},
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[]}`),
+					RawText: "All clear",
+					CostUSD: 0.10,
+				}},
+			},
+			"review/ai-harness": {
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(harnessFindings),
+					RawText: "Major issue",
+					CostUSD: 0.15,
+				}},
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[]}`),
+					RawText: "All clear",
+					CostUSD: 0.10,
+				}},
+			},
+		},
+	}
+
+	stateDir := t.TempDir()
+	promptDir := t.TempDir()
+	workDir := t.TempDir()
+
+	// Write a prompt template that renders review rework feedback.
+	implTmpl := `Phase: implement
+Ticket: {{.Ticket.Key}}
+{{- if .ReworkFeedback}}
+REWORK_SOURCE: {{.ReworkFeedback.Source}}
+REWORK_VERDICT: {{.ReworkFeedback.Verdict}}
+{{- range .ReworkFeedback.ReviewFindings}}
+FINDING: {{.Source}} {{.Severity}} {{.File}}:{{.Line}} {{.Issue}} -> {{.Suggestion}}
+{{- end}}
+{{- end}}
+`
+	for _, name := range []string{"implement.md", "prompts/review-go.md", "prompts/review-harness.md"} {
+		tmplPath := filepath.Join(promptDir, name)
+		if err := os.MkdirAll(filepath.Dir(tmplPath), 0755); err != nil {
+			t.Fatal(err)
+		}
+		content := implTmpl
+		if strings.Contains(name, "review") {
+			content = fmt.Sprintf("Reviewer: %s\nTicket: {{.Ticket.Key}}\n", name)
+		}
+		if err := os.WriteFile(tmplPath, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	state, err := LoadOrCreate(stateDir, "REVFB-1")
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+
+	var events []Event
+	cfg := EngineConfig{
+		Pipeline:   &PhasePipeline{Phases: phases},
+		Loader:     NewPromptLoader(promptDir),
+		Ticket:     TicketData{Key: "REVFB-1", Summary: "Review feedback test"},
+		Model:      "test-model",
+		WorkDir:    workDir,
+		MaxCostUSD: 0,
+		Mode:       Autonomous,
+		SleepFunc:  func(time.Duration) {},
+		JitterFunc: func(time.Duration) time.Duration { return 0 },
+		OnEvent: func(e Event) {
+			events = append(events, e)
+		},
+	}
+
+	engine := NewEngine(mock, state, cfg)
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Find the second implement call (the rework run).
+	implCalls := 0
+	var reworkPrompt string
+	for _, call := range mock.calls {
+		if call.Phase == "implement" {
+			implCalls++
+			if implCalls == 2 {
+				reworkPrompt = call.SystemPrompt
+			}
+		}
+	}
+	if implCalls != 2 {
+		t.Fatalf("implement called %d times, want 2", implCalls)
+	}
+
+	// The rework prompt should contain review findings.
+	if !strings.Contains(reworkPrompt, "REWORK_SOURCE: review") {
+		t.Errorf("rework prompt should contain REWORK_SOURCE: review;\ngot: %s", reworkPrompt)
+	}
+	if !strings.Contains(reworkPrompt, "REWORK_VERDICT: rework") {
+		t.Errorf("rework prompt should contain REWORK_VERDICT: rework;\ngot: %s", reworkPrompt)
+	}
+	if !strings.Contains(reworkPrompt, "FINDING: go-specialist critical handler.go:42 nil pointer dereference -> add nil check") {
+		t.Errorf("rework prompt should contain go-specialist finding;\ngot: %s", reworkPrompt)
+	}
+	if !strings.Contains(reworkPrompt, "FINDING: ai-harness major prompts/plan.md:0 missing template guard -> add if block") {
+		t.Errorf("rework prompt should contain ai-harness finding;\ngot: %s", reworkPrompt)
+	}
+
+	// Should have rework_feedback_injected event.
+	hasInjection := false
+	for _, e := range events {
+		if e.Kind == EventReworkFeedbackInjected {
+			hasInjection = true
+			source, _ := e.Data["source"].(string)
+			if source != "review" {
+				t.Errorf("injection event source = %q, want %q", source, "review")
+			}
+		}
+	}
+	if !hasInjection {
+		t.Error("rework_feedback_injected event not emitted for review rework")
+	}
+}
+
+func TestEngine_ReviewReworkDefaultMaxCycles(t *testing.T) {
+	// Verify that the default max rework cycles is 2.
+	cfg := EngineConfig{}
+	if cfg.maxReworkCycles() != DefaultMaxReworkCycles {
+		t.Errorf("default maxReworkCycles() = %d, want %d", cfg.maxReworkCycles(), DefaultMaxReworkCycles)
+	}
+	if DefaultMaxReworkCycles != 2 {
+		t.Errorf("DefaultMaxReworkCycles = %d, want 2", DefaultMaxReworkCycles)
+	}
+}
+
+func TestEngine_ReviewReworkCyclesPersisted(t *testing.T) {
+	// Verify rework cycles are persisted to meta.json across engine restarts.
+	stateDir := t.TempDir()
+	state, err := LoadOrCreate(stateDir, "PERSIST-1")
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+
+	state.Meta().ReworkCycles = 3
+	if err := state.flushMeta(); err != nil {
+		t.Fatalf("flushMeta: %v", err)
+	}
+
+	// Re-read state from disk.
+	state2, err := LoadOrCreate(stateDir, "PERSIST-1")
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+
+	if state2.Meta().ReworkCycles != 3 {
+		t.Errorf("ReworkCycles after reload = %d, want 3", state2.Meta().ReworkCycles)
+	}
+}
+
+func TestExtractReviewReworkFeedback(t *testing.T) {
+	t.Run("returns_nil_when_no_review_result", func(t *testing.T) {
+		stateDir := t.TempDir()
+		state, _ := LoadOrCreate(stateDir, "TEST-1")
+
+		engine := &Engine{state: state, config: EngineConfig{}}
+		if fb := engine.extractReviewReworkFeedback(); fb != nil {
+			t.Error("expected nil when no review result exists")
+		}
+	})
+
+	t.Run("returns_nil_when_verdict_is_pass", func(t *testing.T) {
+		stateDir := t.TempDir()
+		state, _ := LoadOrCreate(stateDir, "TEST-1")
+		_ = state.MarkRunning("review")
+		_ = state.WriteResult("review", json.RawMessage(`{"verdict":"pass","findings":[]}`))
+		_ = state.MarkCompleted("review")
+
+		engine := &Engine{state: state, config: EngineConfig{}}
+		if fb := engine.extractReviewReworkFeedback(); fb != nil {
+			t.Error("expected nil when verdict is pass")
+		}
+	})
+
+	t.Run("returns_nil_when_verdict_is_pass_with_follow_ups", func(t *testing.T) {
+		stateDir := t.TempDir()
+		state, _ := LoadOrCreate(stateDir, "TEST-1")
+		_ = state.MarkRunning("review")
+		_ = state.WriteResult("review", json.RawMessage(`{"verdict":"pass-with-follow-ups","findings":[{"severity":"minor","issue":"style"}]}`))
+		_ = state.MarkCompleted("review")
+
+		engine := &Engine{state: state, config: EngineConfig{}}
+		if fb := engine.extractReviewReworkFeedback(); fb != nil {
+			t.Error("expected nil when verdict is pass-with-follow-ups")
+		}
+	})
+
+	t.Run("returns_feedback_when_verdict_is_rework", func(t *testing.T) {
+		stateDir := t.TempDir()
+		state, _ := LoadOrCreate(stateDir, "TEST-1")
+		_ = state.MarkRunning("review")
+		reviewResult := `{
+			"verdict": "rework",
+			"findings": [
+				{"source":"go-specialist","severity":"critical","file":"a.go","line":10,"issue":"nil deref","suggestion":"check nil"},
+				{"source":"ai-harness","severity":"major","file":"b.go","line":20,"issue":"missing guard","suggestion":"add guard"},
+				{"source":"go-specialist","severity":"minor","file":"c.go","line":30,"issue":"naming","suggestion":"rename"}
+			]
+		}`
+		_ = state.WriteResult("review", json.RawMessage(reviewResult))
+		_ = state.MarkCompleted("review")
+
+		engine := &Engine{state: state, config: EngineConfig{}}
+		fb := engine.extractReviewReworkFeedback()
+		if fb == nil {
+			t.Fatal("expected non-nil feedback for rework verdict")
+		}
+
+		if fb.Source != "review" {
+			t.Errorf("Source = %q, want %q", fb.Source, "review")
+		}
+		if fb.Verdict != "rework" {
+			t.Errorf("Verdict = %q, want %q", fb.Verdict, "rework")
+		}
+
+		// Only critical and major findings should be included (not minor).
+		if len(fb.ReviewFindings) != 2 {
+			t.Fatalf("ReviewFindings count = %d, want 2", len(fb.ReviewFindings))
+		}
+
+		if fb.ReviewFindings[0].Source != "go-specialist" || fb.ReviewFindings[0].Severity != "critical" {
+			t.Errorf("first finding = %+v, want go-specialist/critical", fb.ReviewFindings[0])
+		}
+		if fb.ReviewFindings[1].Source != "ai-harness" || fb.ReviewFindings[1].Severity != "major" {
+			t.Errorf("second finding = %+v, want ai-harness/major", fb.ReviewFindings[1])
+		}
+	})
+}
