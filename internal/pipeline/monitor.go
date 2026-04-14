@@ -52,11 +52,12 @@ type PRStatus struct {
 
 // PRComment represents a review comment on a pull request.
 type PRComment struct {
-	ID     string
-	Author string
-	Body   string
-	Path   string // file path (empty for general PR comments)
-	Line   int    // line number (0 for general comments)
+	ID        string
+	Author    string
+	Body      string
+	Path      string    // file path (empty for general PR comments)
+	Line      int       // line number (0 for general comments)
+	CreatedAt time.Time // when the comment was posted (zero if unknown)
 }
 
 // CIStatus holds the aggregate CI status and per-job details.

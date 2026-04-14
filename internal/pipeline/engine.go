@@ -31,23 +31,27 @@ const DefaultMaxReworkCycles = 2
 
 // EngineConfig holds everything needed to construct an Engine.
 type EngineConfig struct {
-	Pipeline        *PhasePipeline
-	Loader          *PromptLoader
-	Ticket          TicketData
-	PromptConfig    PromptConfigData
-	PromptContext   ContextData
-	Model           string
-	WorkDir         string
-	WorktreeBase    string
-	BaseBranch      string
-	MaxCostUSD      float64
-	MaxReworkCycles int // max review→implement rework loops; 0 means use default (2)
-	Mode            Mode
-	OnEvent         func(Event)
-	SleepFunc       func(time.Duration)
-	JitterFunc      func(max time.Duration) time.Duration
-	PRPoller        PRPoller         // for monitor phase polling; nil disables monitor
-	NowFunc         func() time.Time // for testability; defaults to time.Now
+	Pipeline          *PhasePipeline
+	Loader            *PromptLoader
+	Ticket            TicketData
+	PromptConfig      PromptConfigData
+	PromptContext     ContextData
+	Model             string
+	WorkDir           string
+	WorktreeBase      string
+	BaseBranch        string
+	MaxCostUSD        float64
+	MaxReworkCycles   int // max review→implement rework loops; 0 means use default (2)
+	Mode              Mode
+	OnEvent           func(Event)
+	SleepFunc         func(time.Duration)
+	JitterFunc        func(max time.Duration) time.Duration
+	PRPoller          PRPoller          // for monitor phase polling; nil disables monitor
+	NowFunc           func() time.Time  // for testability; defaults to time.Now
+	AuthorityResolver AuthorityResolver // for comment authority checks; nil → all authoritative
+	MonitorProfile    *MonitorProfile   // behavioral profile; nil → use polling config as-is
+	SelfUser          string            // PR author username for self-comment filtering
+	BotUsers          []string          // known bot usernames to filter
 }
 
 // maxReworkCycles returns the configured max rework cycles, defaulting to DefaultMaxReworkCycles.
