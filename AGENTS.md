@@ -217,6 +217,8 @@ Atomic writes: always write to `.tmp` then rename. Archive on re-run (`verify.js
 
 ## Implementation workflow
 
+**All development must be done using soda itself.** Run `soda run <ticket>` to implement issues through the pipeline. Do not implement tickets manually outside of soda unless the pipeline is broken or the work is on soda's own pipeline infrastructure.
+
 Issues are fully specified with acceptance criteria.
 Do NOT write separate spec or plan documents.
 Read the issue, read the existing code, implement, test.
