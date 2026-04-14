@@ -70,6 +70,28 @@ repos:
     trailers:
       - "Assisted-by: SODA <noreply@soda.dev>"
 
+# Monitor phase configuration
+monitor:
+  # Profile preset: conservative, smart, or aggressive
+  # - conservative: 5min polls, 2 rounds, no auto-fix nits, no auto-rebase
+  # - smart (default): 2min polls, 3 rounds, auto-fix nits, auto-rebase
+  # - aggressive: 1min polls, 5 rounds, auto-fix nits, auto-rebase, respond to non-auth
+  profile: smart
+
+  # PR author username (for self-comment filtering)
+  self_user: soda-bot
+
+  # Known bot usernames to filter out
+  bot_users:
+    - dependabot
+    - renovate
+    - codecov
+
+  # CODEOWNERS-based authority resolution (optional)
+  # When set, only comments from file owners are treated as actionable.
+  # If unset, all commenters are treated as authoritative.
+  # codeowners: .github/CODEOWNERS
+
 # Prompt overrides (optional)
 # Place custom prompts in ~/.config/soda/prompts/<phase>.md
 # They take precedence over built-in prompts.
