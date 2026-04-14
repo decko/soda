@@ -971,18 +971,9 @@ func (e *Engine) gatePhase(phase PhaseConfig) error {
 // reviewerResult holds the outcome of a single reviewer subagent.
 type reviewerResult struct {
 	Name     string
-	Findings []reviewFinding
+	Findings []schemas.ReviewFinding
 	Cost     float64
 	Err      error
-}
-
-// reviewFinding mirrors the structured output each reviewer returns.
-type reviewFinding struct {
-	Severity   string `json:"severity"`
-	File       string `json:"file"`
-	Line       int    `json:"line,omitempty"`
-	Issue      string `json:"issue"`
-	Suggestion string `json:"suggestion"`
 }
 
 // reviewerMsg is sent from reviewer goroutines to the parent via channel.
@@ -1206,10 +1197,10 @@ func (e *Engine) runReviewer(ctx context.Context, phase PhaseConfig, reviewer Re
 	}
 
 	// Parse findings from the structured output.
-	var findings []reviewFinding
+	var findings []schemas.ReviewFinding
 	if result.Output != nil {
 		var parsed struct {
-			Findings []reviewFinding `json:"findings"`
+			Findings []schemas.ReviewFinding `json:"findings"`
 		}
 		if parseErr := json.Unmarshal(result.Output, &parsed); parseErr != nil {
 			sendEvent(Event{
@@ -1245,14 +1236,8 @@ func (e *Engine) mergeReviewFindings(phase PhaseConfig, results []reviewerResult
 
 	for _, result := range results {
 		for _, finding := range result.Findings {
-			allFindings = append(allFindings, schemas.ReviewFinding{
-				Source:     result.Name,
-				Severity:   finding.Severity,
-				File:       finding.File,
-				Line:       finding.Line,
-				Issue:      finding.Issue,
-				Suggestion: finding.Suggestion,
-			})
+			finding.Source = result.Name
+			allFindings = append(allFindings, finding)
 		}
 	}
 
