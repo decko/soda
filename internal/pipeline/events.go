@@ -33,6 +33,7 @@ const (
 	EventMonitorSkipped         = "monitor_skipped"
 	EventReworkFeedbackInjected = "rework_feedback_injected"
 	EventReworkFeedbackSkipped  = "rework_feedback_skipped"
+	EventPromptLoaded           = "prompt_loaded"
 )
 
 // logEvent appends an event to the events.jsonl file in dir.
