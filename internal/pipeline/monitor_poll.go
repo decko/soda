@@ -39,7 +39,15 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 		})
 	} else if polling != nil && polling.Profile != "" {
 		p, err := GetMonitorProfile(polling.Profile)
-		if err == nil {
+		if err != nil {
+			e.emit(Event{
+				Phase: phase.Name,
+				Kind:  EventMonitorWarning,
+				Data: map[string]any{
+					"warning": fmt.Sprintf("invalid profile %q, using defaults: %v", polling.Profile, err),
+				},
+			})
+		} else {
 			profile = p
 			polling = profile.ToPollingConfig()
 			e.emit(Event{
@@ -174,7 +182,8 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 		e.checkCIStatus(ctx, phase.Name, monState)
 
 		// 4. Check for merge conflicts and auto-rebase.
-		e.checkMergeConflicts(ctx, phase.Name, monState)
+		autoRebase := profile == nil || profile.ShouldAutoRebase()
+		e.checkMergeConflicts(ctx, phase.Name, monState, autoRebase)
 
 		// 5. Check max response rounds.
 		if monState.ResponseRounds >= monState.MaxResponseRounds {
@@ -383,7 +392,7 @@ func (e *Engine) checkCIStatus(ctx context.Context, phaseName string, monState *
 
 // checkMergeConflicts detects merge conflicts and attempts auto-rebase
 // if the monitor profile allows it (or if no profile is configured).
-func (e *Engine) checkMergeConflicts(ctx context.Context, phaseName string, monState *MonitorState) {
+func (e *Engine) checkMergeConflicts(ctx context.Context, phaseName string, monState *MonitorState, autoRebase bool) {
 	workDir := e.state.Meta().Worktree
 	if workDir == "" {
 		workDir = e.config.WorkDir
@@ -411,6 +420,11 @@ func (e *Engine) checkMergeConflicts(ctx context.Context, phaseName string, monS
 		Kind:  EventMonitorConflict,
 		Data:  map[string]any{"base_branch": baseBranch},
 	})
+
+	// Skip auto-rebase if profile disallows it.
+	if !autoRebase {
+		return
+	}
 
 	// Attempt auto-rebase.
 	if err := git.Rebase(ctx, workDir, "origin/"+baseBranch); err != nil {

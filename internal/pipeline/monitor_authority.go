@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"bufio"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,7 +46,7 @@ func NewCODEOWNERSAuthority(rules []CODEOWNERSRule) *CODEOWNERSAuthority {
 func ParseCODEOWNERS(path string) ([]CODEOWNERSRule, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("pipeline: parse CODEOWNERS %s: %w", path, err)
 	}
 	defer f.Close()
 
@@ -86,7 +87,7 @@ func parseCODEOWNERSReader(scanner *bufio.Scanner) ([]CODEOWNERSRule, error) {
 	}
 
 	if err := scanner.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("pipeline: scan CODEOWNERS: %w", err)
 	}
 
 	return rules, nil
@@ -186,14 +187,6 @@ func matchPattern(pattern, filePath string) bool {
 	if strings.Contains(cleanPattern, "*") && !strings.Contains(cleanPattern, "/") {
 		base := filepath.Base(filePath)
 		if matched, err := filepath.Match(cleanPattern, base); err == nil && matched {
-			return true
-		}
-	}
-
-	// For patterns with directory components, try matching as a prefix pattern.
-	// e.g., "docs/*.md" should match "docs/README.md"
-	if strings.Contains(cleanPattern, "/") {
-		if matched, err := filepath.Match(cleanPattern, filePath); err == nil && matched {
 			return true
 		}
 	}
