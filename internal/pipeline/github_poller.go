@@ -45,9 +45,8 @@ func parsePRRef(prURL string) (owner, repo, number string, err error) {
 
 // ghPR is the response from gh pr view.
 type ghPR struct {
-	State             string    `json:"state"`          // "OPEN", "CLOSED", "MERGED"
-	ReviewDecision    string    `json:"reviewDecision"` // "APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED", ""
-	StatusCheckRollup []ghCheck `json:"statusCheckRollup"`
+	State          string `json:"state"`          // "OPEN", "CLOSED", "MERGED"
+	ReviewDecision string `json:"reviewDecision"` // "APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED", ""
 }
 
 // ghCheck is a single CI check from the PR status.
@@ -139,26 +138,39 @@ func (p *GitHubPRPoller) GetNewComments(ctx context.Context, prURL string, after
 		return nil, fmt.Errorf("monitor: parse issue comments: %w", err)
 	}
 
-	comments = append(comments, issueComments...)
-
-	// Filter to comments after afterID and convert.
-	var result []PRComment
-	pastAfter := afterID == ""
+	// Convert review comments with RC_ prefix.
+	var allComments []PRComment
 	for _, comment := range comments {
-		commentID := fmt.Sprintf("IC_%d", comment.ID)
-		if !pastAfter {
-			if commentID == afterID {
-				pastAfter = true
-			}
-			continue
-		}
-		result = append(result, PRComment{
-			ID:     commentID,
+		allComments = append(allComments, PRComment{
+			ID:     fmt.Sprintf("RC_%d", comment.ID),
 			Author: comment.User.Login,
 			Body:   comment.Body,
 			Path:   comment.Path,
 			Line:   comment.Line,
 		})
+	}
+	// Convert issue comments with IC_ prefix.
+	for _, comment := range issueComments {
+		allComments = append(allComments, PRComment{
+			ID:     fmt.Sprintf("IC_%d", comment.ID),
+			Author: comment.User.Login,
+			Body:   comment.Body,
+			Path:   comment.Path,
+			Line:   comment.Line,
+		})
+	}
+
+	// Filter to comments after afterID.
+	var result []PRComment
+	pastAfter := afterID == ""
+	for _, prComment := range allComments {
+		if !pastAfter {
+			if prComment.ID == afterID {
+				pastAfter = true
+			}
+			continue
+		}
+		result = append(result, prComment)
 	}
 
 	return result, nil

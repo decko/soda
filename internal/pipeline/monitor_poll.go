@@ -3,7 +3,6 @@ package pipeline
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/decko/soda/internal/git"
@@ -377,20 +376,3 @@ func (e *Engine) pollInterval(polling *PollingConfig, elapsed time.Duration) tim
 	return polling.InitialInterval.Duration
 }
 
-// formatCIFailure formats CI failure information for notification.
-func formatCIFailure(jobs []CIJobInfo) string {
-	var parts []string
-	for _, job := range jobs {
-		if job.Conclusion == "failure" || job.Conclusion == "timed_out" || job.Conclusion == "cancelled" {
-			detail := job.Name + " (" + job.Conclusion + ")"
-			if job.ExitCode != 0 {
-				detail = fmt.Sprintf("%s (exit %d)", job.Name, job.ExitCode)
-			}
-			parts = append(parts, detail)
-		}
-	}
-	if len(parts) == 0 {
-		return "CI failed"
-	}
-	return "CI failed: " + strings.Join(parts, ", ")
-}

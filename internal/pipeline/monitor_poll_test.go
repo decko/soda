@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -476,7 +477,7 @@ func TestMonitor_ContextCancellation(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from cancelled context")
 	}
-	if !contains(err.Error(), "cancel") {
+	if !strings.Contains(err.Error(), "cancel") {
 		t.Errorf("expected cancellation error, got: %v", err)
 	}
 }
@@ -606,63 +607,3 @@ func TestMonitor_CIStatusNoChangeDoesNotEmit(t *testing.T) {
 	}
 }
 
-func TestFormatCIFailure(t *testing.T) {
-	tests := []struct {
-		name string
-		jobs []CIJobInfo
-		want string
-	}{
-		{
-			name: "single_failure",
-			jobs: []CIJobInfo{
-				{Name: "test", Conclusion: "failure"},
-				{Name: "lint", Conclusion: "success"},
-			},
-			want: "CI failed: test (failure)",
-		},
-		{
-			name: "multiple_failures",
-			jobs: []CIJobInfo{
-				{Name: "test", Conclusion: "failure"},
-				{Name: "build", Conclusion: "timed_out"},
-			},
-			want: "CI failed: test (failure), build (timed_out)",
-		},
-		{
-			name: "with_exit_code",
-			jobs: []CIJobInfo{
-				{Name: "test", Conclusion: "failure", ExitCode: 1},
-			},
-			want: "CI failed: test (exit 1)",
-		},
-		{
-			name: "no_failures",
-			jobs: []CIJobInfo{
-				{Name: "test", Conclusion: "success"},
-			},
-			want: "CI failed",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := formatCIFailure(tt.jobs)
-			if got != tt.want {
-				t.Errorf("formatCIFailure = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsSubstring(s, substr))
-}
-
-func containsSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}
