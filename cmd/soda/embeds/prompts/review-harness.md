@@ -38,7 +38,7 @@ Review the implementation as an AI harness specialist. Focus on:
 ### 1. Prompt template correctness
 - Do templates use valid Go text/template syntax?
 - Are all referenced fields present in PromptData?
-- Are optional sections guarded with `{{if}}` blocks?
+- Are optional sections guarded with if blocks?
 - Could templates cause rendering failures?
 
 ### 2. Context budget impact
