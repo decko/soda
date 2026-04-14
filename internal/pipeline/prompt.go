@@ -161,7 +161,7 @@ func (loader *PromptLoader) Load(name string) (string, error) {
 
 // RenderPrompt executes a Go text/template against the given data.
 func RenderPrompt(tmpl string, data PromptData) (string, error) {
-	parsed, err := template.New("prompt").Parse(tmpl)
+	parsed, err := template.New("prompt").Option("missingkey=error").Parse(tmpl)
 	if err != nil {
 		return "", fmt.Errorf("prompt: parse template: %w", err)
 	}

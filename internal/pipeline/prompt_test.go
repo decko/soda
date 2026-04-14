@@ -213,4 +213,11 @@ Verdict: {{.ReworkFeedback.Verdict}}
 			t.Errorf("result should not contain feedback section when nil, got: %s", result)
 		}
 	})
+
+	t.Run("errors_on_nonexistent_field", func(t *testing.T) {
+		_, err := RenderPrompt("{{.NonExistentField}}", PromptData{})
+		if err == nil {
+			t.Fatal("expected error for non-existent field on PromptData")
+		}
+	})
 }
