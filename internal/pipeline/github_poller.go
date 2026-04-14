@@ -83,7 +83,7 @@ func (p *GitHubPRPoller) GetPRStatus(ctx context.Context, prURL string) (*PRStat
 		"--json", "state,reviewDecision",
 	).Output()
 	if err != nil {
-		return nil, fmt.Errorf("monitor: get PR status: %w%s", err, ghStderr(err))
+		return nil, fmt.Errorf("monitor: get PR status: %w: %s", err, ghStderr(err))
 	}
 
 	var pr ghPR
@@ -115,7 +115,7 @@ func (p *GitHubPRPoller) GetNewComments(ctx context.Context, prURL string, after
 		"--paginate",
 	).Output()
 	if err != nil {
-		return nil, fmt.Errorf("monitor: get comments: %w%s", err, ghStderr(err))
+		return nil, fmt.Errorf("monitor: get comments: %w: %s", err, ghStderr(err))
 	}
 
 	var comments []ghComment
@@ -130,7 +130,7 @@ func (p *GitHubPRPoller) GetNewComments(ctx context.Context, prURL string, after
 		"--paginate",
 	).Output()
 	if err != nil {
-		return nil, fmt.Errorf("monitor: get issue comments: %w%s", err, ghStderr(err))
+		return nil, fmt.Errorf("monitor: get issue comments: %w: %s", err, ghStderr(err))
 	}
 
 	var issueComments []ghComment
@@ -191,7 +191,7 @@ func (p *GitHubPRPoller) GetCIStatus(ctx context.Context, prURL string) (*CIStat
 		"--json", "statusCheckRollup",
 	).Output()
 	if err != nil {
-		return nil, fmt.Errorf("monitor: get CI status: %w%s", err, ghStderr(err))
+		return nil, fmt.Errorf("monitor: get CI status: %w: %s", err, ghStderr(err))
 	}
 
 	var pr struct {
@@ -252,7 +252,7 @@ func (p *GitHubPRPoller) GetCIStatus(ctx context.Context, prURL string) (*CIStat
 func ghStderr(err error) string {
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
-		return " (stderr: " + strings.TrimSpace(string(exitErr.Stderr)) + ")"
+		return "(stderr: " + strings.TrimSpace(string(exitErr.Stderr)) + ")"
 	}
 	return ""
 }
