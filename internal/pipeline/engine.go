@@ -768,17 +768,7 @@ func (e *Engine) extractReviewReworkFeedback() *ReworkFeedback {
 		return nil
 	}
 
-	var result struct {
-		Verdict  string `json:"verdict"`
-		Findings []struct {
-			Source     string `json:"source"`
-			Severity   string `json:"severity"`
-			File       string `json:"file"`
-			Line       int    `json:"line,omitempty"`
-			Issue      string `json:"issue"`
-			Suggestion string `json:"suggestion"`
-		} `json:"findings"`
-	}
+	var result schemas.ReviewOutput
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil
 	}
@@ -795,14 +785,7 @@ func (e *Engine) extractReviewReworkFeedback() *ReworkFeedback {
 	for _, finding := range result.Findings {
 		sev := strings.ToLower(finding.Severity)
 		if sev == "critical" || sev == "major" {
-			fb.ReviewFindings = append(fb.ReviewFindings, ReviewReworkFinding{
-				Source:     finding.Source,
-				Severity:   finding.Severity,
-				File:       finding.File,
-				Line:       finding.Line,
-				Issue:      finding.Issue,
-				Suggestion: finding.Suggestion,
-			})
+			fb.ReviewFindings = append(fb.ReviewFindings, finding)
 		}
 	}
 
