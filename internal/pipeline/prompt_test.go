@@ -71,6 +71,174 @@ func TestPromptLoader(t *testing.T) {
 	})
 }
 
+func TestLoadWithSource(t *testing.T) {
+	t.Run("returns_override_source", func(t *testing.T) {
+		override := t.TempDir()
+		builtin := t.TempDir()
+		os.WriteFile(filepath.Join(override, "plan.md"), []byte("custom {{.Ticket.Key}}"), 0644)
+		os.WriteFile(filepath.Join(builtin, "plan.md"), []byte("default plan"), 0644)
+
+		loader := NewPromptLoader(override, builtin)
+		result, err := loader.LoadWithSource("plan.md")
+		if err != nil {
+			t.Fatalf("LoadWithSource: %v", err)
+		}
+		if result.Content != "custom {{.Ticket.Key}}" {
+			t.Errorf("content = %q, want custom override", result.Content)
+		}
+		if !result.IsOverride {
+			t.Error("expected IsOverride = true for first-dir match")
+		}
+		if result.Fallback {
+			t.Error("expected Fallback = false when override is valid")
+		}
+		if !strings.HasSuffix(result.Source, "plan.md") {
+			t.Errorf("source = %q, want path ending in plan.md", result.Source)
+		}
+	})
+
+	t.Run("returns_embedded_source", func(t *testing.T) {
+		override := t.TempDir() // empty
+		builtin := t.TempDir()
+		os.WriteFile(filepath.Join(builtin, "verify.md"), []byte("builtin verify"), 0644)
+
+		loader := NewPromptLoader(override, builtin)
+		result, err := loader.LoadWithSource("verify.md")
+		if err != nil {
+			t.Fatalf("LoadWithSource: %v", err)
+		}
+		if result.Content != "builtin verify" {
+			t.Errorf("content = %q, want builtin verify", result.Content)
+		}
+		if result.IsOverride {
+			t.Error("expected IsOverride = false for last-dir match")
+		}
+	})
+
+	t.Run("falls_back_on_invalid_override_syntax", func(t *testing.T) {
+		override := t.TempDir()
+		builtin := t.TempDir()
+		os.WriteFile(filepath.Join(override, "bad.md"), []byte("{{.Invalid}"), 0644)
+		os.WriteFile(filepath.Join(builtin, "bad.md"), []byte("fallback content"), 0644)
+
+		loader := NewPromptLoader(override, builtin)
+		result, err := loader.LoadWithSource("bad.md")
+		if err != nil {
+			t.Fatalf("LoadWithSource: %v", err)
+		}
+		if result.Content != "fallback content" {
+			t.Errorf("content = %q, want fallback content", result.Content)
+		}
+		if result.IsOverride {
+			t.Error("expected IsOverride = false after fallback to last dir")
+		}
+		if !result.Fallback {
+			t.Error("expected Fallback = true when override was invalid")
+		}
+		if result.FallbackReason == "" {
+			t.Error("expected non-empty FallbackReason")
+		}
+	})
+
+	t.Run("falls_back_on_invalid_override_field", func(t *testing.T) {
+		override := t.TempDir()
+		builtin := t.TempDir()
+		os.WriteFile(filepath.Join(override, "plan.md"), []byte("{{.NonExistentField}}"), 0644)
+		os.WriteFile(filepath.Join(builtin, "plan.md"), []byte("default plan"), 0644)
+
+		loader := NewPromptLoader(override, builtin)
+		result, err := loader.LoadWithSource("plan.md")
+		if err != nil {
+			t.Fatalf("LoadWithSource: %v", err)
+		}
+		if result.Content != "default plan" {
+			t.Errorf("content = %q, want default plan", result.Content)
+		}
+		if !result.Fallback {
+			t.Error("expected Fallback = true for invalid field reference")
+		}
+		if !strings.Contains(result.FallbackReason, "invalid") {
+			t.Errorf("FallbackReason = %q, want to contain 'invalid'", result.FallbackReason)
+		}
+	})
+
+	t.Run("valid_override_with_three_dirs", func(t *testing.T) {
+		configDir := t.TempDir()
+		workDir := t.TempDir()
+		embedDir := t.TempDir()
+		os.WriteFile(filepath.Join(configDir, "t.md"), []byte("config override {{.Ticket.Key}}"), 0644)
+		os.WriteFile(filepath.Join(workDir, "t.md"), []byte("work override"), 0644)
+		os.WriteFile(filepath.Join(embedDir, "t.md"), []byte("embedded"), 0644)
+
+		loader := NewPromptLoader(configDir, workDir, embedDir)
+		result, err := loader.LoadWithSource("t.md")
+		if err != nil {
+			t.Fatalf("LoadWithSource: %v", err)
+		}
+		if result.Content != "config override {{.Ticket.Key}}" {
+			t.Errorf("content = %q, want config override", result.Content)
+		}
+		if !result.IsOverride {
+			t.Error("expected IsOverride = true")
+		}
+	})
+
+	t.Run("cascading_fallback_through_multiple_invalid_overrides", func(t *testing.T) {
+		dir1 := t.TempDir()
+		dir2 := t.TempDir()
+		dir3 := t.TempDir()
+		os.WriteFile(filepath.Join(dir1, "p.md"), []byte("{{.Bad1}"), 0644)
+		os.WriteFile(filepath.Join(dir2, "p.md"), []byte("{{.Bad2}"), 0644)
+		os.WriteFile(filepath.Join(dir3, "p.md"), []byte("final good"), 0644)
+
+		loader := NewPromptLoader(dir1, dir2, dir3)
+		result, err := loader.LoadWithSource("p.md")
+		if err != nil {
+			t.Fatalf("LoadWithSource: %v", err)
+		}
+		if result.Content != "final good" {
+			t.Errorf("content = %q, want final good", result.Content)
+		}
+		if !result.Fallback {
+			t.Error("expected Fallback = true")
+		}
+	})
+
+	t.Run("single_dir_skips_validation", func(t *testing.T) {
+		dir := t.TempDir()
+		// Even an invalid template in the only (embedded) dir is returned as-is.
+		os.WriteFile(filepath.Join(dir, "only.md"), []byte("raw content no templates"), 0644)
+
+		loader := NewPromptLoader(dir)
+		result, err := loader.LoadWithSource("only.md")
+		if err != nil {
+			t.Fatalf("LoadWithSource: %v", err)
+		}
+		if result.IsOverride {
+			t.Error("expected IsOverride = false for single dir")
+		}
+		if result.Fallback {
+			t.Error("expected Fallback = false for single dir")
+		}
+	})
+
+	t.Run("load_delegates_to_load_with_source", func(t *testing.T) {
+		override := t.TempDir()
+		builtin := t.TempDir()
+		os.WriteFile(filepath.Join(override, "x.md"), []byte("{{.Bogus}"), 0644)
+		os.WriteFile(filepath.Join(builtin, "x.md"), []byte("safe content"), 0644)
+
+		loader := NewPromptLoader(override, builtin)
+		content, err := loader.Load("x.md")
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if content != "safe content" {
+			t.Errorf("Load should have fallen back, got %q", content)
+		}
+	})
+}
+
 func TestValidateTemplate(t *testing.T) {
 	t.Run("valid_template_with_fields", func(t *testing.T) {
 		tmpl := "Key: {{.Ticket.Key}}\nSummary: {{.Ticket.Summary}}"
