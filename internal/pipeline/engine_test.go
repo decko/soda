@@ -4189,3 +4189,202 @@ func TestExtractReviewReworkFeedback(t *testing.T) {
 		}
 	})
 }
+
+func TestEngine_SkippedReviewPhaseReworkSignalRoutesToImplement(t *testing.T) {
+	// Scenario: review phase completed with "rework" verdict in a prior run.
+	// On re-run, review is skipped (deps unchanged), but its stored gate
+	// result still contains the rework verdict. The engine should handle the
+	// reviewReworkSignal by routing back to implement, NOT returning a
+	// terminal error.
+	phases := []PhaseConfig{
+		{
+			Name:   "implement",
+			Prompt: "implement.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "verify",
+			Prompt:    "verify.md",
+			DependsOn: []string{"implement"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "review",
+			Type:      "parallel-review",
+			DependsOn: []string{"implement", "verify"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Reviewers: []ReviewerConfig{
+				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+			},
+		},
+		{
+			Name:      "submit",
+			Prompt:    "submit.md",
+			DependsOn: []string{"review"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	// First run: all phases complete, review returns rework → routed,
+	// second pass review returns pass → submit.
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true,"commits":1}`),
+					RawText: "Impl v1",
+					CostUSD: 0.50,
+				}},
+				// Rework cycle implement.
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true,"commits":2}`),
+					RawText: "Impl v2",
+					CostUSD: 0.50,
+				}},
+			},
+			"verify": {
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"verdict":"PASS"}`),
+					RawText: "Verify v1",
+					CostUSD: 0.10,
+				}},
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"verdict":"PASS"}`),
+					RawText: "Verify v2",
+					CostUSD: 0.10,
+				}},
+			},
+			"review/go-specialist": {
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[{"severity":"critical","file":"x.go","line":1,"issue":"nil deref","suggestion":"add nil check"}]}`),
+					RawText: "Critical issue",
+					CostUSD: 0.15,
+				}},
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[]}`),
+					RawText: "All clear",
+					CostUSD: 0.10,
+				}},
+			},
+			"submit": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"pr_url":"https://github.com/org/repo/pull/1"}`),
+					RawText: "PR created",
+					CostUSD: 0.05,
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, state := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(e Event) {
+			events = append(events, e)
+		}
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Sanity: all phases completed, rework cycle = 1.
+	for _, name := range []string{"implement", "verify", "review", "submit"} {
+		if !state.IsCompleted(name) {
+			t.Errorf("phase %q should be completed after first run", name)
+		}
+	}
+	if state.Meta().ReworkCycles != 1 {
+		t.Fatalf("ReworkCycles after first run = %d, want 1", state.Meta().ReworkCycles)
+	}
+
+	// --- Second run with the same state ---
+	// Overwrite review result back to "rework" verdict to simulate stale
+	// state from a prior incomplete rework cycle.
+	reworkResult := json.RawMessage(`{"verdict":"rework","findings":[{"severity":"major","file":"y.go","line":5,"issue":"missing error check","suggestion":"handle err"}]}`)
+	if err := state.WriteResult("review", reworkResult); err != nil {
+		t.Fatalf("WriteResult: %v", err)
+	}
+
+	// Set up mock for the second run: implement, verify, review, submit
+	// will all need to run again due to the rework routing.
+	mock2 := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true,"commits":3}`),
+					RawText: "Impl v3",
+					CostUSD: 0.50,
+				},
+			}},
+			"verify": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"verdict":"PASS"}`),
+					RawText: "Verify v3",
+					CostUSD: 0.10,
+				},
+			}},
+			"review/go-specialist": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[]}`),
+					RawText: "All clear",
+					CostUSD: 0.10,
+				},
+			}},
+			"submit": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"pr_url":"https://github.com/org/repo/pull/2"}`),
+					RawText: "PR created v2",
+					CostUSD: 0.05,
+				},
+			}},
+		},
+	}
+
+	events = nil
+	engine2 := NewEngine(mock2, state, engine.config)
+	engine2.config.OnEvent = func(e Event) {
+		events = append(events, e)
+	}
+
+	// Run() should: skip implement (deps unchanged) → skip verify (deps
+	// unchanged) → skip-gate review → detect rework signal → route to
+	// implement → re-run implement, verify, review, submit.
+	if err := engine2.Run(context.Background()); err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+
+	// ReworkCycles should have incremented.
+	if state.Meta().ReworkCycles != 2 {
+		t.Errorf("ReworkCycles after second run = %d, want 2", state.Meta().ReworkCycles)
+	}
+
+	// Should have emitted a review_rework_routed event.
+	hasRouted := false
+	for _, e := range events {
+		if e.Kind == EventReviewReworkRouted {
+			hasRouted = true
+			break
+		}
+	}
+	if !hasRouted {
+		t.Error("review_rework_routed event not emitted on skipped-phase gate path")
+	}
+
+	// Implement should have been called in the second run (via rework routing).
+	implCalls := 0
+	for _, call := range mock2.calls {
+		if call.Phase == "implement" {
+			implCalls++
+		}
+	}
+	if implCalls != 1 {
+		t.Errorf("implement called %d times in second run, want 1", implCalls)
+	}
+
+	// All phases should be completed.
+	for _, name := range []string{"implement", "verify", "review", "submit"} {
+		if !state.IsCompleted(name) {
+			t.Errorf("phase %q should be completed after second run", name)
+		}
+	}
+}

@@ -215,8 +215,12 @@ func (e *Engine) executePhases(ctx context.Context, phases []PhaseConfig, forceF
 		skipCheck := !(forceFirst && idx == 0)
 		if skipCheck && e.shouldSkip(phase) {
 			if err := e.gatePhase(phase); err != nil {
-				// reviewReworkSignal on a skipped phase shouldn't happen
-				// in practice, but treat it as a normal gate error.
+				// Handle review rework signal the same way as the
+				// non-skipped path: route back to implement.
+				var reworkSig *reviewReworkSignal
+				if errors.As(err, &reworkSig) {
+					return e.handleReviewRework(ctx, phase)
+				}
 				return err
 			}
 			e.emit(Event{Phase: phase.Name, Kind: EventPhaseSkipped})
