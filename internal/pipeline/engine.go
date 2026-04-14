@@ -14,6 +14,7 @@ import (
 	"github.com/decko/soda/internal/claude"
 	"github.com/decko/soda/internal/git"
 	"github.com/decko/soda/internal/runner"
+	"github.com/decko/soda/internal/sandbox"
 )
 
 // Mode controls whether the engine pauses between phases.
@@ -506,6 +507,12 @@ func classifyError(err error) string {
 	var se *claude.SemanticError
 	if errors.As(err, &se) {
 		return "semantic"
+	}
+	var ee *sandbox.ExitError
+	if errors.As(err, &ee) {
+		if ee.OOMKill || ee.Signal != 0 {
+			return "transient"
+		}
 	}
 	return "unknown"
 }
