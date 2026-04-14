@@ -160,4 +160,7 @@ func loadArtifacts(state *pipeline.State, data *pipeline.PromptData) {
 	if artifact, err := state.ReadArtifact("verify"); err == nil {
 		data.Artifacts.Verify = string(artifact)
 	}
+	if artifact, err := state.ReadArtifact("review"); err == nil {
+		data.Artifacts.Review = string(artifact)
+	}
 }

@@ -76,6 +76,32 @@ phases:
       - plan
       - implement
 
+  - name: review
+    type: parallel-review
+    schema: |
+      {"type":"object","properties":{"ticket_key":{"type":"string"},"findings":{"type":"array","items":{"type":"object","properties":{"severity":{"type":"string"},"file":{"type":"string"},"line":{"type":"integer"},"issue":{"type":"string"},"suggestion":{"type":"string"}},"required":["severity","file","issue","suggestion"]}},"verdict":{"type":"string"}},"required":["ticket_key","findings","verdict"]}
+    tools:
+      - Read
+      - Glob
+      - Grep
+      - Bash
+    timeout: 5m
+    retry:
+      transient: 2
+      parse: 1
+      semantic: 1
+    depends_on:
+      - plan
+      - implement
+      - verify
+    reviewers:
+      - name: go-specialist
+        prompt: prompts/review-go.md
+        focus: "Go idioms, error handling, interface design, test quality, performance"
+      - name: ai-harness
+        prompt: prompts/review-harness.md
+        focus: "prompt engineering, context budget, Claude CLI integration, sandbox, structured output"
+
   - name: submit
     prompt: prompts/submit.md
     schema: |
@@ -92,6 +118,7 @@ phases:
     depends_on:
       - implement
       - verify
+      - review
 
   - name: monitor
     prompt: prompts/monitor.md

@@ -15,15 +15,24 @@ type PhasePipeline struct {
 
 // PhaseConfig holds the configuration for a single phase.
 type PhaseConfig struct {
-	Name      string         `yaml:"name"`
-	Prompt    string         `yaml:"prompt"`
-	Schema    string         `yaml:"schema"`
-	Tools     []string       `yaml:"tools"`
-	Timeout   Duration       `yaml:"timeout"`
-	Type      string         `yaml:"type"`
-	Retry     RetryConfig    `yaml:"retry"`
-	DependsOn []string       `yaml:"depends_on"`
-	Polling   *PollingConfig `yaml:"polling,omitempty"`
+	Name      string           `yaml:"name"`
+	Prompt    string           `yaml:"prompt"`
+	Schema    string           `yaml:"schema"`
+	Tools     []string         `yaml:"tools"`
+	Timeout   Duration         `yaml:"timeout"`
+	Type      string           `yaml:"type"`
+	Retry     RetryConfig      `yaml:"retry"`
+	DependsOn []string         `yaml:"depends_on"`
+	Polling   *PollingConfig   `yaml:"polling,omitempty"`
+	Reviewers []ReviewerConfig `yaml:"reviewers,omitempty"`
+}
+
+// ReviewerConfig holds configuration for a single specialist reviewer
+// in a parallel-review phase.
+type ReviewerConfig struct {
+	Name   string `yaml:"name"`
+	Prompt string `yaml:"prompt"`
+	Focus  string `yaml:"focus"`
 }
 
 // RetryConfig holds per-category retry limits.

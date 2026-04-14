@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/decko/soda/internal/claude"
@@ -246,6 +247,11 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 	// Polling phases are handled separately.
 	if phase.Type == "polling" {
 		return e.runMonitor(ctx, phase)
+	}
+
+	// Parallel-review phases dispatch multiple reviewers concurrently.
+	if phase.Type == "parallel-review" {
+		return e.runParallelReview(ctx, phase)
 	}
 
 	// Check dependencies.
@@ -514,6 +520,8 @@ func (e *Engine) buildPromptData(phase PhaseConfig) (PromptData, error) {
 			data.Artifacts.Implement = content
 		case "verify":
 			data.Artifacts.Verify = content
+		case "review":
+			data.Artifacts.Review = content
 		case "submit":
 			data.Artifacts.Submit.PRURL = e.extractPRURL()
 		}
@@ -742,6 +750,32 @@ func (e *Engine) gatePhase(phase PhaseConfig) error {
 			return &PhaseGateError{Phase: phase.Name, Reason: reason}
 		}
 
+	case "review":
+		var result struct {
+			Verdict  string `json:"verdict"`
+			Findings []struct {
+				Severity string `json:"severity"`
+				Issue    string `json:"issue"`
+			} `json:"findings"`
+		}
+		if err := json.Unmarshal(raw, &result); err != nil {
+			return nil
+		}
+		if strings.EqualFold(result.Verdict, "rework") {
+			var issues []string
+			for _, finding := range result.Findings {
+				sev := strings.ToLower(finding.Severity)
+				if sev == "critical" || sev == "major" {
+					issues = append(issues, finding.Issue)
+				}
+			}
+			reason := "review requires rework"
+			if len(issues) > 0 {
+				reason = "review requires rework: " + strings.Join(issues, "; ")
+			}
+			return &PhaseGateError{Phase: phase.Name, Reason: reason}
+		}
+
 	case "submit":
 		var result struct {
 			PRURL string `json:"pr_url"`
@@ -755,6 +789,383 @@ func (e *Engine) gatePhase(phase PhaseConfig) error {
 	}
 
 	return nil
+}
+
+// reviewerResult holds the outcome of a single reviewer subagent.
+type reviewerResult struct {
+	Name     string
+	Findings []reviewFinding
+	Cost     float64
+	Err      error
+}
+
+// reviewFinding mirrors the structured output each reviewer returns.
+type reviewFinding struct {
+	Severity   string `json:"severity"`
+	File       string `json:"file"`
+	Line       int    `json:"line,omitempty"`
+	Issue      string `json:"issue"`
+	Suggestion string `json:"suggestion"`
+}
+
+// reviewerMsg is sent from reviewer goroutines to the parent via channel.
+type reviewerMsg struct {
+	Event  *Event  // emit this event (nil if not an event)
+	Log    *reviewerLog // write this log (nil if not a log)
+	Result *reviewerResult // final result (nil if not done)
+	Index  int
+}
+
+// reviewerLog holds data for a deferred WriteLog call.
+type reviewerLog struct {
+	Phase   string
+	Name    string
+	Content []byte
+}
+
+// runParallelReview dispatches specialist reviewer subagents in parallel,
+// collects their findings, merges them into a single ReviewOutput, and
+// computes a verdict.
+func (e *Engine) runParallelReview(ctx context.Context, phase PhaseConfig) error {
+	if len(phase.Reviewers) == 0 {
+		return fmt.Errorf("engine: parallel-review phase %s has no reviewers configured", phase.Name)
+	}
+
+	// Check dependencies.
+	for _, dep := range phase.DependsOn {
+		if !e.state.IsCompleted(dep) {
+			return &DependencyNotMetError{Phase: phase.Name, Dependency: dep}
+		}
+	}
+
+	// Check budget.
+	if err := e.checkBudget(phase); err != nil {
+		return err
+	}
+
+	// Mark phase running.
+	e.emit(Event{Phase: phase.Name, Kind: EventPhaseStarted})
+	if err := e.state.MarkRunning(phase.Name); err != nil {
+		return fmt.Errorf("engine: mark running %s: %w", phase.Name, err)
+	}
+
+	// Build prompt data shared by all reviewers.
+	promptData, err := e.buildPromptData(phase)
+	if err != nil {
+		_ = e.state.MarkFailed(phase.Name, err)
+		e.emit(Event{Phase: phase.Name, Kind: EventPhaseFailed, Data: map[string]any{"error": err.Error()}})
+		return fmt.Errorf("engine: build prompt data for %s: %w", phase.Name, err)
+	}
+
+	// Snapshot budget before launching goroutines — avoid concurrent Meta() reads.
+	budgetRemaining := 0.0
+	if e.config.MaxCostUSD > 0 {
+		budgetRemaining = e.config.MaxCostUSD - e.state.Meta().TotalCost
+	}
+
+	// Channel for reviewer goroutines to send messages to the parent.
+	msgCh := make(chan reviewerMsg, len(phase.Reviewers)*10)
+
+	// Dispatch reviewers in parallel.
+	var wg sync.WaitGroup
+	results := make([]reviewerResult, len(phase.Reviewers))
+
+	for idx, reviewer := range phase.Reviewers {
+		wg.Add(1)
+		go func(idx int, reviewer ReviewerConfig) {
+			defer wg.Done()
+			e.runReviewer(ctx, phase, reviewer, promptData, budgetRemaining, idx, msgCh)
+		}(idx, reviewer)
+	}
+
+	// Close channel once all goroutines finish.
+	go func() {
+		wg.Wait()
+		close(msgCh)
+	}()
+
+	// Drain channel in the parent goroutine — all State access is serialized here.
+	for msg := range msgCh {
+		if msg.Event != nil {
+			e.emit(*msg.Event)
+		}
+		if msg.Log != nil {
+			_ = e.state.WriteLog(msg.Log.Phase, "prompt_"+msg.Log.Name, msg.Log.Content)
+		}
+		if msg.Result != nil {
+			results[msg.Index] = *msg.Result
+		}
+	}
+
+	// Check for context cancellation first.
+	if err := ctx.Err(); err != nil {
+		_ = e.state.MarkFailed(phase.Name, err)
+		e.emit(Event{Phase: phase.Name, Kind: EventPhaseFailed, Data: map[string]any{"error": err.Error()}})
+		return fmt.Errorf("engine: context cancelled during %s: %w", phase.Name, err)
+	}
+
+	// Collect errors from reviewers.
+	var reviewErrors []string
+	for _, result := range results {
+		if result.Err != nil {
+			reviewErrors = append(reviewErrors, fmt.Sprintf("%s: %v", result.Name, result.Err))
+		}
+	}
+	if len(reviewErrors) > 0 {
+		combinedErr := fmt.Errorf("engine: reviewer failures in %s: %s", phase.Name, strings.Join(reviewErrors, "; "))
+		_ = e.state.MarkFailed(phase.Name, combinedErr)
+		e.emit(Event{Phase: phase.Name, Kind: EventPhaseFailed, Data: map[string]any{"error": combinedErr.Error()}})
+		return combinedErr
+	}
+
+	// Merge findings from all reviewers.
+	merged := e.mergeReviewFindings(phase, results)
+
+	// Serialize and store results.
+	output, err := json.Marshal(merged)
+	if err != nil {
+		_ = e.state.MarkFailed(phase.Name, err)
+		return fmt.Errorf("engine: marshal review output for %s: %w", phase.Name, err)
+	}
+
+	if err := e.state.WriteResult(phase.Name, json.RawMessage(output)); err != nil {
+		return fmt.Errorf("engine: write result for %s: %w", phase.Name, err)
+	}
+
+	// Build a human-readable artifact from the merged findings.
+	artifact := e.buildReviewArtifact(merged)
+	if err := e.state.WriteArtifact(phase.Name, []byte(artifact)); err != nil {
+		return fmt.Errorf("engine: write artifact for %s: %w", phase.Name, err)
+	}
+
+	// Accumulate cost from all reviewers.
+	totalCost := 0.0
+	for _, result := range results {
+		totalCost += result.Cost
+	}
+	if err := e.state.AccumulateCost(phase.Name, totalCost); err != nil {
+		return fmt.Errorf("engine: accumulate cost for %s: %w", phase.Name, err)
+	}
+
+	// Mark completed.
+	if err := e.state.MarkCompleted(phase.Name); err != nil {
+		return fmt.Errorf("engine: mark completed %s: %w", phase.Name, err)
+	}
+	e.emit(Event{
+		Phase: phase.Name,
+		Kind:  EventPhaseCompleted,
+		Data:  map[string]any{"duration_ms": e.state.Meta().Phases[phase.Name].DurationMs, "cost": e.state.Meta().Phases[phase.Name].Cost},
+	})
+
+	// Domain gating.
+	return e.gatePhase(phase)
+}
+
+// runReviewer executes a single specialist reviewer, sending events and results
+// through msgCh to avoid concurrent State access. budgetRemaining is a snapshot
+// taken before goroutines launch.
+func (e *Engine) runReviewer(ctx context.Context, phase PhaseConfig, reviewer ReviewerConfig, promptData PromptData, budgetRemaining float64, idx int, msgCh chan<- reviewerMsg) {
+	sendEvent := func(evt Event) {
+		msgCh <- reviewerMsg{Event: &evt, Index: idx}
+	}
+	sendResult := func(res reviewerResult) {
+		msgCh <- reviewerMsg{Result: &res, Index: idx}
+	}
+
+	sendEvent(Event{
+		Phase: phase.Name,
+		Kind:  EventReviewerStarted,
+		Data:  map[string]any{"reviewer": reviewer.Name, "focus": reviewer.Focus},
+	})
+
+	// Load and render the reviewer's prompt template.
+	loadResult, err := e.config.Loader.LoadWithSource(reviewer.Prompt)
+	if err != nil {
+		sendEvent(Event{
+			Phase: phase.Name,
+			Kind:  EventReviewerFailed,
+			Data:  map[string]any{"reviewer": reviewer.Name, "error": err.Error()},
+		})
+		sendResult(reviewerResult{Name: reviewer.Name, Err: fmt.Errorf("load template %s: %w", reviewer.Prompt, err)})
+		return
+	}
+
+	rendered, err := RenderPrompt(loadResult.Content, promptData)
+	if err != nil {
+		sendEvent(Event{
+			Phase: phase.Name,
+			Kind:  EventReviewerFailed,
+			Data:  map[string]any{"reviewer": reviewer.Name, "error": err.Error()},
+		})
+		sendResult(reviewerResult{Name: reviewer.Name, Err: fmt.Errorf("render prompt for %s: %w", reviewer.Name, err)})
+		return
+	}
+
+	// Send log to parent for serialized WriteLog.
+	msgCh <- reviewerMsg{Log: &reviewerLog{Phase: phase.Name, Name: reviewer.Name, Content: []byte(rendered)}, Index: idx}
+
+	// Use the parent phase's schema for the reviewer findings.
+	opts := runner.RunOpts{
+		Phase:        phase.Name + "/" + reviewer.Name,
+		SystemPrompt: rendered,
+		UserPrompt:   "Execute the review described in the system prompt.",
+		OutputSchema: phase.Schema,
+		AllowedTools: phase.Tools,
+		MaxBudgetUSD: budgetRemaining,
+		WorkDir:      e.workDir(phase),
+		Model:        e.config.Model,
+		Timeout:      phase.Timeout.Duration,
+	}
+
+	result, err := e.runner.Run(ctx, opts)
+	if err != nil {
+		sendEvent(Event{
+			Phase: phase.Name,
+			Kind:  EventReviewerFailed,
+			Data:  map[string]any{"reviewer": reviewer.Name, "error": err.Error()},
+		})
+		sendResult(reviewerResult{Name: reviewer.Name, Err: fmt.Errorf("run %s: %w", reviewer.Name, err)})
+		return
+	}
+
+	// Parse findings from the structured output.
+	var findings []reviewFinding
+	if result.Output != nil {
+		var parsed struct {
+			Findings []reviewFinding `json:"findings"`
+		}
+		if parseErr := json.Unmarshal(result.Output, &parsed); parseErr == nil {
+			findings = parsed.Findings
+		}
+	}
+
+	sendEvent(Event{
+		Phase: phase.Name,
+		Kind:  EventReviewerCompleted,
+		Data: map[string]any{
+			"reviewer":       reviewer.Name,
+			"findings_count": len(findings),
+			"cost":           result.CostUSD,
+		},
+	})
+
+	sendResult(reviewerResult{
+		Name:     reviewer.Name,
+		Findings: findings,
+		Cost:     result.CostUSD,
+	})
+}
+
+// mergedReviewOutput is the combined output from all reviewers.
+type mergedReviewOutput struct {
+	TicketKey string                `json:"ticket_key"`
+	Findings  []mergedReviewFinding `json:"findings"`
+	Verdict   string                `json:"verdict"`
+}
+
+// mergedReviewFinding is a single finding with its source reviewer.
+type mergedReviewFinding struct {
+	Source     string `json:"source"`
+	Severity   string `json:"severity"`
+	File       string `json:"file"`
+	Line       int    `json:"line,omitempty"`
+	Issue      string `json:"issue"`
+	Suggestion string `json:"suggestion"`
+}
+
+// mergeReviewFindings combines findings from all reviewers and computes a verdict.
+func (e *Engine) mergeReviewFindings(phase PhaseConfig, results []reviewerResult) mergedReviewOutput {
+	var allFindings []mergedReviewFinding
+
+	for _, result := range results {
+		for _, finding := range result.Findings {
+			allFindings = append(allFindings, mergedReviewFinding{
+				Source:     result.Name,
+				Severity:   finding.Severity,
+				File:       finding.File,
+				Line:       finding.Line,
+				Issue:      finding.Issue,
+				Suggestion: finding.Suggestion,
+			})
+		}
+	}
+
+	verdict := computeReviewVerdict(allFindings)
+
+	e.emit(Event{
+		Phase: phase.Name,
+		Kind:  EventReviewMerged,
+		Data: map[string]any{
+			"findings_count": len(allFindings),
+			"verdict":        verdict,
+		},
+	})
+
+	return mergedReviewOutput{
+		TicketKey: e.config.Ticket.Key,
+		Findings:  allFindings,
+		Verdict:   verdict,
+	}
+}
+
+// computeReviewVerdict determines the review verdict based on finding severities.
+// Any critical or major finding → "rework"
+// Only minor findings → "pass-with-follow-ups"
+// No findings → "pass"
+func computeReviewVerdict(findings []mergedReviewFinding) string {
+	hasCriticalOrMajor := false
+	hasMinor := false
+
+	for _, finding := range findings {
+		sev := strings.ToLower(finding.Severity)
+		switch sev {
+		case "critical", "major":
+			hasCriticalOrMajor = true
+		case "minor":
+			hasMinor = true
+		}
+	}
+
+	if hasCriticalOrMajor {
+		return "rework"
+	}
+	if hasMinor {
+		return "pass-with-follow-ups"
+	}
+	return "pass"
+}
+
+// buildReviewArtifact creates a human-readable markdown summary of the review.
+func (e *Engine) buildReviewArtifact(merged mergedReviewOutput) string {
+	var sb strings.Builder
+
+	sb.WriteString(fmt.Sprintf("# Review: %s\n\n", merged.Verdict))
+	sb.WriteString(fmt.Sprintf("Ticket: %s\n", merged.TicketKey))
+	sb.WriteString(fmt.Sprintf("Verdict: %s\n", merged.Verdict))
+	sb.WriteString(fmt.Sprintf("Total findings: %d\n\n", len(merged.Findings)))
+
+	if len(merged.Findings) == 0 {
+		sb.WriteString("No issues found.\n")
+		return sb.String()
+	}
+
+	for idx, finding := range merged.Findings {
+		sb.WriteString(fmt.Sprintf("## Finding %d: %s (%s)\n\n", idx+1, finding.Severity, finding.Source))
+		if finding.File != "" {
+			if finding.Line > 0 {
+				sb.WriteString(fmt.Sprintf("- **File**: %s:%d\n", finding.File, finding.Line))
+			} else {
+				sb.WriteString(fmt.Sprintf("- **File**: %s\n", finding.File))
+			}
+		}
+		sb.WriteString(fmt.Sprintf("- **Issue**: %s\n", finding.Issue))
+		if finding.Suggestion != "" {
+			sb.WriteString(fmt.Sprintf("- **Suggestion**: %s\n", finding.Suggestion))
+		}
+		sb.WriteString("\n")
+	}
+
+	return sb.String()
 }
 
 // runMonitorStub handles polling phases by marking them completed without

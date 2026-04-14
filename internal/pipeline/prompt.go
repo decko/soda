@@ -95,6 +95,7 @@ type ArtifactData struct {
 	Plan      string
 	Implement string
 	Verify    string
+	Review    string
 	Submit    SubmitArtifact
 }
 
