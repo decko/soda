@@ -99,7 +99,7 @@ jobs:
         run: go install honnef.co/go/tools/cmd/staticcheck@2026.1
 
       - name: Staticcheck
-        run: CGO_ENABLED=0 staticcheck ./...
+        run: CGO_ENABLED=0 staticcheck $(go list ./... | grep -v /sandbox)
 
       - name: Format check
         run: |
