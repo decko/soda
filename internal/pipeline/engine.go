@@ -896,13 +896,7 @@ func (e *Engine) gatePhase(phase PhaseConfig) error {
 		}
 
 	case "review":
-		var result struct {
-			Verdict  string `json:"verdict"`
-			Findings []struct {
-				Severity string `json:"severity"`
-				Issue    string `json:"issue"`
-			} `json:"findings"`
-		}
+		var result schemas.ReviewOutput
 		if err := json.Unmarshal(raw, &result); err != nil {
 			return fmt.Errorf("engine: review gate: failed to unmarshal result: %w", err)
 		}
