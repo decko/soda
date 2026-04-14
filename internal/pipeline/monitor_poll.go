@@ -1,0 +1,396 @@
+package pipeline
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/decko/soda/internal/git"
+)
+
+// runMonitor handles polling phases: polls the PR for changes, detects new
+// comments, CI status changes, merge conflicts, and manages response rounds.
+// Replaces the old runMonitorStub.
+func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
+	prURL := e.extractPRURL()
+	if prURL == "" {
+		return e.runMonitorStub(phase)
+	}
+
+	// Require a PRPoller to be configured.
+	if e.config.PRPoller == nil {
+		return e.runMonitorStub(phase)
+	}
+
+	polling := phase.Polling
+	if polling == nil {
+		polling = &PollingConfig{
+			InitialInterval:   Duration{Duration: 2 * time.Minute},
+			MaxInterval:       Duration{Duration: 5 * time.Minute},
+			EscalateAfter:     Duration{Duration: 30 * time.Minute},
+			MaxDuration:       Duration{Duration: 4 * time.Hour},
+			MaxResponseRounds: 3,
+		}
+	}
+
+	// Check dependencies.
+	for _, dep := range phase.DependsOn {
+		if !e.state.IsCompleted(dep) {
+			return &DependencyNotMetError{Phase: phase.Name, Dependency: dep}
+		}
+	}
+
+	e.emit(Event{Phase: phase.Name, Kind: EventPhaseStarted})
+	if err := e.state.MarkRunning(phase.Name); err != nil {
+		return fmt.Errorf("engine: mark running %s: %w", phase.Name, err)
+	}
+
+	// Initialize or resume monitor state.
+	monState, err := e.state.ReadMonitorState()
+	if err != nil {
+		monState = &MonitorState{
+			PRURL:             prURL,
+			MaxResponseRounds: polling.MaxResponseRounds,
+			Status:            MonitorPolling,
+		}
+	}
+	monState.PRURL = prURL
+	monState.Status = MonitorPolling
+
+	if err := e.state.WriteMonitorState(monState); err != nil {
+		return fmt.Errorf("engine: write initial monitor state: %w", err)
+	}
+
+	startTime := time.Now()
+	if e.config.NowFunc != nil {
+		startTime = e.config.NowFunc()
+	}
+
+	// Polling loop.
+	for {
+		// Check context cancellation.
+		if err := ctx.Err(); err != nil {
+			monState.Status = MonitorFailed
+			_ = e.state.WriteMonitorState(monState)
+			return fmt.Errorf("engine: monitor context cancelled: %w", err)
+		}
+
+		// Check max duration timeout.
+		now := time.Now()
+		if e.config.NowFunc != nil {
+			now = e.config.NowFunc()
+		}
+		if now.Sub(startTime) >= polling.MaxDuration.Duration {
+			monState.Status = MonitorFailed
+			_ = e.state.WriteMonitorState(monState)
+			e.emit(Event{
+				Phase: phase.Name,
+				Kind:  EventMonitorTimeout,
+				Data: map[string]any{
+					"duration":   now.Sub(startTime).String(),
+					"poll_count": monState.PollCount,
+				},
+			})
+			if err := e.state.MarkFailed(phase.Name, fmt.Errorf("monitor: max duration %s exceeded", polling.MaxDuration.Duration)); err != nil {
+				return fmt.Errorf("engine: mark failed %s: %w", phase.Name, err)
+			}
+			return nil
+		}
+
+		monState.PollCount++
+		monState.LastPolledAt = now
+		e.emit(Event{
+			Phase: phase.Name,
+			Kind:  EventMonitorPolling,
+			Data: map[string]any{
+				"poll_count":      monState.PollCount,
+				"response_rounds": monState.ResponseRounds,
+			},
+		})
+
+		// 1. Check PR status (approved, closed, merged).
+		terminal, err := e.checkPRStatus(ctx, phase.Name, monState)
+		if err != nil {
+			e.emit(Event{
+				Phase: phase.Name,
+				Kind:  EventPhaseFailed,
+				Data:  map[string]any{"error": fmt.Sprintf("check PR status: %v", err)},
+			})
+			// Non-fatal — continue polling.
+		}
+		if terminal {
+			_ = e.state.WriteMonitorState(monState)
+			if monState.Status == MonitorCompleted {
+				if err := e.state.MarkCompleted(phase.Name); err != nil {
+					return fmt.Errorf("engine: mark completed %s: %w", phase.Name, err)
+				}
+				e.emit(Event{
+					Phase: phase.Name,
+					Kind:  EventPhaseCompleted,
+					Data:  map[string]any{"duration_ms": e.state.Meta().Phases[phase.Name].DurationMs},
+				})
+			} else {
+				if err := e.state.MarkFailed(phase.Name, fmt.Errorf("monitor: PR %s", monState.Status)); err != nil {
+					return fmt.Errorf("engine: mark failed %s: %w", phase.Name, err)
+				}
+			}
+			return nil
+		}
+
+		// 2. Check for new comments.
+		e.checkNewComments(ctx, phase.Name, monState)
+
+		// 3. Check CI status changes.
+		e.checkCIStatus(ctx, phase.Name, monState)
+
+		// 4. Check for merge conflicts and auto-rebase.
+		e.checkMergeConflicts(ctx, phase.Name, monState)
+
+		// 5. Check max response rounds.
+		if monState.ResponseRounds >= monState.MaxResponseRounds {
+			monState.Status = MonitorMaxRounds
+			_ = e.state.WriteMonitorState(monState)
+			e.emit(Event{
+				Phase: phase.Name,
+				Kind:  EventMonitorMaxRounds,
+				Data: map[string]any{
+					"response_rounds":     monState.ResponseRounds,
+					"max_response_rounds": monState.MaxResponseRounds,
+				},
+			})
+			if err := e.state.MarkCompleted(phase.Name); err != nil {
+				return fmt.Errorf("engine: mark completed %s: %w", phase.Name, err)
+			}
+			e.emit(Event{
+				Phase: phase.Name,
+				Kind:  EventPhaseCompleted,
+				Data: map[string]any{
+					"duration_ms": e.state.Meta().Phases[phase.Name].DurationMs,
+					"reason":      "max_rounds_reached",
+				},
+			})
+			return nil
+		}
+
+		// Persist state after each poll cycle.
+		if err := e.state.WriteMonitorState(monState); err != nil {
+			return fmt.Errorf("engine: write monitor state: %w", err)
+		}
+
+		// Sleep until next poll.
+		interval := e.pollInterval(polling, now.Sub(startTime))
+		e.config.SleepFunc(interval)
+	}
+}
+
+// checkPRStatus checks the PR for terminal states (approved, closed, merged).
+// Returns true if the polling should stop.
+func (e *Engine) checkPRStatus(ctx context.Context, phaseName string, monState *MonitorState) (bool, error) {
+	status, err := e.config.PRPoller.GetPRStatus(ctx, monState.PRURL)
+	if err != nil {
+		return false, err
+	}
+
+	switch status.State {
+	case "merged":
+		monState.Status = MonitorCompleted
+		e.emit(Event{
+			Phase: phaseName,
+			Kind:  EventMonitorPRApproved,
+			Data:  map[string]any{"state": "merged"},
+		})
+		return true, nil
+
+	case "closed":
+		monState.Status = MonitorFailed
+		e.emit(Event{
+			Phase: phaseName,
+			Kind:  EventMonitorPRClosed,
+			Data:  map[string]any{"state": "closed"},
+		})
+		return true, nil
+	}
+
+	if status.Approved {
+		monState.Status = MonitorCompleted
+		e.emit(Event{
+			Phase: phaseName,
+			Kind:  EventMonitorPRApproved,
+			Data:  map[string]any{"state": "approved"},
+		})
+		return true, nil
+	}
+
+	return false, nil
+}
+
+// checkNewComments polls for new review comments and increments response rounds.
+func (e *Engine) checkNewComments(ctx context.Context, phaseName string, monState *MonitorState) {
+	comments, err := e.config.PRPoller.GetNewComments(ctx, monState.PRURL, monState.LastCommentID)
+	if err != nil {
+		// Non-fatal: log and continue.
+		return
+	}
+
+	if len(comments) == 0 {
+		return
+	}
+
+	// Update last comment ID to the latest one.
+	lastComment := comments[len(comments)-1]
+	monState.LastCommentID = lastComment.ID
+	monState.ResponseRounds++
+
+	commentSummaries := make([]map[string]any, 0, len(comments))
+	for _, comment := range comments {
+		commentSummaries = append(commentSummaries, map[string]any{
+			"id":     comment.ID,
+			"author": comment.Author,
+			"path":   comment.Path,
+		})
+	}
+
+	e.emit(Event{
+		Phase: phaseName,
+		Kind:  EventMonitorNewComments,
+		Data: map[string]any{
+			"count":           len(comments),
+			"response_rounds": monState.ResponseRounds,
+			"comments":        commentSummaries,
+		},
+	})
+}
+
+// checkCIStatus polls CI status and emits events on status changes.
+func (e *Engine) checkCIStatus(ctx context.Context, phaseName string, monState *MonitorState) {
+	ciStatus, err := e.config.PRPoller.GetCIStatus(ctx, monState.PRURL)
+	if err != nil {
+		// Non-fatal: log and continue.
+		return
+	}
+
+	if ciStatus.Overall == monState.LastCIStatus {
+		return
+	}
+
+	previousStatus := monState.LastCIStatus
+	monState.LastCIStatus = ciStatus.Overall
+
+	e.emit(Event{
+		Phase: phaseName,
+		Kind:  EventMonitorCIChange,
+		Data: map[string]any{
+			"previous": previousStatus,
+			"current":  ciStatus.Overall,
+		},
+	})
+
+	// On CI failure, emit detailed notification with job names.
+	if ciStatus.Overall == "failure" {
+		var failedJobs []string
+		for _, job := range ciStatus.Jobs {
+			if job.Conclusion == "failure" || job.Conclusion == "timed_out" || job.Conclusion == "cancelled" {
+				failedJobs = append(failedJobs, job.Name)
+			}
+		}
+		e.emit(Event{
+			Phase: phaseName,
+			Kind:  EventMonitorCIFailure,
+			Data: map[string]any{
+				"failed_jobs": failedJobs,
+				"job_count":   len(ciStatus.Jobs),
+			},
+		})
+	}
+}
+
+// checkMergeConflicts detects merge conflicts and attempts auto-rebase.
+func (e *Engine) checkMergeConflicts(ctx context.Context, phaseName string, monState *MonitorState) {
+	workDir := e.state.Meta().Worktree
+	if workDir == "" {
+		workDir = e.config.WorkDir
+	}
+
+	baseBranch := e.config.BaseBranch
+	if baseBranch == "" {
+		baseBranch = "main"
+	}
+
+	// Fetch latest base branch before checking.
+	_ = git.FetchBranch(ctx, workDir, "origin", baseBranch)
+
+	hasConflicts, err := git.NeedsMergeWithBase(ctx, workDir, "origin/"+baseBranch)
+	if err != nil {
+		// Non-fatal: some setups may not have origin configured.
+		return
+	}
+	if !hasConflicts {
+		return
+	}
+
+	e.emit(Event{
+		Phase: phaseName,
+		Kind:  EventMonitorConflict,
+		Data:  map[string]any{"base_branch": baseBranch},
+	})
+
+	// Attempt auto-rebase.
+	if err := git.Rebase(ctx, workDir, "origin/"+baseBranch); err != nil {
+		e.emit(Event{
+			Phase: phaseName,
+			Kind:  EventMonitorRebaseFailed,
+			Data: map[string]any{
+				"error":       err.Error(),
+				"base_branch": baseBranch,
+			},
+		})
+		return
+	}
+
+	// Push the rebased branch.
+	if err := git.ForcePush(ctx, workDir, "origin"); err != nil {
+		e.emit(Event{
+			Phase: phaseName,
+			Kind:  EventMonitorRebaseFailed,
+			Data: map[string]any{
+				"error":  "push after rebase failed: " + err.Error(),
+				"action": "push",
+			},
+		})
+		return
+	}
+
+	e.emit(Event{
+		Phase: phaseName,
+		Kind:  EventMonitorRebaseOK,
+		Data:  map[string]any{"base_branch": baseBranch},
+	})
+}
+
+// pollInterval computes the sleep duration between polls.
+// Uses initial_interval until escalate_after elapsed, then max_interval.
+func (e *Engine) pollInterval(polling *PollingConfig, elapsed time.Duration) time.Duration {
+	if elapsed >= polling.EscalateAfter.Duration {
+		return polling.MaxInterval.Duration
+	}
+	return polling.InitialInterval.Duration
+}
+
+// formatCIFailure formats CI failure information for notification.
+func formatCIFailure(jobs []CIJobInfo) string {
+	var parts []string
+	for _, job := range jobs {
+		if job.Conclusion == "failure" || job.Conclusion == "timed_out" || job.Conclusion == "cancelled" {
+			detail := job.Name + " (" + job.Conclusion + ")"
+			if job.ExitCode != 0 {
+				detail = fmt.Sprintf("%s (exit %d)", job.Name, job.ExitCode)
+			}
+			parts = append(parts, detail)
+		}
+	}
+	if len(parts) == 0 {
+		return "CI failed"
+	}
+	return "CI failed: " + strings.Join(parts, ", ")
+}

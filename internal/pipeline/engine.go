@@ -41,6 +41,8 @@ type EngineConfig struct {
 	OnEvent       func(Event)
 	SleepFunc     func(time.Duration)
 	JitterFunc    func(max time.Duration) time.Duration
+	PRPoller      PRPoller         // for monitor phase polling; nil disables monitor
+	NowFunc       func() time.Time // for testability; defaults to time.Now
 }
 
 // Engine orchestrates a pipeline run, tying together the runner,
@@ -243,7 +245,7 @@ func (e *Engine) Confirm() {
 func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 	// Polling phases are handled separately.
 	if phase.Type == "polling" {
-		return e.runMonitorStub(phase)
+		return e.runMonitor(ctx, phase)
 	}
 
 	// Check dependencies.
