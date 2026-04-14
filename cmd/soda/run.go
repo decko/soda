@@ -223,6 +223,14 @@ func buildMockRunner() *runner.MockRunner {
 				Output:  json.RawMessage(`{"verdict":"PASS","ticket_key":"MOCK"}`),
 				RawText: "Mock verify: all checks passed",
 			},
+			"review/go-specialist": {
+				Output:  json.RawMessage(`{"findings":[],"verdict":"pass","ticket_key":"MOCK"}`),
+				RawText: "Mock go-specialist review: no issues",
+			},
+			"review/ai-harness": {
+				Output:  json.RawMessage(`{"findings":[],"verdict":"pass","ticket_key":"MOCK"}`),
+				RawText: "Mock ai-harness review: no issues",
+			},
 			"submit": {
 				Output:  json.RawMessage(`{"pr_url":"https://github.com/mock/repo/pull/0","ticket_key":"MOCK"}`),
 				RawText: "Mock submit: PR created",
@@ -448,6 +456,16 @@ func formatPhaseDetails(state *pipeline.State, phase string) string {
 			return fmt.Sprintf("FAIL — %d criteria not met", fails)
 		}
 		return "FAIL"
+
+	case "review":
+		var out schemas.ReviewOutput
+		if json.Unmarshal(raw, &out) != nil {
+			return ""
+		}
+		if len(out.Findings) == 0 {
+			return out.Verdict
+		}
+		return fmt.Sprintf("%s — %d findings", out.Verdict, len(out.Findings))
 
 	case "submit":
 		var out schemas.SubmitOutput

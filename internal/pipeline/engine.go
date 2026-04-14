@@ -748,6 +748,32 @@ func (e *Engine) gatePhase(phase PhaseConfig) error {
 			return &PhaseGateError{Phase: phase.Name, Reason: reason}
 		}
 
+	case "review":
+		var result struct {
+			Verdict  string `json:"verdict"`
+			Findings []struct {
+				Severity string `json:"severity"`
+				Issue    string `json:"issue"`
+			} `json:"findings"`
+		}
+		if err := json.Unmarshal(raw, &result); err != nil {
+			return nil
+		}
+		if strings.EqualFold(result.Verdict, "rework") {
+			var issues []string
+			for _, finding := range result.Findings {
+				sev := strings.ToLower(finding.Severity)
+				if sev == "critical" || sev == "major" {
+					issues = append(issues, finding.Issue)
+				}
+			}
+			reason := "review requires rework"
+			if len(issues) > 0 {
+				reason = "review requires rework: " + strings.Join(issues, "; ")
+			}
+			return &PhaseGateError{Phase: phase.Name, Reason: reason}
+		}
+
 	case "submit":
 		var result struct {
 			PRURL string `json:"pr_url"`

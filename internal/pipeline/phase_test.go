@@ -47,8 +47,8 @@ func TestLoadPipeline(t *testing.T) {
 			t.Fatalf("LoadPipeline: %v", err)
 		}
 
-		if len(pipeline.Phases) != 6 {
-			t.Fatalf("got %d phases, want 6", len(pipeline.Phases))
+		if len(pipeline.Phases) != 7 {
+			t.Fatalf("got %d phases, want 7", len(pipeline.Phases))
 		}
 
 		// Verify first phase
@@ -72,8 +72,28 @@ func TestLoadPipeline(t *testing.T) {
 			t.Errorf("plan depends_on = %v, want [triage]", plan.DependsOn)
 		}
 
+		// Verify review phase
+		review := pipeline.Phases[4]
+		if review.Name != "review" {
+			t.Errorf("fifth phase = %q, want %q", review.Name, "review")
+		}
+		if review.Type != "parallel-review" {
+			t.Errorf("review type = %q, want %q", review.Type, "parallel-review")
+		}
+		if len(review.Reviewers) != 2 {
+			t.Errorf("review has %d reviewers, want 2", len(review.Reviewers))
+		}
+		if len(review.Reviewers) >= 2 {
+			if review.Reviewers[0].Name != "go-specialist" {
+				t.Errorf("first reviewer = %q, want %q", review.Reviewers[0].Name, "go-specialist")
+			}
+			if review.Reviewers[1].Name != "ai-harness" {
+				t.Errorf("second reviewer = %q, want %q", review.Reviewers[1].Name, "ai-harness")
+			}
+		}
+
 		// Verify monitor phase has polling config
-		monitor := pipeline.Phases[5]
+		monitor := pipeline.Phases[6]
 		if monitor.Name != "monitor" {
 			t.Errorf("last phase = %q, want %q", monitor.Name, "monitor")
 		}
