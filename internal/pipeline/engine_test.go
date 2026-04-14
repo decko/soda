@@ -17,6 +17,7 @@ import (
 	"github.com/decko/soda/internal/claude"
 	"github.com/decko/soda/internal/runner"
 	"github.com/decko/soda/internal/sandbox"
+	"github.com/decko/soda/schemas"
 )
 
 // flexMockRunner returns per-call responses, allowing multi-call test scenarios
@@ -3452,7 +3453,7 @@ func TestEngine_ParallelReview_InPipeline(t *testing.T) {
 func TestComputeReviewVerdict(t *testing.T) {
 	tests := []struct {
 		name     string
-		findings []mergedReviewFinding
+		findings []schemas.ReviewFinding
 		want     string
 	}{
 		{
@@ -3462,33 +3463,33 @@ func TestComputeReviewVerdict(t *testing.T) {
 		},
 		{
 			name:     "empty_findings",
-			findings: []mergedReviewFinding{},
+			findings: []schemas.ReviewFinding{},
 			want:     "pass",
 		},
 		{
 			name: "minor_only",
-			findings: []mergedReviewFinding{
+			findings: []schemas.ReviewFinding{
 				{Severity: "minor", Issue: "style"},
 			},
 			want: "pass-with-follow-ups",
 		},
 		{
 			name: "major_triggers_rework",
-			findings: []mergedReviewFinding{
+			findings: []schemas.ReviewFinding{
 				{Severity: "major", Issue: "missing error check"},
 			},
 			want: "rework",
 		},
 		{
 			name: "critical_triggers_rework",
-			findings: []mergedReviewFinding{
+			findings: []schemas.ReviewFinding{
 				{Severity: "critical", Issue: "nil deref"},
 			},
 			want: "rework",
 		},
 		{
 			name: "mixed_severities",
-			findings: []mergedReviewFinding{
+			findings: []schemas.ReviewFinding{
 				{Severity: "minor", Issue: "style"},
 				{Severity: "major", Issue: "missing error check"},
 				{Severity: "minor", Issue: "naming"},
@@ -3497,7 +3498,7 @@ func TestComputeReviewVerdict(t *testing.T) {
 		},
 		{
 			name: "case_insensitive",
-			findings: []mergedReviewFinding{
+			findings: []schemas.ReviewFinding{
 				{Severity: "Critical", Issue: "nil deref"},
 			},
 			want: "rework",

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"text/template"
+
+	"github.com/decko/soda/schemas"
 )
 
 // PromptData is the template context for phase prompts.
@@ -34,18 +36,7 @@ type ReworkFeedback struct {
 	FailedCriteria []FailedCriterion
 	CodeIssues     []ReworkCodeIssue
 	FailedCommands []FailedCommand
-	ReviewFindings []ReviewReworkFinding
-}
-
-// ReviewReworkFinding holds a critical or major finding from a specialist
-// reviewer, injected into the implement prompt for rework.
-type ReviewReworkFinding struct {
-	Source     string // reviewer name, e.g. "go-specialist"
-	Severity   string // "critical" or "major"
-	File       string
-	Line       int
-	Issue      string
-	Suggestion string
+	ReviewFindings []schemas.ReviewFinding
 }
 
 // FailedCriterion is a single acceptance criterion that failed verification.

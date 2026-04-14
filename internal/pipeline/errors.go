@@ -3,6 +3,8 @@ package pipeline
 import (
 	"fmt"
 	"strings"
+
+	"github.com/decko/soda/schemas"
 )
 
 // BudgetExceededError is returned when accumulated cost exceeds the configured limit.
@@ -43,10 +45,7 @@ func (e *PhaseGateError) Error() string {
 // and the pipeline should route back to implement. This is NOT a terminal
 // error — the engine loop catches it and handles routing.
 type reviewReworkSignal struct {
-	findings []struct {
-		Severity string `json:"severity"`
-		Issue    string `json:"issue"`
-	}
+	findings []schemas.ReviewFinding
 }
 
 func (e *reviewReworkSignal) Error() string {

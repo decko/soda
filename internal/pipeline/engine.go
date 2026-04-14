@@ -15,6 +15,7 @@ import (
 	"github.com/decko/soda/internal/git"
 	"github.com/decko/soda/internal/runner"
 	"github.com/decko/soda/internal/sandbox"
+	"github.com/decko/soda/schemas"
 )
 
 // Mode controls whether the engine pauses between phases.
@@ -767,17 +768,7 @@ func (e *Engine) extractReviewReworkFeedback() *ReworkFeedback {
 		return nil
 	}
 
-	var result struct {
-		Verdict  string `json:"verdict"`
-		Findings []struct {
-			Source     string `json:"source"`
-			Severity   string `json:"severity"`
-			File       string `json:"file"`
-			Line       int    `json:"line,omitempty"`
-			Issue      string `json:"issue"`
-			Suggestion string `json:"suggestion"`
-		} `json:"findings"`
-	}
+	var result schemas.ReviewOutput
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil
 	}
@@ -794,14 +785,7 @@ func (e *Engine) extractReviewReworkFeedback() *ReworkFeedback {
 	for _, finding := range result.Findings {
 		sev := strings.ToLower(finding.Severity)
 		if sev == "critical" || sev == "major" {
-			fb.ReviewFindings = append(fb.ReviewFindings, ReviewReworkFinding{
-				Source:     finding.Source,
-				Severity:   finding.Severity,
-				File:       finding.File,
-				Line:       finding.Line,
-				Issue:      finding.Issue,
-				Suggestion: finding.Suggestion,
-			})
+			fb.ReviewFindings = append(fb.ReviewFindings, finding)
 		}
 	}
 
@@ -912,13 +896,7 @@ func (e *Engine) gatePhase(phase PhaseConfig) error {
 		}
 
 	case "review":
-		var result struct {
-			Verdict  string `json:"verdict"`
-			Findings []struct {
-				Severity string `json:"severity"`
-				Issue    string `json:"issue"`
-			} `json:"findings"`
-		}
+		var result schemas.ReviewOutput
 		if err := json.Unmarshal(raw, &result); err != nil {
 			return fmt.Errorf("engine: review gate: failed to unmarshal result: %w", err)
 		}
@@ -970,18 +948,9 @@ func (e *Engine) gatePhase(phase PhaseConfig) error {
 // reviewerResult holds the outcome of a single reviewer subagent.
 type reviewerResult struct {
 	Name     string
-	Findings []reviewFinding
+	Findings []schemas.ReviewFinding
 	Cost     float64
 	Err      error
-}
-
-// reviewFinding mirrors the structured output each reviewer returns.
-type reviewFinding struct {
-	Severity   string `json:"severity"`
-	File       string `json:"file"`
-	Line       int    `json:"line,omitempty"`
-	Issue      string `json:"issue"`
-	Suggestion string `json:"suggestion"`
 }
 
 // reviewerMsg is sent from reviewer goroutines to the parent via channel.
@@ -1205,10 +1174,10 @@ func (e *Engine) runReviewer(ctx context.Context, phase PhaseConfig, reviewer Re
 	}
 
 	// Parse findings from the structured output.
-	var findings []reviewFinding
+	var findings []schemas.ReviewFinding
 	if result.Output != nil {
 		var parsed struct {
-			Findings []reviewFinding `json:"findings"`
+			Findings []schemas.ReviewFinding `json:"findings"`
 		}
 		if parseErr := json.Unmarshal(result.Output, &parsed); parseErr != nil {
 			sendEvent(Event{
@@ -1238,37 +1207,14 @@ func (e *Engine) runReviewer(ctx context.Context, phase PhaseConfig, reviewer Re
 	})
 }
 
-// mergedReviewOutput is the combined output from all reviewers.
-type mergedReviewOutput struct {
-	TicketKey string                `json:"ticket_key"`
-	Findings  []mergedReviewFinding `json:"findings"`
-	Verdict   string                `json:"verdict"`
-}
-
-// mergedReviewFinding is a single finding with its source reviewer.
-type mergedReviewFinding struct {
-	Source     string `json:"source"`
-	Severity   string `json:"severity"`
-	File       string `json:"file"`
-	Line       int    `json:"line,omitempty"`
-	Issue      string `json:"issue"`
-	Suggestion string `json:"suggestion"`
-}
-
 // mergeReviewFindings combines findings from all reviewers and computes a verdict.
-func (e *Engine) mergeReviewFindings(phase PhaseConfig, results []reviewerResult) mergedReviewOutput {
-	var allFindings []mergedReviewFinding
+func (e *Engine) mergeReviewFindings(phase PhaseConfig, results []reviewerResult) schemas.ReviewOutput {
+	var allFindings []schemas.ReviewFinding
 
 	for _, result := range results {
 		for _, finding := range result.Findings {
-			allFindings = append(allFindings, mergedReviewFinding{
-				Source:     result.Name,
-				Severity:   finding.Severity,
-				File:       finding.File,
-				Line:       finding.Line,
-				Issue:      finding.Issue,
-				Suggestion: finding.Suggestion,
-			})
+			finding.Source = result.Name
+			allFindings = append(allFindings, finding)
 		}
 	}
 
@@ -1283,7 +1229,7 @@ func (e *Engine) mergeReviewFindings(phase PhaseConfig, results []reviewerResult
 		},
 	})
 
-	return mergedReviewOutput{
+	return schemas.ReviewOutput{
 		TicketKey: e.config.Ticket.Key,
 		Findings:  allFindings,
 		Verdict:   verdict,
@@ -1294,7 +1240,7 @@ func (e *Engine) mergeReviewFindings(phase PhaseConfig, results []reviewerResult
 // Any critical or major finding → "rework"
 // Only minor findings → "pass-with-follow-ups"
 // No findings → "pass"
-func computeReviewVerdict(findings []mergedReviewFinding) string {
+func computeReviewVerdict(findings []schemas.ReviewFinding) string {
 	hasCriticalOrMajor := false
 	hasMinor := false
 
@@ -1318,7 +1264,7 @@ func computeReviewVerdict(findings []mergedReviewFinding) string {
 }
 
 // buildReviewArtifact creates a human-readable markdown summary of the review.
-func (e *Engine) buildReviewArtifact(merged mergedReviewOutput) string {
+func (e *Engine) buildReviewArtifact(merged schemas.ReviewOutput) string {
 	var sb strings.Builder
 
 	sb.WriteString(fmt.Sprintf("# Review: %s\n\n", merged.Verdict))
