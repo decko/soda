@@ -9,6 +9,94 @@ import (
 	"time"
 )
 
+func TestReadEvents(t *testing.T) {
+	t.Run("normal", func(t *testing.T) {
+		dir := t.TempDir()
+		ts := time.Date(2026, 4, 11, 10, 0, 0, 0, time.UTC)
+		logEvent(dir, Event{Timestamp: ts, Phase: "triage", Kind: EventPhaseStarted, Data: map[string]any{"generation": float64(1)}})
+		logEvent(dir, Event{Timestamp: ts, Phase: "triage", Kind: EventPhaseCompleted, Data: map[string]any{"cost": 0.12}})
+
+		events, err := ReadEvents(dir)
+		if err != nil {
+			t.Fatalf("ReadEvents: %v", err)
+		}
+		if len(events) != 2 {
+			t.Fatalf("expected 2 events, got %d", len(events))
+		}
+		if events[0].Kind != EventPhaseStarted {
+			t.Errorf("events[0].Kind = %q, want %q", events[0].Kind, EventPhaseStarted)
+		}
+		if events[1].Kind != EventPhaseCompleted {
+			t.Errorf("events[1].Kind = %q, want %q", events[1].Kind, EventPhaseCompleted)
+		}
+	})
+
+	t.Run("empty_file", func(t *testing.T) {
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, "events.jsonl"), []byte(""), 0644)
+
+		events, err := ReadEvents(dir)
+		if err != nil {
+			t.Fatalf("ReadEvents: %v", err)
+		}
+		if len(events) != 0 {
+			t.Fatalf("expected 0 events, got %d", len(events))
+		}
+	})
+
+	t.Run("missing_file", func(t *testing.T) {
+		dir := t.TempDir()
+
+		events, err := ReadEvents(dir)
+		if err != nil {
+			t.Fatalf("ReadEvents: %v", err)
+		}
+		if events != nil {
+			t.Fatalf("expected nil, got %v", events)
+		}
+	})
+
+	t.Run("malformed_lines_skipped", func(t *testing.T) {
+		dir := t.TempDir()
+		content := `{"timestamp":"2026-04-11T10:00:00Z","phase":"triage","kind":"phase_started"}
+not valid json
+{"timestamp":"2026-04-11T10:00:01Z","phase":"triage","kind":"phase_completed"}
+`
+		os.WriteFile(filepath.Join(dir, "events.jsonl"), []byte(content), 0644)
+
+		events, err := ReadEvents(dir)
+		if err != nil {
+			t.Fatalf("ReadEvents: %v", err)
+		}
+		if len(events) != 2 {
+			t.Fatalf("expected 2 events (malformed skipped), got %d", len(events))
+		}
+		if events[0].Kind != EventPhaseStarted {
+			t.Errorf("events[0].Kind = %q, want %q", events[0].Kind, EventPhaseStarted)
+		}
+		if events[1].Kind != EventPhaseCompleted {
+			t.Errorf("events[1].Kind = %q, want %q", events[1].Kind, EventPhaseCompleted)
+		}
+	})
+
+	t.Run("blank_lines_skipped", func(t *testing.T) {
+		dir := t.TempDir()
+		content := `{"timestamp":"2026-04-11T10:00:00Z","phase":"triage","kind":"phase_started"}
+
+{"timestamp":"2026-04-11T10:00:01Z","phase":"triage","kind":"phase_completed"}
+`
+		os.WriteFile(filepath.Join(dir, "events.jsonl"), []byte(content), 0644)
+
+		events, err := ReadEvents(dir)
+		if err != nil {
+			t.Fatalf("ReadEvents: %v", err)
+		}
+		if len(events) != 2 {
+			t.Fatalf("expected 2 events (blank lines skipped), got %d", len(events))
+		}
+	})
+}
+
 func TestLogEvent(t *testing.T) {
 	t.Run("appends_event_to_jsonl", func(t *testing.T) {
 		dir := t.TempDir()

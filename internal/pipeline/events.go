@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -51,6 +52,38 @@ const (
 	EventReviewerFailed         = "reviewer_failed"
 	EventReviewMerged           = "review_merged"
 )
+
+// ReadEvents reads and parses all events from the events.jsonl file in dir.
+// Returns an empty slice if the file does not exist.
+// Malformed lines are silently skipped.
+func ReadEvents(dir string) ([]Event, error) {
+	path := filepath.Join(dir, "events.jsonl")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("pipeline: read events %s: %w", path, err)
+	}
+
+	if len(data) == 0 {
+		return nil, nil
+	}
+
+	var events []Event
+	for _, line := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var ev Event
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			continue // skip malformed lines
+		}
+		events = append(events, ev)
+	}
+	return events, nil
+}
 
 // logEvent appends an event to the events.jsonl file in dir.
 func logEvent(dir string, event Event) error {
