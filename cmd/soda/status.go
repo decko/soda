@@ -10,7 +10,17 @@ import (
 	"time"
 
 	"github.com/decko/soda/internal/pipeline"
+	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
+)
+
+// ANSI escape codes for status column colors (matching internal/progress).
+const (
+	statusColorReset  = "\033[0m"
+	statusColorGreen  = "\033[32m"
+	statusColorRed    = "\033[31m"
+	statusColorYellow = "\033[33m"
+	statusColorDim    = "\033[2m"
 )
 
 // pipelineEntry holds collected data for a single pipeline row.
@@ -104,10 +114,12 @@ func runStatus(stateDir string) error {
 	sortEntries(rows)
 
 	// Render collected entries.
+	isTTY := isatty.IsTerminal(os.Stdout.Fd()) || isatty.IsCygwinTerminal(os.Stdout.Fd())
 	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, "TICKET\tPHASE\tSTATUS\tSUBMITTED\tELAPSED\tCOST")
 	for _, r := range rows {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", r.ticket, r.phase, r.status, r.submitted, r.elapsed, r.cost)
+		status := colorizeStatus(r.status, isTTY)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", r.ticket, r.phase, status, r.submitted, r.elapsed, r.cost)
 	}
 
 	return tw.Flush()
@@ -205,6 +217,27 @@ func statusGroup(status string) int {
 		return 0
 	default:
 		return 1
+	}
+}
+
+// colorizeStatus wraps the status string in ANSI color codes when isTTY is true.
+func colorizeStatus(status string, isTTY bool) string {
+	if !isTTY {
+		return status
+	}
+	switch status {
+	case "running":
+		return statusColorGreen + status + statusColorReset
+	case "completed":
+		return statusColorGreen + status + statusColorReset
+	case "failed":
+		return statusColorRed + status + statusColorReset
+	case "stale":
+		return statusColorYellow + status + statusColorReset
+	case "retrying":
+		return statusColorYellow + status + statusColorReset
+	default:
+		return statusColorDim + status + statusColorReset
 	}
 }
 
