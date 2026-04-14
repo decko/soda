@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -42,6 +43,102 @@ func CreateWorktree(ctx context.Context, repoDir, worktreeBase, branch, baseBran
 	}
 
 	return absPath, nil
+}
+
+// NeedsMergeWithBase returns true if the current branch in repoDir has
+// merge conflicts with the given base branch. It uses "git merge-tree"
+// (available in Git 2.38+) to perform a virtual merge without modifying
+// the working tree. Returns false, nil if the merge would be clean.
+func NeedsMergeWithBase(ctx context.Context, repoDir, baseBranch string) (bool, error) {
+	// First check if there are any new commits on base to merge.
+	mergeBaseCmd := exec.CommandContext(ctx, "git", "merge-base", "HEAD", baseBranch)
+	mergeBaseCmd.Dir = repoDir
+	mergeBaseOut, err := mergeBaseCmd.Output()
+	if err != nil {
+		return false, fmt.Errorf("git: merge-base: %w", err)
+	}
+	mergeBase := strings.TrimSpace(string(mergeBaseOut))
+
+	// Get the current tip of the base branch.
+	revParseCmd := exec.CommandContext(ctx, "git", "rev-parse", baseBranch)
+	revParseCmd.Dir = repoDir
+	baseTipOut, err := revParseCmd.Output()
+	if err != nil {
+		return false, fmt.Errorf("git: rev-parse %s: %w", baseBranch, err)
+	}
+	baseTip := strings.TrimSpace(string(baseTipOut))
+
+	// If merge-base equals base tip, base hasn't diverged — no conflicts possible.
+	if mergeBase == baseTip {
+		return false, nil
+	}
+
+	// Use merge-tree to simulate the merge.
+	mergeTreeCmd := exec.CommandContext(ctx, "git", "merge-tree", "--write-tree", "--no-messages", "HEAD", baseBranch)
+	mergeTreeCmd.Dir = repoDir
+	_, err = mergeTreeCmd.Output()
+	if err != nil {
+		// Non-zero exit means conflicts exist.
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return true, nil
+		}
+		return false, fmt.Errorf("git: merge-tree: %w", err)
+	}
+
+	return false, nil
+}
+
+// Rebase attempts to rebase the current branch onto baseBranch.
+// Returns nil if the rebase succeeds cleanly.
+// If the rebase has conflicts, it aborts the rebase and returns an error.
+func Rebase(ctx context.Context, repoDir, baseBranch string) error {
+	rebaseCmd := exec.CommandContext(ctx, "git", "rebase", baseBranch)
+	rebaseCmd.Dir = repoDir
+	output, err := rebaseCmd.CombinedOutput()
+	if err != nil {
+		// Abort the failed rebase to restore clean state.
+		abortCmd := exec.CommandContext(ctx, "git", "rebase", "--abort")
+		abortCmd.Dir = repoDir
+		_ = abortCmd.Run()
+		return fmt.Errorf("git: rebase onto %s: %s: %w", baseBranch, strings.TrimSpace(string(output)), err)
+	}
+	return nil
+}
+
+// Push pushes the current branch to the given remote.
+func Push(ctx context.Context, repoDir, remote string) error {
+	cmd := exec.CommandContext(ctx, "git", "push", remote)
+	cmd.Dir = repoDir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git: push to %s: %s: %w", remote, strings.TrimSpace(string(output)), err)
+	}
+	return nil
+}
+
+// ForcePush pushes the current branch with --force-with-lease for safety
+// after rebase. Uses --force-with-lease instead of --force to avoid
+// overwriting work pushed from another source.
+func ForcePush(ctx context.Context, repoDir, remote string) error {
+	cmd := exec.CommandContext(ctx, "git", "push", "--force-with-lease", remote)
+	cmd.Dir = repoDir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git: force push to %s: %s: %w", remote, strings.TrimSpace(string(output)), err)
+	}
+	return nil
+}
+
+// FetchBranch fetches a specific branch from the remote.
+func FetchBranch(ctx context.Context, repoDir, remote, branch string) error {
+	cmd := exec.CommandContext(ctx, "git", "fetch", remote, branch)
+	cmd.Dir = repoDir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git: fetch %s %s: %s: %w", remote, branch, strings.TrimSpace(string(output)), err)
+	}
+	return nil
 }
 
 // DeleteBranch deletes a local git branch. It runs "git branch -D <branch>"
