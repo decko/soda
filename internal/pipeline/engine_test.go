@@ -2933,6 +2933,8 @@ func TestEngine_ParallelReview_HappyPath(t *testing.T) {
 }
 
 func TestEngine_ParallelReview_MergedFindings(t *testing.T) {
+	// When max rework cycles is reached (set to 0), review with
+	// critical/major findings should gate with a PhaseGateError.
 	phases := []PhaseConfig{
 		{
 			Name:  "review",
@@ -2973,11 +2975,15 @@ func TestEngine_ParallelReview_MergedFindings(t *testing.T) {
 		},
 	}
 
-	engine, state := setupReviewEngine(t, phases, mock)
+	engine, state := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
+		// Pre-exhaust rework cycles so the gate blocks immediately.
+		cfg.MaxReworkCycles = 1
+	})
+	state.Meta().ReworkCycles = 1
 
 	err := engine.Run(context.Background())
 	if err == nil {
-		t.Fatal("expected PhaseGateError for review with critical/major findings")
+		t.Fatal("expected PhaseGateError for review with critical/major findings at max cycles")
 	}
 
 	var gateErr *PhaseGateError
@@ -2989,6 +2995,9 @@ func TestEngine_ParallelReview_MergedFindings(t *testing.T) {
 	}
 	if !strings.Contains(gateErr.Reason, "rework") {
 		t.Errorf("gate error reason should contain 'rework', got: %q", gateErr.Reason)
+	}
+	if !strings.Contains(gateErr.Reason, "max cycles") {
+		t.Errorf("gate error reason should mention max cycles, got: %q", gateErr.Reason)
 	}
 
 	// Verify the merged result contains findings from both reviewers.
