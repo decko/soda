@@ -206,89 +206,124 @@ func (e *Engine) Resume(ctx context.Context, fromPhase string) error {
 // executePhases runs a slice of phases, handling skip logic, checkpoint
 // pauses, and review rework routing. When forceFirst is true, the first
 // phase in the slice is always re-run regardless of completion status.
+//
+// Rework routing is handled iteratively: when a review phase produces a
+// "rework" verdict, the outer loop increments the rework cycle counter,
+// re-slices the phases from "implement", sets forceFirst, and restarts
+// the inner range loop — avoiding recursion entirely.
 func (e *Engine) executePhases(ctx context.Context, phases []PhaseConfig, forceFirst bool) error {
-	for idx, phase := range phases {
-		if err := ctx.Err(); err != nil {
-			return fmt.Errorf("engine: context cancelled: %w", err)
-		}
+	for {
+		rework := false
 
-		skipCheck := !(forceFirst && idx == 0)
-		if skipCheck && e.shouldSkip(phase) {
-			if err := e.gatePhase(phase); err != nil {
-				// Handle review rework signal the same way as the
-				// non-skipped path: route back to implement.
+		for idx, phase := range phases {
+			if err := ctx.Err(); err != nil {
+				return fmt.Errorf("engine: context cancelled: %w", err)
+			}
+
+			skipCheck := !(forceFirst && idx == 0)
+			if skipCheck && e.shouldSkip(phase) {
+				if err := e.gatePhase(phase); err != nil {
+					// Handle review rework signal on skipped phases — can
+					// occur on Run() re-entry when a prior rework crashed
+					// mid-implement. Route to rework instead of leaking.
+					var reworkSig *reviewReworkSignal
+					if errors.As(err, &reworkSig) {
+						e.state.Meta().ReworkCycles++
+						cycle := e.state.Meta().ReworkCycles
+
+						e.emit(Event{
+							Phase: phase.Name,
+							Kind:  EventReviewReworkRouted,
+							Data: map[string]any{
+								"rework_cycle":      cycle,
+								"max_rework_cycles": e.config.maxReworkCycles(),
+								"routing_to":        "implement",
+							},
+						})
+
+						if err := e.state.flushMeta(); err != nil {
+							return fmt.Errorf("engine: flush meta after rework routing: %w", err)
+						}
+
+						implIdx := -1
+						for i, p := range e.config.Pipeline.Phases {
+							if p.Name == "implement" {
+								implIdx = i
+								break
+							}
+						}
+						if implIdx < 0 {
+							return fmt.Errorf("engine: review rework routing requires an implement phase in the pipeline")
+						}
+
+						phases = e.config.Pipeline.Phases[implIdx:]
+						forceFirst = true
+						rework = true
+						break
+					}
+					return err
+				}
+				e.emit(Event{Phase: phase.Name, Kind: EventPhaseSkipped})
+				continue
+			}
+
+			if err := e.runPhase(ctx, phase); err != nil {
+				// Check for review rework signal — route back to implement.
 				var reworkSig *reviewReworkSignal
 				if errors.As(err, &reworkSig) {
-					return e.handleReviewRework(ctx, phase)
+					e.state.Meta().ReworkCycles++
+					cycle := e.state.Meta().ReworkCycles
+
+					e.emit(Event{
+						Phase: phase.Name,
+						Kind:  EventReviewReworkRouted,
+						Data: map[string]any{
+							"rework_cycle":      cycle,
+							"max_rework_cycles": e.config.maxReworkCycles(),
+							"routing_to":        "implement",
+						},
+					})
+
+					// Flush meta to persist the rework cycle count.
+					if err := e.state.flushMeta(); err != nil {
+						return fmt.Errorf("engine: flush meta after rework routing: %w", err)
+					}
+
+					// Find implement's index and re-slice from there.
+					implIdx := -1
+					for i, p := range e.config.Pipeline.Phases {
+						if p.Name == "implement" {
+							implIdx = i
+							break
+						}
+					}
+					if implIdx < 0 {
+						return fmt.Errorf("engine: review rework routing requires an implement phase in the pipeline")
+					}
+
+					phases = e.config.Pipeline.Phases[implIdx:]
+					forceFirst = true
+					rework = true
+					break
 				}
 				return err
 			}
-			e.emit(Event{Phase: phase.Name, Kind: EventPhaseSkipped})
-			continue
-		}
+			e.reranPhases[phase.Name] = true
 
-		if err := e.runPhase(ctx, phase); err != nil {
-			// Check for review rework signal — route back to implement.
-			var reworkSig *reviewReworkSignal
-			if errors.As(err, &reworkSig) {
-				return e.handleReviewRework(ctx, phase)
-			}
-			return err
-		}
-		e.reranPhases[phase.Name] = true
-
-		if e.config.Mode == Checkpoint {
-			e.emit(Event{Phase: phase.Name, Kind: EventCheckpointPause})
-			select {
-			case <-e.confirmCh:
-			case <-ctx.Done():
-				return fmt.Errorf("engine: context cancelled during checkpoint: %w", ctx.Err())
+			if e.config.Mode == Checkpoint {
+				e.emit(Event{Phase: phase.Name, Kind: EventCheckpointPause})
+				select {
+				case <-e.confirmCh:
+				case <-ctx.Done():
+					return fmt.Errorf("engine: context cancelled during checkpoint: %w", ctx.Err())
+				}
 			}
 		}
-	}
 
-	return nil
-}
-
-// handleReviewRework routes the pipeline back to implement after a review
-// produces a "rework" verdict. It increments the rework cycle counter,
-// emits a routing event, and resumes execution from the implement phase.
-func (e *Engine) handleReviewRework(ctx context.Context, reviewPhase PhaseConfig) error {
-	e.state.Meta().ReworkCycles++
-	cycle := e.state.Meta().ReworkCycles
-
-	e.emit(Event{
-		Phase: reviewPhase.Name,
-		Kind:  EventReviewReworkRouted,
-		Data: map[string]any{
-			"rework_cycle":      cycle,
-			"max_rework_cycles": e.config.maxReworkCycles(),
-			"routing_to":        "implement",
-		},
-	})
-
-	// Flush meta to persist the rework cycle count.
-	if err := e.state.flushMeta(); err != nil {
-		return fmt.Errorf("engine: flush meta after rework routing: %w", err)
-	}
-
-	// Find implement's index and re-run from there.
-	implIdx := -1
-	for idx, phase := range e.config.Pipeline.Phases {
-		if phase.Name == "implement" {
-			implIdx = idx
-			break
+		if !rework {
+			return nil
 		}
 	}
-	if implIdx < 0 {
-		return fmt.Errorf("engine: review rework routing requires an implement phase in the pipeline")
-	}
-
-	// Mark implement and all downstream phases as needing re-run.
-	// The forceFirst=true flag on executePhases ensures implement runs
-	// even if completed, and shouldSkip will invalidate downstream phases
-	// because we mark implement as re-ran.
-	return e.executePhases(ctx, e.config.Pipeline.Phases[implIdx:], true)
 }
 
 // Confirm unblocks the engine in Checkpoint mode.
