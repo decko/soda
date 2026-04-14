@@ -355,6 +355,17 @@ Parallelizable: #1, #3, and #6 have no dependencies on each other.
 
 When discovering bugs, tech debt, or improvement opportunities during a task, file them as separate GitHub issues with the `triage-needed` label. Do not fix them inline — stay focused on the current ticket's scope.
 
+## New issue checklist
+
+When creating a new issue, check whether any existing docs need updating as part of the work:
+
+- Does the change affect `AGENTS.md`? (architecture, conventions, project structure, build sequence, gotchas)
+- Does it add/change CLI commands or flags? (update `config.example.yaml`, help text)
+- Does it change phase behavior? (update `phases.yaml` docs, prompt templates)
+- Does it affect the state format? (update "State on disk" section in `AGENTS.md`)
+
+If yes, include a "Docs to update" section in the issue body listing the files that need changes.
+
 ## What NOT to do
 
 - Do not hardcode project-specific references (repo names, Jira projects, ticket keys)
