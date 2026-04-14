@@ -9,6 +9,23 @@ Summary: {{.Ticket.Summary}}
 {{.Artifacts.Plan}}
 
 {{- if .ReworkFeedback}}
+{{- if eq .ReworkFeedback.Source "review"}}
+
+## MANDATORY: Specialist Review Findings (MUST address)
+
+The following issues were identified by specialist reviewers.
+You MUST address every critical and major finding below. Do not repeat the same mistakes.
+
+{{- range .ReworkFeedback.ReviewFindings}}
+
+### {{.Source}}
+- [{{.Severity}}] {{.File}}{{if .Line}}:{{.Line}}{{end}} — {{.Issue}}
+  Suggestion: {{.Suggestion}}
+{{- end}}
+
+After implementing, verify that each finding above is addressed before reporting completion.
+If any feedback above contradicts the Implementation Plan, the plan takes precedence.
+{{- else}}
 
 ## MANDATORY: Previous Verification Failures
 
@@ -49,6 +66,7 @@ You MUST address every item below. Do not repeat the same mistakes.
 
 If any feedback above contradicts the Implementation Plan, the plan takes precedence.
 After implementing, verify that each fix above is addressed before reporting completion.
+{{- end}}
 {{- end}}
 
 {{- if .Context.RepoConventions}}

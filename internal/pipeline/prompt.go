@@ -25,14 +25,27 @@ type PromptData struct {
 	ReworkFeedback *ReworkFeedback
 }
 
-// ReworkFeedback holds selective feedback from a failed verify phase,
-// injected into implement's prompt on resume.
+// ReworkFeedback holds selective feedback from a failed verify phase
+// or a review-rework verdict, injected into implement's prompt on resume.
 type ReworkFeedback struct {
 	Verdict        string
+	Source         string // "verify" or "review"
 	FixesRequired  []string
 	FailedCriteria []FailedCriterion
 	CodeIssues     []ReworkCodeIssue
 	FailedCommands []FailedCommand
+	ReviewFindings []ReviewReworkFinding
+}
+
+// ReviewReworkFinding holds a critical or major finding from a specialist
+// reviewer, injected into the implement prompt for rework.
+type ReviewReworkFinding struct {
+	Source     string // reviewer name, e.g. "go-specialist"
+	Severity   string // "critical" or "major"
+	File       string
+	Line       int
+	Issue      string
+	Suggestion string
 }
 
 // FailedCriterion is a single acceptance criterion that failed verification.

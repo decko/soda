@@ -50,6 +50,8 @@ const (
 	EventReviewerCompleted      = "reviewer_completed"
 	EventReviewerFailed         = "reviewer_failed"
 	EventReviewMerged           = "review_merged"
+	EventReviewReworkRouted     = "review_rework_routed"
+	EventReviewReworkMaxCycles  = "review_rework_max_cycles"
 )
 
 // logEvent appends an event to the events.jsonl file in dir.

@@ -1,6 +1,9 @@
 package pipeline
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // BudgetExceededError is returned when accumulated cost exceeds the configured limit.
 type BudgetExceededError struct {
@@ -33,4 +36,29 @@ type PhaseGateError struct {
 
 func (e *PhaseGateError) Error() string {
 	return fmt.Sprintf("pipeline: phase %s gated: %s", e.Phase, e.Reason)
+}
+
+// reviewReworkSignal is an internal sentinel error used by gatePhase to
+// signal the engine loop that the review phase produced a "rework" verdict
+// and the pipeline should route back to implement. This is NOT a terminal
+// error — the engine loop catches it and handles routing.
+type reviewReworkSignal struct {
+	findings []struct {
+		Severity string `json:"severity"`
+		Issue    string `json:"issue"`
+	}
+}
+
+func (e *reviewReworkSignal) Error() string {
+	var issues []string
+	for _, finding := range e.findings {
+		sev := strings.ToLower(finding.Severity)
+		if sev == "critical" || sev == "major" {
+			issues = append(issues, finding.Issue)
+		}
+	}
+	if len(issues) > 0 {
+		return "review rework signal: " + strings.Join(issues, "; ")
+	}
+	return "review rework signal"
 }

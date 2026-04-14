@@ -32,13 +32,14 @@ type PhaseState struct {
 
 // PipelineMeta is the top-level state stored in meta.json.
 type PipelineMeta struct {
-	Ticket    string                 `json:"ticket"`
-	Summary   string                 `json:"summary,omitempty"`
-	Branch    string                 `json:"branch,omitempty"`
-	Worktree  string                 `json:"worktree,omitempty"`
-	StartedAt time.Time              `json:"started_at"`
-	TotalCost float64                `json:"total_cost"`
-	Phases    map[string]*PhaseState `json:"phases"`
+	Ticket       string                 `json:"ticket"`
+	Summary      string                 `json:"summary,omitempty"`
+	Branch       string                 `json:"branch,omitempty"`
+	Worktree     string                 `json:"worktree,omitempty"`
+	StartedAt    time.Time              `json:"started_at"`
+	TotalCost    float64                `json:"total_cost"`
+	ReworkCycles int                    `json:"rework_cycles,omitempty"`
+	Phases       map[string]*PhaseState `json:"phases"`
 }
 
 // ReadMeta reads and unmarshals a meta.json file.

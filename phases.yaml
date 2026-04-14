@@ -101,6 +101,10 @@ phases:
       - name: ai-harness
         prompt: prompts/review-harness.md
         focus: "prompt engineering, context budget, Claude CLI integration, sandbox, structured output"
+    # Routing: critical/major → rework (route back to implement),
+    # minor → follow-up (proceed to submit, queue follow-up phase),
+    # none → pass (proceed to submit).
+    # Max rework cycles is configured in EngineConfig (default: 2).
 
   - name: submit
     prompt: prompts/submit.md
