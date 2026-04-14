@@ -23,6 +23,36 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 	}
 
 	polling := phase.Polling
+
+	// Apply monitor profile if configured (profile on PollingConfig or EngineConfig).
+	var profile *MonitorProfile
+	if e.config.MonitorProfile != nil {
+		profile = e.config.MonitorProfile
+		polling = profile.ToPollingConfig()
+		e.emit(Event{
+			Phase: phase.Name,
+			Kind:  EventMonitorProfileApplied,
+			Data: map[string]any{
+				"profile": string(profile.Name),
+				"source":  "engine_config",
+			},
+		})
+	} else if polling != nil && polling.Profile != "" {
+		p, err := GetMonitorProfile(polling.Profile)
+		if err == nil {
+			profile = p
+			polling = profile.ToPollingConfig()
+			e.emit(Event{
+				Phase: phase.Name,
+				Kind:  EventMonitorProfileApplied,
+				Data: map[string]any{
+					"profile": string(profile.Name),
+					"source":  "polling_config",
+				},
+			})
+		}
+	}
+
 	if polling == nil {
 		polling = &PollingConfig{
 			InitialInterval:   Duration{Duration: 2 * time.Minute},
@@ -224,7 +254,8 @@ func (e *Engine) checkPRStatus(ctx context.Context, phaseName string, monState *
 	return false, nil
 }
 
-// checkNewComments polls for new review comments and increments response rounds.
+// checkNewComments polls for new review comments, classifies them,
+// and only increments response rounds for actionable comments.
 func (e *Engine) checkNewComments(ctx context.Context, phaseName string, monState *MonitorState) {
 	comments, err := e.config.PRPoller.GetNewComments(ctx, monState.PRURL, monState.LastCommentID)
 	if err != nil {
@@ -239,14 +270,59 @@ func (e *Engine) checkNewComments(ctx context.Context, phaseName string, monStat
 	// Update last comment ID to the latest one.
 	lastComment := comments[len(comments)-1]
 	monState.LastCommentID = lastComment.ID
-	monState.ResponseRounds++
 
-	commentSummaries := make([]map[string]any, 0, len(comments))
-	for _, comment := range comments {
+	// Build classifier using engine config.
+	classifier := NewCommentClassifier(
+		e.config.SelfUser,
+		e.config.BotUsers,
+		e.config.AuthorityResolver,
+	)
+
+	classified := classifier.ClassifyAll(comments)
+
+	// Emit per-comment classification events.
+	for _, cc := range classified {
+		if cc.Actionable {
+			e.emit(Event{
+				Phase: phaseName,
+				Kind:  EventMonitorCommentClassified,
+				Data: map[string]any{
+					"comment_id": cc.Comment.ID,
+					"author":     cc.Comment.Author,
+					"type":       string(cc.Type),
+					"action":     string(cc.Action),
+					"reason":     cc.Reason,
+				},
+			})
+		} else {
+			e.emit(Event{
+				Phase: phaseName,
+				Kind:  EventMonitorCommentSkipped,
+				Data: map[string]any{
+					"comment_id": cc.Comment.ID,
+					"author":     cc.Comment.Author,
+					"type":       string(cc.Type),
+					"reason":     cc.Reason,
+				},
+			})
+		}
+	}
+
+	// Only increment response rounds if there are actionable comments.
+	actionable := HasActionable(classified)
+	if actionable {
+		monState.ResponseRounds++
+	}
+
+	commentSummaries := make([]map[string]any, 0, len(classified))
+	for _, cc := range classified {
 		commentSummaries = append(commentSummaries, map[string]any{
-			"id":     comment.ID,
-			"author": comment.Author,
-			"path":   comment.Path,
+			"id":         cc.Comment.ID,
+			"author":     cc.Comment.Author,
+			"path":       cc.Comment.Path,
+			"type":       string(cc.Type),
+			"action":     string(cc.Action),
+			"actionable": cc.Actionable,
 		})
 	}
 
@@ -255,6 +331,7 @@ func (e *Engine) checkNewComments(ctx context.Context, phaseName string, monStat
 		Kind:  EventMonitorNewComments,
 		Data: map[string]any{
 			"count":           len(comments),
+			"actionable":      actionable,
 			"response_rounds": monState.ResponseRounds,
 			"comments":        commentSummaries,
 		},
@@ -304,7 +381,8 @@ func (e *Engine) checkCIStatus(ctx context.Context, phaseName string, monState *
 	}
 }
 
-// checkMergeConflicts detects merge conflicts and attempts auto-rebase.
+// checkMergeConflicts detects merge conflicts and attempts auto-rebase
+// if the monitor profile allows it (or if no profile is configured).
 func (e *Engine) checkMergeConflicts(ctx context.Context, phaseName string, monState *MonitorState) {
 	workDir := e.state.Meta().Worktree
 	if workDir == "" {
@@ -375,4 +453,3 @@ func (e *Engine) pollInterval(polling *PollingConfig, elapsed time.Duration) tim
 	}
 	return polling.InitialInterval.Duration
 }
-
