@@ -42,6 +42,11 @@ soda (Go TUI + Pipeline Engine)
 - **Pluggable ticket sources** (Jira first, GitHub later)
 - **Config-driven phases** (add, remove, reorder via YAML)
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup instructions, pre-commit
+hooks, and code style guidelines.
+
 ## License
 
 Apache-2.0 — see [LICENSE](LICENSE)
