@@ -624,6 +624,50 @@ func TestPrintSummaryParseError(t *testing.T) {
 	}
 }
 
+func TestPrintSummaryTransientErrorEmptyPhase(t *testing.T) {
+	dir := t.TempDir()
+	state, _ := pipeline.LoadOrCreate(dir, "PROJ-31")
+	meta := state.Meta()
+	meta.Branch = "soda/PROJ-31"
+	meta.TotalCost = 0.10
+
+	// No phase has PhaseFailed, so failedPhase will be "".
+	transientErr := fmt.Errorf("engine: transient: %w",
+		&claude.TransientError{Reason: "timeout", Err: fmt.Errorf("connection reset")})
+	var buf bytes.Buffer
+	fprintSummary(&buf, state, testPhases(), "Transient empty phase", 30*time.Second, transientErr, nil)
+	output := buf.String()
+
+	if strings.Contains(output, "--from ") {
+		t.Error("should not suggest --from when failedPhase is empty")
+	}
+	if !strings.Contains(output, "soda run PROJ-31") {
+		t.Error("expected bare soda run suggestion")
+	}
+}
+
+func TestPrintSummaryParseErrorEmptyPhase(t *testing.T) {
+	dir := t.TempDir()
+	state, _ := pipeline.LoadOrCreate(dir, "PROJ-41")
+	meta := state.Meta()
+	meta.Branch = "soda/PROJ-41"
+	meta.TotalCost = 0.10
+
+	// No phase has PhaseFailed, so failedPhase will be "".
+	parseErr := fmt.Errorf("engine: parse: %w",
+		&claude.ParseError{Raw: []byte("bad"), Err: fmt.Errorf("invalid")})
+	var buf bytes.Buffer
+	fprintSummary(&buf, state, testPhases(), "Parse empty phase", 30*time.Second, parseErr, nil)
+	output := buf.String()
+
+	if strings.Contains(output, "--from ") {
+		t.Error("should not suggest --from when failedPhase is empty")
+	}
+	if !strings.Contains(output, "soda run PROJ-41") {
+		t.Error("expected bare soda run suggestion")
+	}
+}
+
 func TestPrintSummaryGenericError(t *testing.T) {
 	dir := t.TempDir()
 	state, _ := pipeline.LoadOrCreate(dir, "PROJ-60")

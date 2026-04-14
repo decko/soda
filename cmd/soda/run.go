@@ -689,16 +689,22 @@ func formatNextSteps(w io.Writer, meta *pipeline.PipelineMeta, phases []pipeline
 		fmt.Fprintf(w, "    soda run %s --from %s  (resume with higher budget)\n", ticket, be.Phase)
 
 	case isTransientError(runErr):
-		resumeFrom := failedPhase
 		fmt.Fprintf(w, "  A transient error occurred (network, rate-limit, or timeout).\n")
 		fmt.Fprintf(w, "  • Wait a moment and retry:\n")
-		fmt.Fprintf(w, "    soda run %s --from %s  (retry the failed phase)\n", ticket, resumeFrom)
+		if failedPhase != "" {
+			fmt.Fprintf(w, "    soda run %s --from %s  (retry the failed phase)\n", ticket, failedPhase)
+		} else {
+			fmt.Fprintf(w, "    soda run %s\n", ticket)
+		}
 
 	case isParseError(runErr):
-		resumeFrom := failedPhase
 		fmt.Fprintf(w, "  The model returned output that could not be parsed.\n")
 		fmt.Fprintf(w, "  • Retry (the model may produce valid output on the next attempt):\n")
-		fmt.Fprintf(w, "    soda run %s --from %s  (retry with a fresh attempt)\n", ticket, resumeFrom)
+		if failedPhase != "" {
+			fmt.Fprintf(w, "    soda run %s --from %s  (retry with a fresh attempt)\n", ticket, failedPhase)
+		} else {
+			fmt.Fprintf(w, "    soda run %s\n", ticket)
+		}
 
 	default:
 		// Generic fallback: suggest resuming from predecessor or failed phase.
