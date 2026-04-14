@@ -3,7 +3,7 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -510,7 +510,7 @@ func TestIntegration_MockGateBlocksDownstream(t *testing.T) {
 	}
 
 	var gateErr *PhaseGateError
-	if !isPhaseGateError(err, &gateErr) {
+	if !errors.As(err, &gateErr) {
 		t.Fatalf("expected PhaseGateError, got: %T: %v", err, err)
 	}
 	if gateErr.Phase != "triage" {
@@ -960,7 +960,7 @@ func TestIntegration_MockBudgetEnforcement(t *testing.T) {
 	}
 
 	var budgetErr *BudgetExceededError
-	if !isBudgetExceededError(err, &budgetErr) {
+	if !errors.As(err, &budgetErr) {
 		t.Fatalf("expected BudgetExceededError, got: %T: %v", err, err)
 	}
 	if budgetErr.Phase != "plan" {
@@ -1083,44 +1083,4 @@ Respond with a JSON object containing:
 		t.Error("TotalCost should be positive for real API call")
 	}
 	t.Logf("Real API cost: $%.4f", state.Meta().TotalCost)
-}
-
-// --- helpers ---
-
-func isPhaseGateError(err error, target **PhaseGateError) bool {
-	return fmt.Errorf("%w", err) != nil && findPhaseGateError(err, target)
-}
-
-func findPhaseGateError(err error, target **PhaseGateError) bool {
-	if err == nil {
-		return false
-	}
-	type unwrapper interface {
-		Unwrap() error
-	}
-	if pge, ok := err.(*PhaseGateError); ok {
-		*target = pge
-		return true
-	}
-	if u, ok := err.(unwrapper); ok {
-		return findPhaseGateError(u.Unwrap(), target)
-	}
-	return false
-}
-
-func isBudgetExceededError(err error, target **BudgetExceededError) bool {
-	if err == nil {
-		return false
-	}
-	type unwrapper interface {
-		Unwrap() error
-	}
-	if bee, ok := err.(*BudgetExceededError); ok {
-		*target = bee
-		return true
-	}
-	if u, ok := err.(unwrapper); ok {
-		return isBudgetExceededError(u.Unwrap(), target)
-	}
-	return false
 }
