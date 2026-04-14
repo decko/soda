@@ -73,16 +73,10 @@ func runStatus(stateDir string) error {
 			continue
 		}
 
-		phase, status := currentPhaseStatus(meta, pl.Phases)
+		phase, _ := currentPhaseStatus(meta, pl.Phases)
 		lockPath := filepath.Join(ticketDir, "lock")
-		lockInfo, lockErr := pipeline.ReadLockInfo(lockPath)
-		if lockErr == nil {
-			if lockInfo.IsAlive {
-				status = "running"
-			} else {
-				status = "stale"
-			}
-		}
+		lockInfo, _ := pipeline.ReadLockInfo(lockPath)
+		status := pipelineStatus(meta, lockInfo)
 
 		elapsed := formatElapsed(meta)
 		cost := fmt.Sprintf("$%.2f", meta.TotalCost)
@@ -134,6 +128,53 @@ func currentPhaseStatus(meta *pipeline.PipelineMeta, phases []pipeline.PhaseConf
 		return "-", "pending"
 	}
 	return latestPhase, latestStatus
+}
+
+// pipelineStatus computes a pipeline-level status from lock info and phase state.
+// Priority: lock alive → "running", lock stale → "stale", any phase failed → "failed",
+// all phases completed → "completed", otherwise fall back to the most advanced phase status.
+func pipelineStatus(meta *pipeline.PipelineMeta, lockInfo *pipeline.LockInfo) string {
+	if lockInfo != nil {
+		if lockInfo.IsAlive {
+			return "running"
+		}
+		return "stale"
+	}
+
+	// No lock file — derive status from phase states.
+	hasFailed := false
+	hasNonCompleted := false
+	hasAny := false
+	for _, ps := range meta.Phases {
+		hasAny = true
+		if ps.Status == pipeline.PhaseFailed {
+			hasFailed = true
+		}
+		if ps.Status != pipeline.PhaseCompleted && ps.Status != pipeline.PhaseSkipped {
+			hasNonCompleted = true
+		}
+	}
+	if hasFailed {
+		return "failed"
+	}
+	if hasAny && !hasNonCompleted {
+		return "completed"
+	}
+
+	// Fallback: use the most advanced phase's status.
+	status := ""
+	bestRank := -1
+	for _, ps := range meta.Phases {
+		r := phaseRank(ps.Status)
+		if r > bestRank {
+			bestRank = r
+			status = string(ps.Status)
+		}
+	}
+	if status == "" {
+		return "pending"
+	}
+	return status
 }
 
 func phaseRank(status pipeline.PhaseStatus) int {
