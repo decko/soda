@@ -195,11 +195,13 @@ Atomic writes: always write to `.tmp` then rename. Archive on re-run (`verify.js
 - **Assisted-by**: add an `Assisted-by:` trailer at the end of the commit message naming the model used (e.g., `Assisted-by: Claude Opus 4.6`, `Assisted-by: GPT-4o`). One trailer per commit.
 - **Squash merge format**: title is the PR title (under 70 chars), body is a concise summary of what changed (not the full list of individual commits), single `Assisted-by:` trailer at the end.
 - After PR is merged, start fresh — never build on already-merged branches.
+- **Pre-commit hooks**: run `./scripts/setup-hooks.sh` once to enable the `.githooks/pre-commit` hook (`gofmt -l` + `go vet` on staged `.go` files). Skip with `--no-verify` or `SKIP_HOOKS=1`. See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ## Conventions
 
 - **Formatting**: `gofmt` (standard Go formatting)
-- **Linting**: `go vet` + `staticcheck`
+- **Linting**: `go vet` + `staticcheck` (`staticcheck` is CI-only; `gofmt` and `go vet` run locally via the pre-commit hook)
+- **Pre-commit hook**: `.githooks/pre-commit` enforces `gofmt` and `go vet` on staged `.go` files. Setup: `./scripts/setup-hooks.sh`
 - **Testing**: `go test ./...`
 - **Building**: `go build -o soda ./cmd/soda`
 - **No single-char variables**: use descriptive names in loops and closures
