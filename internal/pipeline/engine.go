@@ -282,14 +282,29 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 		}
 	}
 
-	tmplContent, err := e.config.Loader.Load(phase.Prompt)
+	loadResult, err := e.config.Loader.LoadWithSource(phase.Prompt)
 	if err != nil {
 		_ = e.state.MarkFailed(phase.Name, err)
 		e.emit(Event{Phase: phase.Name, Kind: EventPhaseFailed, Data: map[string]any{"error": err.Error()}})
 		return fmt.Errorf("engine: load template for %s: %w", phase.Name, err)
 	}
 
-	rendered, err := RenderPrompt(tmplContent, promptData)
+	// Emit source info so operators can see which template was used.
+	promptEvent := Event{
+		Phase: phase.Name,
+		Kind:  EventPromptLoaded,
+		Data: map[string]any{
+			"source":      loadResult.Source,
+			"is_override": loadResult.IsOverride,
+		},
+	}
+	if loadResult.Fallback {
+		promptEvent.Data["fallback"] = true
+		promptEvent.Data["fallback_reason"] = loadResult.FallbackReason
+	}
+	e.emit(promptEvent)
+
+	rendered, err := RenderPrompt(loadResult.Content, promptData)
 	if err != nil {
 		_ = e.state.MarkFailed(phase.Name, err)
 		e.emit(Event{Phase: phase.Name, Kind: EventPhaseFailed, Data: map[string]any{"error": err.Error()}})

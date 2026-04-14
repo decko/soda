@@ -116,6 +116,23 @@ type PromptLoader struct {
 	dirs []string
 }
 
+// LoadResult holds the outcome of a template load, including where the
+// template was found and whether validation caused a fallback.
+type LoadResult struct {
+	// Content is the raw template text.
+	Content string
+	// Source is the resolved file path from which the template was loaded.
+	Source string
+	// IsOverride is true when the template came from an earlier directory
+	// (user override) rather than the last directory (embedded default).
+	IsOverride bool
+	// Fallback is true when an override was found but failed validation,
+	// causing the loader to fall back to a later directory.
+	Fallback bool
+	// FallbackReason describes why the override was rejected, if Fallback is true.
+	FallbackReason string
+}
+
 // NewPromptLoader creates a loader that searches the given directories in order.
 func NewPromptLoader(dirs ...string) *PromptLoader {
 	return &PromptLoader{dirs: dirs}
@@ -124,16 +141,31 @@ func NewPromptLoader(dirs ...string) *PromptLoader {
 // Load returns the template content for the given filename.
 // Searches directories in order, returning the first match.
 func (loader *PromptLoader) Load(name string) (string, error) {
-	// Reject path traversal attempts
+	result, err := loader.LoadWithSource(name)
+	if err != nil {
+		return "", err
+	}
+	return result.Content, nil
+}
+
+// LoadWithSource returns the template content along with source metadata.
+// Override templates (found in earlier directories) are validated; if
+// validation fails, the loader logs the reason and falls back to the
+// next directory. The last directory is assumed to hold trusted embedded
+// defaults and is not validated.
+func (loader *PromptLoader) LoadWithSource(name string) (*LoadResult, error) {
 	cleaned := filepath.Clean(name)
 	if strings.Contains(cleaned, "..") {
-		return "", fmt.Errorf("prompt: path traversal rejected: %s", name)
+		return nil, fmt.Errorf("prompt: path traversal rejected: %s", name)
 	}
 
-	for _, dir := range loader.dirs {
+	lastIdx := len(loader.dirs) - 1
+	var fallbackReason string
+
+	for i, dir := range loader.dirs {
 		path := filepath.Join(dir, cleaned)
 
-		// Verify resolved path stays within the directory
+		// Verify resolved path stays within the directory.
 		absDir, err := filepath.Abs(dir)
 		if err != nil {
 			continue
@@ -143,7 +175,7 @@ func (loader *PromptLoader) Load(name string) (string, error) {
 			continue
 		}
 		if !strings.HasPrefix(absPath, absDir+string(os.PathSeparator)) && absPath != absDir {
-			return "", fmt.Errorf("prompt: path traversal rejected: %s", name)
+			return nil, fmt.Errorf("prompt: path traversal rejected: %s", name)
 		}
 
 		data, err := os.ReadFile(path)
@@ -151,12 +183,52 @@ func (loader *PromptLoader) Load(name string) (string, error) {
 			continue
 		}
 		if err != nil {
-			return "", fmt.Errorf("prompt: read %s: %w", path, err)
+			return nil, fmt.Errorf("prompt: read %s: %w", path, err)
 		}
-		return string(data), nil
+
+		content := string(data)
+		isOverride := i < lastIdx
+
+		// Validate override templates; skip invalid ones with fallback.
+		if isOverride {
+			if verr := ValidateTemplate(content); verr != nil {
+				fallbackReason = fmt.Sprintf("override %s invalid: %v", absPath, verr)
+				continue
+			}
+		}
+
+		result := &LoadResult{
+			Content:    content,
+			Source:     absPath,
+			IsOverride: isOverride,
+		}
+		if fallbackReason != "" {
+			result.Fallback = true
+			result.FallbackReason = fallbackReason
+		}
+		return result, nil
 	}
 
-	return "", fmt.Errorf("prompt: %s not found in %v", name, loader.dirs)
+	return nil, fmt.Errorf("prompt: %s not found in %v", name, loader.dirs)
+}
+
+// ValidateTemplate parses a Go text/template and executes it against a
+// zero-value PromptData. This catches syntax errors and references to
+// fields that don't exist on PromptData. Templates that only fail at
+// render time due to missing runtime data (e.g. nil pointer deref on
+// optional sections) are not caught here — they require RenderPrompt.
+func ValidateTemplate(tmpl string) error {
+	parsed, err := template.New("prompt").Option("missingkey=error").Parse(tmpl)
+	if err != nil {
+		return fmt.Errorf("prompt: parse template: %w", err)
+	}
+
+	var buf bytes.Buffer
+	if err := parsed.Execute(&buf, PromptData{}); err != nil {
+		return fmt.Errorf("prompt: validate template: %w", err)
+	}
+
+	return nil
 }
 
 // RenderPrompt executes a Go text/template against the given data.

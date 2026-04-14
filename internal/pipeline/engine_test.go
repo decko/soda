@@ -2599,6 +2599,157 @@ func TestEngine_TruncateLines(t *testing.T) {
 	}
 }
 
+func TestEngine_PromptLoadedEvents(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage done",
+					CostUSD: 0.01,
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(e Event) {
+			events = append(events, e)
+		}
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Find the prompt_loaded event for triage.
+	var promptEvent *Event
+	for i := range events {
+		if events[i].Kind == EventPromptLoaded && events[i].Phase == "triage" {
+			promptEvent = &events[i]
+			break
+		}
+	}
+	if promptEvent == nil {
+		t.Fatal("expected prompt_loaded event for triage phase")
+	}
+
+	source, _ := promptEvent.Data["source"].(string)
+	if !strings.HasSuffix(source, "triage.md") {
+		t.Errorf("prompt source = %q, want path ending in triage.md", source)
+	}
+
+	// Single dir means not an override (it's the embedded default).
+	isOverride, _ := promptEvent.Data["is_override"].(bool)
+	if isOverride {
+		t.Error("expected is_override = false for single-dir loader")
+	}
+}
+
+func TestEngine_PromptLoadedFallbackEvent(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage done",
+					CostUSD: 0.01,
+				},
+			}},
+		},
+	}
+
+	// Create override dir with an invalid template, and embedded dir with a good one.
+	overrideDir := t.TempDir()
+	embeddedDir := t.TempDir()
+
+	os.WriteFile(filepath.Join(overrideDir, "triage.md"), []byte("{{.BogusField}}"), 0644)
+	os.WriteFile(filepath.Join(embeddedDir, "triage.md"), []byte("Phase: triage\nTicket: {{.Ticket.Key}}\n"), 0644)
+
+	stateDir := t.TempDir()
+	state, err := LoadOrCreate(stateDir, "FALLBACK-1")
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+
+	var events []Event
+	cfg := EngineConfig{
+		Pipeline:   &PhasePipeline{Phases: phases},
+		Loader:     NewPromptLoader(overrideDir, embeddedDir),
+		Ticket:     TicketData{Key: "FALLBACK-1", Summary: "Fallback test"},
+		Model:      "test-model",
+		WorkDir:    t.TempDir(),
+		MaxCostUSD: 0,
+		Mode:       Autonomous,
+		SleepFunc:  func(time.Duration) {},
+		JitterFunc: func(time.Duration) time.Duration { return 0 },
+		OnEvent:    func(e Event) { events = append(events, e) },
+	}
+
+	engine := NewEngine(mock, state, cfg)
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Find the prompt_loaded event.
+	var promptEvent *Event
+	for i := range events {
+		if events[i].Kind == EventPromptLoaded && events[i].Phase == "triage" {
+			promptEvent = &events[i]
+			break
+		}
+	}
+	if promptEvent == nil {
+		t.Fatal("expected prompt_loaded event for triage phase")
+	}
+
+	// Should indicate fallback happened.
+	fallback, _ := promptEvent.Data["fallback"].(bool)
+	if !fallback {
+		t.Error("expected fallback = true in prompt_loaded event")
+	}
+
+	reason, _ := promptEvent.Data["fallback_reason"].(string)
+	if reason == "" {
+		t.Error("expected non-empty fallback_reason")
+	}
+
+	// Source should be the embedded dir, not the override.
+	source, _ := promptEvent.Data["source"].(string)
+	if !strings.Contains(source, embeddedDir) {
+		t.Errorf("source = %q, want path in embedded dir %q", source, embeddedDir)
+	}
+
+	// Should NOT be marked as override (it fell back to embedded).
+	isOverride, _ := promptEvent.Data["is_override"].(bool)
+	if isOverride {
+		t.Error("expected is_override = false after fallback to embedded dir")
+	}
+
+	// Phase should still complete successfully.
+	if !state.IsCompleted("triage") {
+		t.Error("triage should be completed after fallback")
+	}
+}
+
 // phaseNames extracts phase names from runner calls for test error messages.
 func phaseNames(calls []runner.RunOpts) []string {
 	names := make([]string, len(calls))
