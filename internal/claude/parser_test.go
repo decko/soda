@@ -236,13 +236,45 @@ func TestExtractJSON(t *testing.T) {
 			name:  "last_line_non_envelope_json",
 			input: "{\"type\":\"result\",\"subtype\":\"success\"}\n{\"error\":\"not found\"}\n",
 			check: func(t *testing.T, raw []byte) {
-				t.Skip("known limitation: strategy 2 does not validate envelope type")
 				var obj map[string]string
 				if err := json.Unmarshal(raw, &obj); err != nil {
 					t.Fatalf("unmarshal: %v", err)
 				}
 				if obj["type"] != "result" {
 					t.Errorf("should extract result envelope, got type=%q", obj["type"])
+				}
+			},
+		},
+		{
+			name:  "truncated_envelope_returns_inner_json",
+			input: `{"type":"result","subtype":"success","structured_output":{"ticket_key":"60","approach":"test"}`,
+			check: func(t *testing.T, raw []byte) {
+				// Outer envelope is truncated (missing closing }).
+				// Strategy 2 should return the inner JSON as fallback.
+				var obj map[string]string
+				if err := json.Unmarshal(raw, &obj); err != nil {
+					t.Fatalf("unmarshal: %v", err)
+				}
+				if obj["ticket_key"] != "60" {
+					t.Errorf("expected inner JSON with ticket_key=60, got %s", raw)
+				}
+				// Verify ParseResponse rejects this as non-envelope.
+				_, parseErr := ParseResponse([]byte(`{"type":"result","subtype":"success","structured_output":{"ticket_key":"60","approach":"test"}`))
+				if parseErr == nil {
+					t.Error("expected ParseResponse to reject truncated envelope")
+				}
+			},
+		},
+		{
+			name:  "envelope_preferred_over_later_non_envelope",
+			input: "some log output\n{\"type\":\"result\",\"subtype\":\"success\"}\nmore output\n{\"status\":\"ok\"}\n",
+			check: func(t *testing.T, raw []byte) {
+				var obj map[string]string
+				if err := json.Unmarshal(raw, &obj); err != nil {
+					t.Fatalf("unmarshal: %v", err)
+				}
+				if obj["type"] != "result" {
+					t.Errorf("should prefer result envelope, got type=%q", obj["type"])
 				}
 			},
 		},

@@ -115,24 +115,38 @@ func isResultEnvelope(data []byte) bool {
 	return json.Unmarshal(data, &check) == nil && check.Type == "result"
 }
 
-// extractJSONByDepth scans backwards for the last valid JSON object.
-// NOTE: This function does not validate the envelope type — the ParseResponse
-// type check handles that after extraction.
+// extractJSONByDepth scans backwards for valid JSON objects in the output,
+// preferring result envelopes over other valid JSON. Tries each closing '}'
+// as a potential endpoint to handle multiple top-level JSON objects.
+// Falls back to the outermost valid non-envelope JSON for diagnostics.
 func extractJSONByDepth(output []byte) ([]byte, error) {
-	end := bytes.LastIndexByte(output, '}')
-	if end == -1 {
-		return nil, errNoJSON
-	}
+	var fallback []byte
 
-	for i := end; i >= 0; i-- {
-		if output[i] == '{' {
-			candidate := output[i : end+1]
-			if json.Valid(candidate) {
-				return candidate, nil
+	// Scan each '}' as a potential JSON endpoint, from last to first.
+	for end := len(output) - 1; end >= 0; end-- {
+		if output[end] != '}' {
+			continue
+		}
+
+		for i := end; i >= 0; i-- {
+			if output[i] == '{' {
+				candidate := output[i : end+1]
+				if json.Valid(candidate) {
+					if isResultEnvelope(candidate) {
+						return candidate, nil
+					}
+					if fallback == nil {
+						fallback = candidate
+					}
+					break // found valid JSON for this end; try next '}'
+				}
 			}
 		}
 	}
 
+	if fallback != nil {
+		return fallback, nil
+	}
 	return nil, errNoJSON
 }
 
