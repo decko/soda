@@ -12,6 +12,16 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// pipelineEntry holds collected data for a single pipeline row.
+type pipelineEntry struct {
+	ticket    string
+	phase     string
+	status    string
+	elapsed   string
+	cost      string
+	startedAt time.Time
+}
+
 func newStatusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
@@ -49,10 +59,8 @@ func runStatus(stateDir string) error {
 		return fmt.Errorf("status: %w", phasesErr)
 	}
 
-	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "TICKET\tPHASE\tSTATUS\tELAPSED\tCOST")
-
-	found := false
+	// Collect pipeline entries.
+	var rows []pipelineEntry
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -77,16 +85,28 @@ func runStatus(stateDir string) error {
 		}
 
 		elapsed := formatElapsed(meta)
-		// Use meta.TotalCost — the authoritative accumulated total across all generations.
 		cost := fmt.Sprintf("$%.2f", meta.TotalCost)
 
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", meta.Ticket, phase, status, elapsed, cost)
-		found = true
+		rows = append(rows, pipelineEntry{
+			ticket:    meta.Ticket,
+			phase:     phase,
+			status:    status,
+			elapsed:   elapsed,
+			cost:      cost,
+			startedAt: meta.StartedAt,
+		})
 	}
 
-	if !found {
+	if len(rows) == 0 {
 		fmt.Println("No pipelines found.")
 		return nil
+	}
+
+	// Render collected entries.
+	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "TICKET\tPHASE\tSTATUS\tELAPSED\tCOST")
+	for _, r := range rows {
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", r.ticket, r.phase, r.status, r.elapsed, r.cost)
 	}
 
 	return tw.Flush()
