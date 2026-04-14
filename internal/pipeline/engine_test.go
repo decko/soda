@@ -2758,3 +2758,712 @@ func phaseNames(calls []runner.RunOpts) []string {
 	}
 	return names
 }
+
+// setupReviewEngine creates temp directories, writes prompt templates for
+// reviewer-specific prompts, creates State, and returns an Engine + State
+// for testing parallel-review phases.
+func setupReviewEngine(t *testing.T, phases []PhaseConfig, r runner.Runner, opts ...func(*EngineConfig)) (*Engine, *State) {
+	t.Helper()
+
+	stateDir := t.TempDir()
+	promptDir := t.TempDir()
+	workDir := t.TempDir()
+
+	// Write prompt templates for regular phases.
+	for _, p := range phases {
+		if p.Prompt != "" {
+			tmplPath := filepath.Join(promptDir, p.Prompt)
+			if err := os.MkdirAll(filepath.Dir(tmplPath), 0755); err != nil {
+				t.Fatalf("mkdir for prompt %s: %v", p.Prompt, err)
+			}
+			content := fmt.Sprintf("Phase: %s\nTicket: {{.Ticket.Key}}\n", p.Name)
+			if err := os.WriteFile(tmplPath, []byte(content), 0644); err != nil {
+				t.Fatalf("write prompt %s: %v", p.Prompt, err)
+			}
+		}
+
+		// Write reviewer prompt templates for parallel-review phases.
+		for _, reviewer := range p.Reviewers {
+			tmplPath := filepath.Join(promptDir, reviewer.Prompt)
+			if err := os.MkdirAll(filepath.Dir(tmplPath), 0755); err != nil {
+				t.Fatalf("mkdir for reviewer prompt %s: %v", reviewer.Prompt, err)
+			}
+			content := fmt.Sprintf("Reviewer: %s\nFocus: %s\nTicket: {{.Ticket.Key}}\n", reviewer.Name, reviewer.Focus)
+			if err := os.WriteFile(tmplPath, []byte(content), 0644); err != nil {
+				t.Fatalf("write reviewer prompt %s: %v", reviewer.Prompt, err)
+			}
+		}
+	}
+
+	state, err := LoadOrCreate(stateDir, "TEST-1")
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+
+	pipeline := &PhasePipeline{Phases: phases}
+	loader := NewPromptLoader(promptDir)
+
+	cfg := EngineConfig{
+		Pipeline:   pipeline,
+		Loader:     loader,
+		Ticket:     TicketData{Key: "TEST-1", Summary: "Test ticket"},
+		Model:      "test-model",
+		WorkDir:    workDir,
+		MaxCostUSD: 0,
+		Mode:       Autonomous,
+		SleepFunc:  func(time.Duration) {},
+		JitterFunc: func(time.Duration) time.Duration { return 0 },
+	}
+
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
+	engine := NewEngine(r, state, cfg)
+	return engine, state
+}
+
+func TestEngine_ParallelReview_HappyPath(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:  "review",
+			Type:  "parallel-review",
+			Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Reviewers: []ReviewerConfig{
+				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+				{Name: "ai-harness", Prompt: "prompts/review-harness.md", Focus: "AI harness"},
+			},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"review/go-specialist": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[],"verdict":"pass"}`),
+					RawText: "No issues found",
+					CostUSD: 0.15,
+				},
+			}},
+			"review/ai-harness": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[],"verdict":"pass"}`),
+					RawText: "No issues found",
+					CostUSD: 0.10,
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, state := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(e Event) {
+			events = append(events, e)
+		}
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Phase should be completed.
+	if !state.IsCompleted("review") {
+		t.Error("review should be completed")
+	}
+
+	// Cost should be accumulated from both reviewers.
+	ps := state.Meta().Phases["review"]
+	if ps == nil {
+		t.Fatal("review phase state missing")
+	}
+	if !approxEqual(ps.Cost, 0.25) {
+		t.Errorf("review cost = %v, want 0.25", ps.Cost)
+	}
+
+	// Both reviewers should have been called.
+	if len(mock.calls) != 2 {
+		t.Errorf("runner called %d times, want 2; phases: %v", len(mock.calls), phaseNames(mock.calls))
+	}
+
+	// Verify events: reviewer_started, reviewer_completed, review_merged.
+	eventCounts := make(map[string]int)
+	for _, e := range events {
+		eventCounts[e.Kind]++
+	}
+	if eventCounts[EventReviewerStarted] != 2 {
+		t.Errorf("reviewer_started events = %d, want 2", eventCounts[EventReviewerStarted])
+	}
+	if eventCounts[EventReviewerCompleted] != 2 {
+		t.Errorf("reviewer_completed events = %d, want 2", eventCounts[EventReviewerCompleted])
+	}
+	if eventCounts[EventReviewMerged] != 1 {
+		t.Errorf("review_merged events = %d, want 1", eventCounts[EventReviewMerged])
+	}
+
+	// Verify the merged result.
+	result, err := state.ReadResult("review")
+	if err != nil {
+		t.Fatalf("ReadResult: %v", err)
+	}
+	var reviewOutput struct {
+		TicketKey string `json:"ticket_key"`
+		Verdict   string `json:"verdict"`
+		Findings  []struct {
+			Source string `json:"source"`
+		} `json:"findings"`
+	}
+	if err := json.Unmarshal(result, &reviewOutput); err != nil {
+		t.Fatalf("unmarshal review output: %v", err)
+	}
+	if reviewOutput.TicketKey != "TEST-1" {
+		t.Errorf("ticket_key = %q, want %q", reviewOutput.TicketKey, "TEST-1")
+	}
+	if reviewOutput.Verdict != "pass" {
+		t.Errorf("verdict = %q, want %q", reviewOutput.Verdict, "pass")
+	}
+
+	// Verify artifact was written.
+	artifact, err := state.ReadArtifact("review")
+	if err != nil {
+		t.Fatalf("ReadArtifact: %v", err)
+	}
+	if len(artifact) == 0 {
+		t.Error("review artifact should not be empty")
+	}
+}
+
+func TestEngine_ParallelReview_MergedFindings(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:  "review",
+			Type:  "parallel-review",
+			Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Reviewers: []ReviewerConfig{
+				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+				{Name: "ai-harness", Prompt: "prompts/review-harness.md", Focus: "AI harness"},
+			},
+		},
+	}
+
+	goFindings := `{"findings":[
+		{"severity":"critical","file":"handler.go","line":42,"issue":"nil pointer dereference","suggestion":"add nil check"},
+		{"severity":"minor","file":"util.go","line":10,"issue":"unused import","suggestion":"remove it"}
+	]}`
+
+	harnessFindings := `{"findings":[
+		{"severity":"major","file":"prompts/plan.md","line":0,"issue":"missing template guard","suggestion":"add {{if}} block"}
+	]}`
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"review/go-specialist": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(goFindings),
+					RawText: "Found 2 issues",
+					CostUSD: 0.20,
+				},
+			}},
+			"review/ai-harness": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(harnessFindings),
+					RawText: "Found 1 issue",
+					CostUSD: 0.15,
+				},
+			}},
+		},
+	}
+
+	engine, state := setupReviewEngine(t, phases, mock)
+
+	err := engine.Run(context.Background())
+	if err == nil {
+		t.Fatal("expected PhaseGateError for review with critical/major findings")
+	}
+
+	var gateErr *PhaseGateError
+	if !errors.As(err, &gateErr) {
+		t.Fatalf("expected PhaseGateError, got: %T: %v", err, err)
+	}
+	if gateErr.Phase != "review" {
+		t.Errorf("gate error phase = %q, want %q", gateErr.Phase, "review")
+	}
+	if !strings.Contains(gateErr.Reason, "rework") {
+		t.Errorf("gate error reason should contain 'rework', got: %q", gateErr.Reason)
+	}
+
+	// Verify the merged result contains findings from both reviewers.
+	result, err := state.ReadResult("review")
+	if err != nil {
+		t.Fatalf("ReadResult: %v", err)
+	}
+	var reviewOutput struct {
+		Verdict  string `json:"verdict"`
+		Findings []struct {
+			Source   string `json:"source"`
+			Severity string `json:"severity"`
+			Issue    string `json:"issue"`
+		} `json:"findings"`
+	}
+	if err := json.Unmarshal(result, &reviewOutput); err != nil {
+		t.Fatalf("unmarshal review output: %v", err)
+	}
+
+	// Should have 3 total findings (2 from go-specialist + 1 from ai-harness).
+	if len(reviewOutput.Findings) != 3 {
+		t.Errorf("findings count = %d, want 3", len(reviewOutput.Findings))
+	}
+
+	// Verdict should be "rework" due to critical/major findings.
+	if reviewOutput.Verdict != "rework" {
+		t.Errorf("verdict = %q, want %q", reviewOutput.Verdict, "rework")
+	}
+
+	// Each finding should track its source reviewer.
+	goCount := 0
+	harnessCount := 0
+	for _, finding := range reviewOutput.Findings {
+		switch finding.Source {
+		case "go-specialist":
+			goCount++
+		case "ai-harness":
+			harnessCount++
+		}
+	}
+	if goCount != 2 {
+		t.Errorf("go-specialist findings = %d, want 2", goCount)
+	}
+	if harnessCount != 1 {
+		t.Errorf("ai-harness findings = %d, want 1", harnessCount)
+	}
+}
+
+func TestEngine_ParallelReview_MinorOnlyPassWithFollowUps(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:  "review",
+			Type:  "parallel-review",
+			Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Reviewers: []ReviewerConfig{
+				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+				{Name: "ai-harness", Prompt: "prompts/review-harness.md", Focus: "AI harness"},
+			},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"review/go-specialist": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[{"severity":"minor","file":"util.go","line":5,"issue":"could use shorter var name","suggestion":"rename"}]}`),
+					RawText: "Minor issue",
+					CostUSD: 0.10,
+				},
+			}},
+			"review/ai-harness": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[]}`),
+					RawText: "No issues",
+					CostUSD: 0.08,
+				},
+			}},
+		},
+	}
+
+	engine, state := setupReviewEngine(t, phases, mock)
+
+	// Should pass (minor issues don't block).
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !state.IsCompleted("review") {
+		t.Error("review should be completed")
+	}
+
+	result, err := state.ReadResult("review")
+	if err != nil {
+		t.Fatalf("ReadResult: %v", err)
+	}
+	var reviewOutput struct {
+		Verdict string `json:"verdict"`
+	}
+	if err := json.Unmarshal(result, &reviewOutput); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if reviewOutput.Verdict != "pass-with-follow-ups" {
+		t.Errorf("verdict = %q, want %q", reviewOutput.Verdict, "pass-with-follow-ups")
+	}
+}
+
+func TestEngine_ParallelReview_ReviewerFails(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:  "review",
+			Type:  "parallel-review",
+			Retry: RetryConfig{Transient: 0, Parse: 0, Semantic: 0},
+			Reviewers: []ReviewerConfig{
+				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+				{Name: "ai-harness", Prompt: "prompts/review-harness.md", Focus: "AI harness"},
+			},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"review/go-specialist": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[]}`),
+					RawText: "OK",
+					CostUSD: 0.10,
+				},
+			}},
+			"review/ai-harness": {{
+				err: &claude.TransientError{Reason: "timeout", Err: fmt.Errorf("connection reset")},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, state := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(e Event) {
+			events = append(events, e)
+		}
+	})
+
+	err := engine.Run(context.Background())
+	if err == nil {
+		t.Fatal("expected error when a reviewer fails")
+	}
+
+	if !strings.Contains(err.Error(), "ai-harness") {
+		t.Errorf("error should mention failing reviewer, got: %v", err)
+	}
+
+	// Phase should be marked failed.
+	ps := state.Meta().Phases["review"]
+	if ps == nil {
+		t.Fatal("review phase state should exist")
+	}
+	if ps.Status != PhaseFailed {
+		t.Errorf("review status = %q, want %q", ps.Status, PhaseFailed)
+	}
+
+	// Should have reviewer_failed event.
+	hasReviewerFailed := false
+	for _, e := range events {
+		if e.Kind == EventReviewerFailed {
+			hasReviewerFailed = true
+			reviewer, _ := e.Data["reviewer"].(string)
+			if reviewer != "ai-harness" {
+				t.Errorf("reviewer_failed event for %q, want %q", reviewer, "ai-harness")
+			}
+		}
+	}
+	if !hasReviewerFailed {
+		t.Error("reviewer_failed event not emitted")
+	}
+}
+
+func TestEngine_ParallelReview_NoReviewersConfigured(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:      "review",
+			Type:      "parallel-review",
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Reviewers: []ReviewerConfig{}, // empty
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{},
+	}
+
+	engine, _ := setupReviewEngine(t, phases, mock)
+
+	err := engine.Run(context.Background())
+	if err == nil {
+		t.Fatal("expected error for review phase with no reviewers")
+	}
+	if !strings.Contains(err.Error(), "no reviewers") {
+		t.Errorf("error should mention 'no reviewers', got: %v", err)
+	}
+}
+
+func TestEngine_ParallelReview_DependencyCheck(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "implement",
+			Prompt: "implement.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "review",
+			Type:      "parallel-review",
+			DependsOn: []string{"implement"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Reviewers: []ReviewerConfig{
+				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+			},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {{
+				err: &claude.TransientError{Reason: "timeout", Err: fmt.Errorf("fail")},
+			}},
+		},
+	}
+
+	engine, state := setupReviewEngine(t, phases, mock)
+
+	err := engine.Run(context.Background())
+	if err == nil {
+		t.Fatal("expected error from failed implement")
+	}
+
+	// Review should not be completed.
+	if state.IsCompleted("review") {
+		t.Error("review should NOT be completed when dependency failed")
+	}
+}
+
+func TestEngine_ParallelReview_CostTrackedPerReviewer(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:  "review",
+			Type:  "parallel-review",
+			Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Reviewers: []ReviewerConfig{
+				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+				{Name: "ai-harness", Prompt: "prompts/review-harness.md", Focus: "AI harness"},
+			},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"review/go-specialist": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[]}`),
+					RawText: "OK",
+					CostUSD: 0.30,
+				},
+			}},
+			"review/ai-harness": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[]}`),
+					RawText: "OK",
+					CostUSD: 0.20,
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, state := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(e Event) {
+			events = append(events, e)
+		}
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Total cost should be sum of both reviewers.
+	if !approxEqual(state.Meta().TotalCost, 0.50) {
+		t.Errorf("TotalCost = %v, want 0.50", state.Meta().TotalCost)
+	}
+
+	// Phase cost should also be the sum.
+	ps := state.Meta().Phases["review"]
+	if ps == nil {
+		t.Fatal("review phase state missing")
+	}
+	if !approxEqual(ps.Cost, 0.50) {
+		t.Errorf("review phase cost = %v, want 0.50", ps.Cost)
+	}
+
+	// Reviewer_completed events should include per-reviewer cost.
+	var goCost, harnessCost float64
+	for _, e := range events {
+		if e.Kind == EventReviewerCompleted {
+			reviewer, _ := e.Data["reviewer"].(string)
+			cost, _ := e.Data["cost"].(float64)
+			switch reviewer {
+			case "go-specialist":
+				goCost = cost
+			case "ai-harness":
+				harnessCost = cost
+			}
+		}
+	}
+	if !approxEqual(goCost, 0.30) {
+		t.Errorf("go-specialist cost event = %v, want 0.30", goCost)
+	}
+	if !approxEqual(harnessCost, 0.20) {
+		t.Errorf("ai-harness cost event = %v, want 0.20", harnessCost)
+	}
+}
+
+func TestEngine_ParallelReview_InPipeline(t *testing.T) {
+	// Full pipeline with review between verify and submit.
+	phases := []PhaseConfig{
+		{
+			Name:   "implement",
+			Prompt: "implement.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "verify",
+			Prompt:    "verify.md",
+			DependsOn: []string{"implement"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "review",
+			Type:      "parallel-review",
+			DependsOn: []string{"implement", "verify"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Reviewers: []ReviewerConfig{
+				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+				{Name: "ai-harness", Prompt: "prompts/review-harness.md", Focus: "AI harness"},
+			},
+		},
+		{
+			Name:      "submit",
+			Prompt:    "submit.md",
+			DependsOn: []string{"review"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true,"commits":1}`),
+					RawText: "Impl done",
+					CostUSD: 0.50,
+				},
+			}},
+			"verify": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"verdict":"PASS"}`),
+					RawText: "Verify pass",
+					CostUSD: 0.20,
+				},
+			}},
+			"review/go-specialist": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[]}`),
+					RawText: "No Go issues",
+					CostUSD: 0.15,
+				},
+			}},
+			"review/ai-harness": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[]}`),
+					RawText: "No harness issues",
+					CostUSD: 0.10,
+				},
+			}},
+			"submit": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"pr_url":"https://github.com/org/repo/pull/1"}`),
+					RawText: "PR created",
+					CostUSD: 0.05,
+				},
+			}},
+		},
+	}
+
+	engine, state := setupReviewEngine(t, phases, mock)
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// All phases should be completed.
+	for _, name := range []string{"implement", "verify", "review", "submit"} {
+		if !state.IsCompleted(name) {
+			t.Errorf("phase %q should be completed", name)
+		}
+	}
+
+	// Total cost: 0.50 + 0.20 + 0.15 + 0.10 + 0.05 = 1.00
+	if !approxEqual(state.Meta().TotalCost, 1.00) {
+		t.Errorf("TotalCost = %v, want 1.00", state.Meta().TotalCost)
+	}
+
+	// Runner should have been called 4 times (implement, verify, 2 reviewers, submit).
+	if len(mock.calls) != 5 {
+		t.Errorf("runner called %d times, want 5; phases: %v", len(mock.calls), phaseNames(mock.calls))
+	}
+}
+
+func TestComputeReviewVerdict(t *testing.T) {
+	tests := []struct {
+		name     string
+		findings []mergedReviewFinding
+		want     string
+	}{
+		{
+			name:     "no_findings",
+			findings: nil,
+			want:     "pass",
+		},
+		{
+			name:     "empty_findings",
+			findings: []mergedReviewFinding{},
+			want:     "pass",
+		},
+		{
+			name: "minor_only",
+			findings: []mergedReviewFinding{
+				{Severity: "minor", Issue: "style"},
+			},
+			want: "pass-with-follow-ups",
+		},
+		{
+			name: "major_triggers_rework",
+			findings: []mergedReviewFinding{
+				{Severity: "major", Issue: "missing error check"},
+			},
+			want: "rework",
+		},
+		{
+			name: "critical_triggers_rework",
+			findings: []mergedReviewFinding{
+				{Severity: "critical", Issue: "nil deref"},
+			},
+			want: "rework",
+		},
+		{
+			name: "mixed_severities",
+			findings: []mergedReviewFinding{
+				{Severity: "minor", Issue: "style"},
+				{Severity: "major", Issue: "missing error check"},
+				{Severity: "minor", Issue: "naming"},
+			},
+			want: "rework",
+		},
+		{
+			name: "case_insensitive",
+			findings: []mergedReviewFinding{
+				{Severity: "Critical", Issue: "nil deref"},
+			},
+			want: "rework",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := computeReviewVerdict(tt.findings)
+			if got != tt.want {
+				t.Errorf("computeReviewVerdict() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
