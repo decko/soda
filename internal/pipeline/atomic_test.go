@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -25,7 +26,7 @@ func TestAtomicWrite(t *testing.T) {
 
 		// Verify no .tmp file left behind
 		tmpPath := path + ".tmp"
-		if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
+		if _, err := os.Stat(tmpPath); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("temp file should not exist, got err: %v", err)
 		}
 	})
@@ -94,7 +95,7 @@ func TestArchiveArtifact(t *testing.T) {
 		}
 
 		// Original should be gone
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 			t.Error("original file should not exist after archive")
 		}
 

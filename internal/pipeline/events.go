@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -66,7 +67,7 @@ func ReadEvents(dir string) ([]Event, error) {
 	path := filepath.Join(dir, "events.jsonl")
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("pipeline: read events %s: %w", path, err)

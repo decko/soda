@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -28,7 +29,7 @@ func newStatusCmd() *cobra.Command {
 func runStatus(stateDir string) error {
 	entries, err := os.ReadDir(stateDir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			fmt.Println("No pipelines found.")
 			return nil
 		}

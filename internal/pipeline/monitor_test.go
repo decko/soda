@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -119,7 +120,7 @@ func TestReadMonitorState(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error for missing monitor.json")
 		}
-		if !os.IsNotExist(err) {
+		if !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("expected os.ErrNotExist, got: %v", err)
 		}
 	})

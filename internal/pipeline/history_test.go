@@ -115,7 +115,7 @@ func TestBuildHistory_SkippedPhase(t *testing.T) {
 		t.Fatalf("expected 2 entries, got %d", len(h.Entries))
 	}
 
-	if h.Entries[1].Status != "skipped" {
+	if h.Entries[1].Status != PhaseSkipped {
 		t.Errorf("plan status=%q, want skipped", h.Entries[1].Status)
 	}
 }

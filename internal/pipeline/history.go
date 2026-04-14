@@ -104,7 +104,7 @@ func BuildHistory(events []Event, stateDir string) History {
 		case EventPhaseSkipped:
 			entry := PhaseGeneration{
 				Phase:  ev.Phase,
-				Status: "skipped",
+				Status: PhaseSkipped,
 			}
 			idx := len(h.Entries)
 			h.Entries = append(h.Entries, entry)
