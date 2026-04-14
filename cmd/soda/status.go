@@ -20,6 +20,7 @@ type pipelineEntry struct {
 	status    string
 	elapsed   string
 	cost      string
+	submitted string
 	startedAt time.Time
 }
 
@@ -88,6 +89,7 @@ func runStatus(stateDir string) error {
 			status:    status,
 			elapsed:   elapsed,
 			cost:      cost,
+			submitted: formatSubmitted(meta.StartedAt, time.Now()),
 			startedAt: meta.StartedAt,
 		})
 	}
@@ -103,9 +105,9 @@ func runStatus(stateDir string) error {
 
 	// Render collected entries.
 	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "TICKET\tPHASE\tSTATUS\tELAPSED\tCOST")
+	fmt.Fprintln(tw, "TICKET\tPHASE\tSTATUS\tSUBMITTED\tELAPSED\tCOST")
 	for _, r := range rows {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", r.ticket, r.phase, r.status, r.elapsed, r.cost)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", r.ticket, r.phase, r.status, r.submitted, r.elapsed, r.cost)
 	}
 
 	return tw.Flush()
@@ -219,6 +221,17 @@ func phaseRank(status pipeline.PhaseStatus) int {
 	default:
 		return 0
 	}
+}
+
+// formatSubmitted returns a human-friendly timestamp: time-only for today,
+// date+time for older entries.
+func formatSubmitted(startedAt, now time.Time) string {
+	sy, sm, sd := startedAt.Date()
+	ny, nm, nd := now.Date()
+	if sy == ny && sm == nm && sd == nd {
+		return startedAt.Format("15:04")
+	}
+	return startedAt.Format("Jan 02 15:04")
 }
 
 func formatElapsed(meta *pipeline.PipelineMeta) string {
