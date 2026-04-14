@@ -159,6 +159,25 @@ func (loader *PromptLoader) Load(name string) (string, error) {
 	return "", fmt.Errorf("prompt: %s not found in %v", name, loader.dirs)
 }
 
+// ValidateTemplate parses a Go text/template and executes it against a
+// zero-value PromptData. This catches syntax errors and references to
+// fields that don't exist on PromptData. Templates that only fail at
+// render time due to missing runtime data (e.g. nil pointer deref on
+// optional sections) are not caught here — they require RenderPrompt.
+func ValidateTemplate(tmpl string) error {
+	parsed, err := template.New("prompt").Option("missingkey=error").Parse(tmpl)
+	if err != nil {
+		return fmt.Errorf("prompt: parse template: %w", err)
+	}
+
+	var buf bytes.Buffer
+	if err := parsed.Execute(&buf, PromptData{}); err != nil {
+		return fmt.Errorf("prompt: validate template: %w", err)
+	}
+
+	return nil
+}
+
 // RenderPrompt executes a Go text/template against the given data.
 func RenderPrompt(tmpl string, data PromptData) (string, error) {
 	parsed, err := template.New("prompt").Option("missingkey=error").Parse(tmpl)

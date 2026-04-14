@@ -71,6 +71,70 @@ func TestPromptLoader(t *testing.T) {
 	})
 }
 
+func TestValidateTemplate(t *testing.T) {
+	t.Run("valid_template_with_fields", func(t *testing.T) {
+		tmpl := "Key: {{.Ticket.Key}}\nSummary: {{.Ticket.Summary}}"
+		if err := ValidateTemplate(tmpl); err != nil {
+			t.Fatalf("ValidateTemplate: %v", err)
+		}
+	})
+
+	t.Run("valid_template_with_conditionals", func(t *testing.T) {
+		tmpl := `{{- if .Context.Gotchas}}Gotchas: {{.Context.Gotchas}}{{- end}}`
+		if err := ValidateTemplate(tmpl); err != nil {
+			t.Fatalf("ValidateTemplate: %v", err)
+		}
+	})
+
+	t.Run("valid_template_with_range", func(t *testing.T) {
+		tmpl := `{{range .Ticket.AcceptanceCriteria}}- {{.}}
+{{end}}`
+		if err := ValidateTemplate(tmpl); err != nil {
+			t.Fatalf("ValidateTemplate: %v", err)
+		}
+	})
+
+	t.Run("valid_template_with_optional_rework_feedback", func(t *testing.T) {
+		tmpl := `{{- if .ReworkFeedback}}Verdict: {{.ReworkFeedback.Verdict}}{{- end}}`
+		if err := ValidateTemplate(tmpl); err != nil {
+			t.Fatalf("ValidateTemplate: %v", err)
+		}
+	})
+
+	t.Run("errors_on_syntax_error", func(t *testing.T) {
+		err := ValidateTemplate("{{.Invalid}")
+		if err == nil {
+			t.Fatal("expected error for invalid template syntax")
+		}
+	})
+
+	t.Run("errors_on_nonexistent_field", func(t *testing.T) {
+		err := ValidateTemplate("{{.NonExistentField}}")
+		if err == nil {
+			t.Fatal("expected error for non-existent field")
+		}
+	})
+
+	t.Run("errors_on_nested_nonexistent_field", func(t *testing.T) {
+		err := ValidateTemplate("{{.Ticket.FakeField}}")
+		if err == nil {
+			t.Fatal("expected error for non-existent nested field")
+		}
+	})
+
+	t.Run("valid_empty_template", func(t *testing.T) {
+		if err := ValidateTemplate(""); err != nil {
+			t.Fatalf("ValidateTemplate: %v", err)
+		}
+	})
+
+	t.Run("valid_plain_text", func(t *testing.T) {
+		if err := ValidateTemplate("no template directives here"); err != nil {
+			t.Fatalf("ValidateTemplate: %v", err)
+		}
+	})
+}
+
 func TestRenderPrompt(t *testing.T) {
 	t.Run("renders_template_with_data", func(t *testing.T) {
 		tmpl := "Key: {{.Ticket.Key}}\nSummary: {{.Ticket.Summary}}"
