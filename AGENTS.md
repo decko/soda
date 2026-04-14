@@ -30,7 +30,9 @@ soda (Go CLI/TUI)
 ## Pipeline phases
 
 ```
-Triage → Plan → Implement → Verify → Submit → Monitor
+Triage → Plan → Implement → Verify → Review → Submit → Monitor
+                    ↑                    │
+                    └── rework ──────────┘ (max 2 cycles)
 ```
 
 | Phase | Purpose | Tools | Timeout |
@@ -39,10 +41,23 @@ Triage → Plan → Implement → Verify → Submit → Monitor
 | Plan | Design approach, break into atomic tasks | Read-only | 5m |
 | Implement | Write code, run tests, commit | Full | 15m |
 | Verify | Run tests, check acceptance criteria, review code | Read + Bash | 5m |
+| Review | Parallel specialist review (Go + AI harness) | Read + Bash | 5m |
 | Submit | Push branch, create PR/MR | git + gh/glab | 3m |
 | Monitor | Poll for review comments, respond (polling loop) | Full | 4h max |
 
 Phase definitions, tools, timeouts, and retry policies are in `phases.yaml`.
+
+### Review rework routing
+
+After the review phase, findings are classified by severity:
+
+| Verdict | Condition | Action |
+|---------|-----------|--------|
+| `pass` | No findings | Proceed to submit |
+| `pass-with-follow-ups` | Minor findings only | Proceed to submit, queue follow-up |
+| `rework` | Any critical or major findings | Route back to implement |
+
+Rework routing: when review verdict is "rework", the engine automatically routes back to implement with the review findings injected into the prompt. The cycle is: implement → verify → review → (check verdict). Max rework cycles default to 2; after that, the engine stops with a `PhaseGateError` for human intervention. The cycle count is persisted in `meta.json` as `rework_cycles`.
 
 ### Worktree-first execution
 
