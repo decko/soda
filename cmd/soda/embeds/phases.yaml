@@ -120,27 +120,8 @@ phases:
       - verify
       - review
 
-  - name: monitor
-    prompt: prompts/monitor.md
-    schema: |
-      {"type":"object","properties":{"ticket_key":{"type":"string"},"pr_url":{"type":"string"},"comments_handled":{"type":"array","items":{"type":"object","properties":{"comment_id":{"type":"string"},"author":{"type":"string"},"content":{"type":"string"},"action":{"type":"string"},"response":{"type":"string"}},"required":["comment_id","author","content","action","response"]}},"files_changed":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"action":{"type":"string"}},"required":["path","action"]}},"commits":{"type":"array","items":{"type":"object","properties":{"hash":{"type":"string"},"message":{"type":"string"},"task_id":{"type":"string"}},"required":["hash","message","task_id"]}},"tests_passed":{"type":"boolean"}},"required":["ticket_key","pr_url","comments_handled","tests_passed"]}
-    type: polling     # not one-shot
-    tools:
-      - Read
-      - Write
-      - Edit
-      - Glob
-      - Grep
-      - Bash
-    polling:
-      initial_interval: 2m
-      max_interval: 5m
-      escalate_after: 30m
-      max_duration: 4h
-      max_response_rounds: 3
-    retry:
-      transient: 2
-      parse: 1
-      semantic: 0
-    depends_on:
-      - submit
+  # monitor phase disabled — response execution not yet implemented (#73)
+  # - name: monitor
+  #   type: polling
+  #   depends_on:
+  #     - submit
