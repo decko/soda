@@ -577,6 +577,258 @@ func TestMonitor_PollIntervalEscalation(t *testing.T) {
 	}
 }
 
+func TestMonitor_SelfCommentsSkipped(t *testing.T) {
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "open", Approved: false}},
+			{status: &PRStatus{State: "open", Approved: true}}, // approve on 2nd poll
+		},
+		commentResponses: []mockCommentResponse{
+			{comments: []PRComment{
+				{ID: "IC_1", Author: "soda-bot", Body: "I pushed a fix."},
+				{ID: "IC_2", Author: "soda-bot", Body: "Updated the code."},
+			}},
+		},
+	}
+
+	engine, state, events := setupMonitorEngine(t, poller, nil, func(cfg *EngineConfig) {
+		cfg.SelfUser = "soda-bot"
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	monState, err := state.ReadMonitorState()
+	if err != nil {
+		t.Fatalf("ReadMonitorState: %v", err)
+	}
+
+	// Self-comments should NOT increment response rounds.
+	if monState.ResponseRounds != 0 {
+		t.Errorf("ResponseRounds = %d, want 0 (self-comments should not count)", monState.ResponseRounds)
+	}
+
+	// Should have skipped events.
+	skippedCount := 0
+	for _, e := range *events {
+		if e.Kind == EventMonitorCommentSkipped {
+			skippedCount++
+		}
+	}
+	if skippedCount != 2 {
+		t.Errorf("skipped events = %d, want 2", skippedCount)
+	}
+}
+
+func TestMonitor_BotCommentsSkipped(t *testing.T) {
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "open", Approved: false}},
+			{status: &PRStatus{State: "open", Approved: true}},
+		},
+		commentResponses: []mockCommentResponse{
+			{comments: []PRComment{
+				{ID: "IC_1", Author: "dependabot", Body: "Bump version"},
+				{ID: "IC_2", Author: "reviewer", Body: "Please fix this."},
+			}},
+		},
+	}
+
+	engine, state, events := setupMonitorEngine(t, poller, nil, func(cfg *EngineConfig) {
+		cfg.SelfUser = "soda-bot"
+		cfg.BotUsers = []string{"dependabot", "renovate"}
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	monState, err := state.ReadMonitorState()
+	if err != nil {
+		t.Fatalf("ReadMonitorState: %v", err)
+	}
+
+	// Only the reviewer comment should be actionable.
+	if monState.ResponseRounds != 1 {
+		t.Errorf("ResponseRounds = %d, want 1 (only reviewer comment is actionable)", monState.ResponseRounds)
+	}
+
+	// Should have one classified and one skipped event.
+	classifiedCount := 0
+	skippedCount := 0
+	for _, e := range *events {
+		if e.Kind == EventMonitorCommentClassified {
+			classifiedCount++
+		}
+		if e.Kind == EventMonitorCommentSkipped {
+			skippedCount++
+		}
+	}
+	if classifiedCount != 1 {
+		t.Errorf("classified events = %d, want 1", classifiedCount)
+	}
+	if skippedCount != 1 {
+		t.Errorf("skipped events = %d, want 1", skippedCount)
+	}
+}
+
+func TestMonitor_ApprovalCommentsDoNotIncrementRounds(t *testing.T) {
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "open", Approved: false}},
+			{status: &PRStatus{State: "open", Approved: true}},
+		},
+		commentResponses: []mockCommentResponse{
+			{comments: []PRComment{
+				{ID: "IC_1", Author: "reviewer", Body: "LGTM"},
+			}},
+		},
+	}
+
+	engine, state, _ := setupMonitorEngine(t, poller, nil)
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	monState, err := state.ReadMonitorState()
+	if err != nil {
+		t.Fatalf("ReadMonitorState: %v", err)
+	}
+
+	// Approval comments should NOT increment response rounds.
+	if monState.ResponseRounds != 0 {
+		t.Errorf("ResponseRounds = %d, want 0 (approval comments should not count)", monState.ResponseRounds)
+	}
+}
+
+func TestMonitor_ProfileApplied(t *testing.T) {
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "open", Approved: true}},
+		},
+	}
+
+	profile, _ := GetMonitorProfile(ProfileAggressive)
+
+	engine, state, events := setupMonitorEngine(t, poller, nil, func(cfg *EngineConfig) {
+		cfg.MonitorProfile = profile
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !state.IsCompleted("monitor") {
+		t.Error("monitor should be completed")
+	}
+
+	// Should have profile_applied event.
+	hasProfileApplied := false
+	for _, e := range *events {
+		if e.Kind == EventMonitorProfileApplied {
+			hasProfileApplied = true
+			if name, _ := e.Data["profile"].(string); name != "aggressive" {
+				t.Errorf("profile = %q, want %q", name, "aggressive")
+			}
+		}
+	}
+	if !hasProfileApplied {
+		t.Error("monitor_profile_applied event not emitted")
+	}
+}
+
+func TestMonitor_ProfileFromPollingConfig(t *testing.T) {
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "open", Approved: true}},
+		},
+	}
+
+	pollingCfg := &PollingConfig{
+		Profile: ProfileConservative,
+	}
+
+	engine, state, events := setupMonitorEngine(t, poller, pollingCfg)
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !state.IsCompleted("monitor") {
+		t.Error("monitor should be completed")
+	}
+
+	hasProfileApplied := false
+	for _, e := range *events {
+		if e.Kind == EventMonitorProfileApplied {
+			hasProfileApplied = true
+			if source, _ := e.Data["source"].(string); source != "polling_config" {
+				t.Errorf("source = %q, want %q", source, "polling_config")
+			}
+		}
+	}
+	if !hasProfileApplied {
+		t.Error("monitor_profile_applied event not emitted for polling config profile")
+	}
+}
+
+func TestMonitor_ClassificationWithAuthority(t *testing.T) {
+	auth := NewCODEOWNERSAuthority([]CODEOWNERSRule{
+		{Pattern: "*.go", Owners: []string{"go-owner"}},
+	})
+
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "open", Approved: false}},
+			{status: &PRStatus{State: "open", Approved: true}},
+		},
+		commentResponses: []mockCommentResponse{
+			{comments: []PRComment{
+				{ID: "IC_1", Author: "go-owner", Body: "Fix this bug.", Path: "main.go"},
+				{ID: "IC_2", Author: "random-user", Body: "Fix this too.", Path: "main.go"},
+			}},
+		},
+	}
+
+	engine, state, events := setupMonitorEngine(t, poller, nil, func(cfg *EngineConfig) {
+		cfg.SelfUser = "soda-bot"
+		cfg.AuthorityResolver = auth
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	monState, err := state.ReadMonitorState()
+	if err != nil {
+		t.Fatalf("ReadMonitorState: %v", err)
+	}
+
+	// Only go-owner's comment should be actionable.
+	if monState.ResponseRounds != 1 {
+		t.Errorf("ResponseRounds = %d, want 1 (only authoritative comment)", monState.ResponseRounds)
+	}
+
+	classifiedCount := 0
+	skippedCount := 0
+	for _, e := range *events {
+		if e.Kind == EventMonitorCommentClassified {
+			classifiedCount++
+		}
+		if e.Kind == EventMonitorCommentSkipped {
+			skippedCount++
+		}
+	}
+	if classifiedCount != 1 {
+		t.Errorf("classified events = %d, want 1", classifiedCount)
+	}
+	if skippedCount != 1 {
+		t.Errorf("skipped events = %d, want 1", skippedCount)
+	}
+}
+
 func TestMonitor_CIStatusNoChangeDoesNotEmit(t *testing.T) {
 	poller := &mockPRPoller{
 		statusResponses: []mockPRStatusResponse{
@@ -606,4 +858,3 @@ func TestMonitor_CIStatusNoChangeDoesNotEmit(t *testing.T) {
 		t.Errorf("CI change events = %d, want 1", ciChangeCount)
 	}
 }
-

@@ -44,11 +44,12 @@ type RetryConfig struct {
 
 // PollingConfig holds monitor-phase polling parameters.
 type PollingConfig struct {
-	InitialInterval   Duration `yaml:"initial_interval"`
-	MaxInterval       Duration `yaml:"max_interval"`
-	EscalateAfter     Duration `yaml:"escalate_after"`
-	MaxDuration       Duration `yaml:"max_duration"`
-	MaxResponseRounds int      `yaml:"max_response_rounds"`
+	InitialInterval   Duration           `yaml:"initial_interval"`
+	MaxInterval       Duration           `yaml:"max_interval"`
+	EscalateAfter     Duration           `yaml:"escalate_after"`
+	MaxDuration       Duration           `yaml:"max_duration"`
+	MaxResponseRounds int                `yaml:"max_response_rounds"`
+	Profile           MonitorProfileName `yaml:"profile,omitempty"` // preset profile name (conservative, smart, aggressive)
 }
 
 // Duration wraps time.Duration for YAML unmarshaling.
