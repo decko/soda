@@ -15,6 +15,7 @@ import (
 	"github.com/decko/soda/internal/git"
 	"github.com/decko/soda/internal/runner"
 	"github.com/decko/soda/internal/sandbox"
+	"github.com/decko/soda/schemas"
 )
 
 // Mode controls whether the engine pauses between phases.
@@ -1238,30 +1239,13 @@ func (e *Engine) runReviewer(ctx context.Context, phase PhaseConfig, reviewer Re
 	})
 }
 
-// mergedReviewOutput is the combined output from all reviewers.
-type mergedReviewOutput struct {
-	TicketKey string                `json:"ticket_key"`
-	Findings  []mergedReviewFinding `json:"findings"`
-	Verdict   string                `json:"verdict"`
-}
-
-// mergedReviewFinding is a single finding with its source reviewer.
-type mergedReviewFinding struct {
-	Source     string `json:"source"`
-	Severity   string `json:"severity"`
-	File       string `json:"file"`
-	Line       int    `json:"line,omitempty"`
-	Issue      string `json:"issue"`
-	Suggestion string `json:"suggestion"`
-}
-
 // mergeReviewFindings combines findings from all reviewers and computes a verdict.
-func (e *Engine) mergeReviewFindings(phase PhaseConfig, results []reviewerResult) mergedReviewOutput {
-	var allFindings []mergedReviewFinding
+func (e *Engine) mergeReviewFindings(phase PhaseConfig, results []reviewerResult) schemas.ReviewOutput {
+	var allFindings []schemas.ReviewFinding
 
 	for _, result := range results {
 		for _, finding := range result.Findings {
-			allFindings = append(allFindings, mergedReviewFinding{
+			allFindings = append(allFindings, schemas.ReviewFinding{
 				Source:     result.Name,
 				Severity:   finding.Severity,
 				File:       finding.File,
@@ -1283,7 +1267,7 @@ func (e *Engine) mergeReviewFindings(phase PhaseConfig, results []reviewerResult
 		},
 	})
 
-	return mergedReviewOutput{
+	return schemas.ReviewOutput{
 		TicketKey: e.config.Ticket.Key,
 		Findings:  allFindings,
 		Verdict:   verdict,
@@ -1294,7 +1278,7 @@ func (e *Engine) mergeReviewFindings(phase PhaseConfig, results []reviewerResult
 // Any critical or major finding → "rework"
 // Only minor findings → "pass-with-follow-ups"
 // No findings → "pass"
-func computeReviewVerdict(findings []mergedReviewFinding) string {
+func computeReviewVerdict(findings []schemas.ReviewFinding) string {
 	hasCriticalOrMajor := false
 	hasMinor := false
 
@@ -1318,7 +1302,7 @@ func computeReviewVerdict(findings []mergedReviewFinding) string {
 }
 
 // buildReviewArtifact creates a human-readable markdown summary of the review.
-func (e *Engine) buildReviewArtifact(merged mergedReviewOutput) string {
+func (e *Engine) buildReviewArtifact(merged schemas.ReviewOutput) string {
 	var sb strings.Builder
 
 	sb.WriteString(fmt.Sprintf("# Review: %s\n\n", merged.Verdict))
