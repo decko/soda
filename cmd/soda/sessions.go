@@ -262,7 +262,11 @@ func runSessionsTUI(stateDir, statusFilter, sortBy string, limit int, now time.T
 		return fmt.Errorf("sessions tui: %w", err)
 	}
 
-	result := finalModel.(tui.SessionsModel).Result()
+	sm, ok := finalModel.(tui.SessionsModel)
+	if !ok {
+		return fmt.Errorf("sessions tui: unexpected model type %T", finalModel)
+	}
+	result := sm.Result()
 	if result == nil {
 		return nil
 	}
