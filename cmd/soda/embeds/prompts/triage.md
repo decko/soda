@@ -61,6 +61,6 @@ Read the relevant codebase before answering. Do not guess file paths.
 
 ## Plan routing
 
-If an existing plan is provided above and appears complete (has concrete tasks with files, acceptance criteria, and a verification strategy), set `skip_plan: true` and include the plan content verbatim in `extracted_plan`. This signals the engine to skip the plan phase and proceed directly to implementation.
+If an existing plan is provided above and appears complete (has concrete tasks with files, acceptance criteria, and a verification strategy), set `skip_plan: true`. The engine will use the existing plan directly and skip the plan phase.
 
-If no plan is provided, or the plan is incomplete or outdated relative to the codebase, leave `skip_plan` as false and `extracted_plan` empty.
+If no plan is provided, or the plan is incomplete or outdated relative to the codebase, leave `skip_plan` as false.
