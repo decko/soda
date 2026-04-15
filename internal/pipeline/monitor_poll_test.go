@@ -90,9 +90,15 @@ func setupMonitorEngine(t *testing.T, poller PRPoller, pollingConfig *PollingCon
 	// Write minimal prompt templates.
 	submitPrompt := "Phase: submit\nTicket: {{.Ticket.Key}}\n"
 	monitorPrompt := "Phase: monitor\nTicket: {{.Ticket.Key}}\n"
-	os.MkdirAll(promptDir+"/prompts", 0755)
-	os.WriteFile(promptDir+"/prompts/submit.md", []byte(submitPrompt), 0644)
-	os.WriteFile(promptDir+"/prompts/monitor.md", []byte(monitorPrompt), 0644)
+	if err := os.MkdirAll(promptDir+"/prompts", 0755); err != nil {
+		t.Fatalf("MkdirAll prompts: %v", err)
+	}
+	if err := os.WriteFile(promptDir+"/prompts/submit.md", []byte(submitPrompt), 0644); err != nil {
+		t.Fatalf("WriteFile submit.md: %v", err)
+	}
+	if err := os.WriteFile(promptDir+"/prompts/monitor.md", []byte(monitorPrompt), 0644); err != nil {
+		t.Fatalf("WriteFile monitor.md: %v", err)
+	}
 
 	state, err := LoadOrCreate(stateDir, "TEST-MON")
 	if err != nil {

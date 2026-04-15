@@ -33,7 +33,9 @@ func TestReadEvents(t *testing.T) {
 
 	t.Run("empty_file", func(t *testing.T) {
 		dir := t.TempDir()
-		os.WriteFile(filepath.Join(dir, "events.jsonl"), []byte(""), 0644)
+		if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), []byte(""), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
 
 		events, err := ReadEvents(dir)
 		if err != nil {
@@ -62,7 +64,9 @@ func TestReadEvents(t *testing.T) {
 not valid json
 {"timestamp":"2026-04-11T10:00:01Z","phase":"triage","kind":"phase_completed"}
 `
-		os.WriteFile(filepath.Join(dir, "events.jsonl"), []byte(content), 0644)
+		if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
 
 		events, err := ReadEvents(dir)
 		if err != nil {
@@ -85,7 +89,9 @@ not valid json
 
 {"timestamp":"2026-04-11T10:00:01Z","phase":"triage","kind":"phase_completed"}
 `
-		os.WriteFile(filepath.Join(dir, "events.jsonl"), []byte(content), 0644)
+		if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
 
 		events, err := ReadEvents(dir)
 		if err != nil {

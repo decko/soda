@@ -139,7 +139,9 @@ func TestBuildHistory_WithDetails(t *testing.T) {
 		"automatable": true,
 	}
 	data, _ := json.Marshal(triageResult)
-	os.WriteFile(filepath.Join(dir, "triage.json"), data, 0644)
+	if err := os.WriteFile(filepath.Join(dir, "triage.json"), data, 0644); err != nil {
+		t.Fatalf("WriteFile triage.json: %v", err)
+	}
 
 	events := []Event{
 		{Phase: "triage", Kind: EventPhaseStarted, Data: map[string]any{"generation": float64(1)}},
@@ -164,7 +166,9 @@ func TestBuildHistory_ArchivedDetails(t *testing.T) {
 		"automatable": false,
 	}
 	data, _ := json.Marshal(triageResult)
-	os.WriteFile(filepath.Join(dir, "triage.json.1"), data, 0644)
+	if err := os.WriteFile(filepath.Join(dir, "triage.json.1"), data, 0644); err != nil {
+		t.Fatalf("WriteFile triage.json.1: %v", err)
+	}
 
 	// Write the current triage result (generation 2).
 	triageResult2 := map[string]any{
@@ -172,7 +176,9 @@ func TestBuildHistory_ArchivedDetails(t *testing.T) {
 		"automatable": true,
 	}
 	data2, _ := json.Marshal(triageResult2)
-	os.WriteFile(filepath.Join(dir, "triage.json"), data2, 0644)
+	if err := os.WriteFile(filepath.Join(dir, "triage.json"), data2, 0644); err != nil {
+		t.Fatalf("WriteFile triage.json: %v", err)
+	}
 
 	events := []Event{
 		{Phase: "triage", Kind: EventPhaseStarted, Data: map[string]any{"generation": float64(1)}},
