@@ -57,7 +57,10 @@ func main() {
 		})
 	}
 
-	outPath := "schemas/generated.go"
+	// When invoked by go:generate, GOPACKAGE is set and the working
+	// directory is the package directory containing the directive.
+	// Default to writing generated.go in the current directory.
+	outPath := "generated.go"
 	if envPath := os.Getenv("SCHEMAGEN_OUTPUT"); envPath != "" {
 		outPath = envPath
 	}
