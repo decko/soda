@@ -1,9 +1,14 @@
 package runner
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/decko/soda/internal/claude"
 )
 
 var _ Runner = (*ClaudeRunner)(nil) // compile-time interface check
@@ -71,5 +76,87 @@ func TestClaudeRunnerOptsMapping(t *testing.T) {
 		// the mapping logic by checking the adapter exists and compiles.
 		_ = r
 		_ = opts
+	})
+}
+
+func TestMapClaudeError(t *testing.T) {
+	t.Run("transient_error", func(t *testing.T) {
+		inner := fmt.Errorf("connection refused")
+		claudeErr := &claude.TransientError{
+			Stderr: []byte("stderr output"),
+			Reason: "connection",
+			Err:    inner,
+		}
+		result := mapClaudeError(claudeErr)
+
+		var runnerTE *TransientError
+		if !errors.As(result, &runnerTE) {
+			t.Fatalf("expected runner.TransientError, got %T: %v", result, result)
+		}
+		if runnerTE.Reason != "connection" {
+			t.Errorf("Reason = %q, want %q", runnerTE.Reason, "connection")
+		}
+		if !errors.Is(runnerTE, inner) {
+			t.Error("inner error should be preserved via Unwrap")
+		}
+	})
+
+	t.Run("parse_error", func(t *testing.T) {
+		inner := fmt.Errorf("invalid JSON")
+		claudeErr := &claude.ParseError{
+			Raw: []byte("bad output"),
+			Err: inner,
+		}
+		result := mapClaudeError(claudeErr)
+
+		var runnerPE *ParseError
+		if !errors.As(result, &runnerPE) {
+			t.Fatalf("expected runner.ParseError, got %T: %v", result, result)
+		}
+		if !errors.Is(runnerPE, inner) {
+			t.Error("inner error should be preserved via Unwrap")
+		}
+	})
+
+	t.Run("semantic_error", func(t *testing.T) {
+		claudeErr := &claude.SemanticError{Message: "API key invalid"}
+		result := mapClaudeError(claudeErr)
+
+		var runnerSE *SemanticError
+		if !errors.As(result, &runnerSE) {
+			t.Fatalf("expected runner.SemanticError, got %T: %v", result, result)
+		}
+		if runnerSE.Message != "API key invalid" {
+			t.Errorf("Message = %q, want %q", runnerSE.Message, "API key invalid")
+		}
+	})
+
+	t.Run("wrapped_claude_error", func(t *testing.T) {
+		claudeErr := &claude.TransientError{Reason: "timeout", Err: fmt.Errorf("timed out")}
+		wrapped := fmt.Errorf("phase triage: %w", claudeErr)
+		result := mapClaudeError(wrapped)
+
+		var runnerTE *TransientError
+		if !errors.As(result, &runnerTE) {
+			t.Fatalf("expected runner.TransientError from wrapped error, got %T: %v", result, result)
+		}
+		if runnerTE.Reason != "timeout" {
+			t.Errorf("Reason = %q, want %q", runnerTE.Reason, "timeout")
+		}
+	})
+
+	t.Run("context_canceled_passthrough", func(t *testing.T) {
+		result := mapClaudeError(context.Canceled)
+		if !errors.Is(result, context.Canceled) {
+			t.Errorf("context.Canceled should pass through unchanged, got %T: %v", result, result)
+		}
+	})
+
+	t.Run("generic_error_passthrough", func(t *testing.T) {
+		genericErr := fmt.Errorf("something unexpected")
+		result := mapClaudeError(genericErr)
+		if result != genericErr {
+			t.Errorf("generic error should pass through unchanged, got %T: %v", result, result)
+		}
 	})
 }
