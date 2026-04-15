@@ -83,6 +83,7 @@ func runRender(cmd *cobra.Command, cfg *config.Config, phaseName, ticketKey stri
 			Type:               t.Type,
 			Priority:           t.Priority,
 			AcceptanceCriteria: t.AcceptanceCriteria,
+			Comments:           mapTicketComments(t.Comments),
 		},
 	}
 
@@ -146,6 +147,21 @@ func createTicketSource(cfg *config.Config) (ticket.Source, error) {
 	default:
 		return nil, fmt.Errorf("unsupported ticket source: %q", cfg.TicketSource)
 	}
+}
+
+func mapTicketComments(comments []ticket.Comment) []pipeline.TicketComment {
+	if len(comments) == 0 {
+		return nil
+	}
+	out := make([]pipeline.TicketComment, len(comments))
+	for i, c := range comments {
+		out[i] = pipeline.TicketComment{
+			Author:    c.Author,
+			Body:      c.Body,
+			CreatedAt: c.CreatedAt,
+		}
+	}
+	return out
 }
 
 func loadArtifacts(state *pipeline.State, data *pipeline.PromptData) {
