@@ -187,6 +187,7 @@ func (s *State) MarkFailed(phase string, phaseErr error) error {
 		Data: map[string]any{
 			"error":       ps.Error,
 			"duration_ms": ps.DurationMs,
+			"cost":        ps.Cost,
 		},
 	})
 }
