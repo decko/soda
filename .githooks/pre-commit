@@ -11,7 +11,11 @@ if [ "${SKIP_HOOKS:-0}" = "1" ]; then
 fi
 
 # Collect staged .go files (added, copied, modified only).
-mapfile -t staged_files < <(git diff --cached --name-only --diff-filter=ACM -- '*.go')
+# Uses a while-read loop instead of mapfile for Bash 3.2 compatibility (macOS).
+staged_files=()
+while IFS= read -r file; do
+    staged_files+=("$file")
+done < <(git diff --cached --name-only --diff-filter=ACM -- '*.go')
 
 if [ ${#staged_files[@]} -eq 0 ]; then
     exit 0
@@ -47,16 +51,11 @@ fi
 
 # --- go vet ---
 # Extract unique package directories from the staged files.
-declare -A pkg_dirs
-for f in "${staged_files[@]}"; do
-    pkg_dirs["$(dirname "$f")"]=1
-done
-
-# Build ./pkg/... patterns for go vet.
+# Uses sort -u instead of an associative array for Bash 3.2 compatibility (macOS).
 vet_args=()
-for d in "${!pkg_dirs[@]}"; do
+while IFS= read -r d; do
     vet_args+=("./${d}/...")
-done
+done < <(printf '%s\n' "${staged_files[@]}" | while IFS= read -r f; do dirname "$f"; done | sort -u)
 
 if ! go vet "${vet_args[@]}" 2>&1; then
     printf "pre-commit: go vet failed.\n"
