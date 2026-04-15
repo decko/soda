@@ -510,6 +510,225 @@ func TestFieldExtractor_EmptyFieldConfig(t *testing.T) {
 	}
 }
 
+func TestSubtaskExtractor_HappyPath(t *testing.T) {
+	extractor := &SubtaskExtractor{}
+
+	ticket := &Ticket{
+		Key: "EPIC-10",
+		RawFields: map[string]any{
+			"subtasks": []any{
+				map[string]any{
+					"key": "PROJ-11",
+					"fields": map[string]any{
+						"summary": "Design authentication flow",
+						"status":  map[string]any{"name": "Done"},
+					},
+				},
+				map[string]any{
+					"key": "PROJ-12",
+					"fields": map[string]any{
+						"summary": "Implement login endpoint",
+						"status":  map[string]any{"name": "In Progress"},
+					},
+				},
+			},
+		},
+	}
+
+	result := extractor.Extract(ticket)
+
+	want := "- [PROJ-11] Design authentication flow (Done)\n- [PROJ-12] Implement login endpoint (In Progress)"
+	if result.ExistingPlan != want {
+		t.Errorf("ExistingPlan = %q, want %q", result.ExistingPlan, want)
+	}
+}
+
+func TestSubtaskExtractor_DoesNotOverwrite(t *testing.T) {
+	extractor := &SubtaskExtractor{}
+
+	ticket := &Ticket{
+		Key:          "EPIC-11",
+		ExistingPlan: "Already have a plan.",
+		RawFields: map[string]any{
+			"subtasks": []any{
+				map[string]any{
+					"key": "PROJ-13",
+					"fields": map[string]any{
+						"summary": "Some subtask",
+					},
+				},
+			},
+		},
+	}
+
+	result := extractor.Extract(ticket)
+
+	if result.ExistingPlan != "Already have a plan." {
+		t.Errorf("ExistingPlan = %q, want %q (should not overwrite)", result.ExistingPlan, "Already have a plan.")
+	}
+}
+
+func TestSubtaskExtractor_CustomField(t *testing.T) {
+	extractor := &SubtaskExtractor{Field: "sub_tasks"}
+
+	ticket := &Ticket{
+		Key: "EPIC-12",
+		RawFields: map[string]any{
+			"sub_tasks": []any{
+				map[string]any{
+					"key": "PROJ-14",
+					"fields": map[string]any{
+						"summary": "Task from custom field",
+					},
+				},
+			},
+		},
+	}
+
+	result := extractor.Extract(ticket)
+
+	want := "- [PROJ-14] Task from custom field"
+	if result.ExistingPlan != want {
+		t.Errorf("ExistingPlan = %q, want %q", result.ExistingPlan, want)
+	}
+}
+
+func TestSubtaskExtractor_NoSubtasks(t *testing.T) {
+	extractor := &SubtaskExtractor{}
+
+	ticket := &Ticket{
+		Key: "EPIC-13",
+		RawFields: map[string]any{
+			"summary": "An epic with no subtasks",
+		},
+	}
+
+	result := extractor.Extract(ticket)
+
+	if result.ExistingPlan != "" {
+		t.Errorf("ExistingPlan = %q, want empty", result.ExistingPlan)
+	}
+}
+
+func TestSubtaskExtractor_EmptySubtaskList(t *testing.T) {
+	extractor := &SubtaskExtractor{}
+
+	ticket := &Ticket{
+		Key: "EPIC-14",
+		RawFields: map[string]any{
+			"subtasks": []any{},
+		},
+	}
+
+	result := extractor.Extract(ticket)
+
+	if result.ExistingPlan != "" {
+		t.Errorf("ExistingPlan = %q, want empty", result.ExistingPlan)
+	}
+}
+
+func TestSubtaskExtractor_NilTicket(t *testing.T) {
+	extractor := &SubtaskExtractor{}
+
+	result := extractor.Extract(nil)
+	if result != nil {
+		t.Errorf("Extract(nil) = %v, want nil", result)
+	}
+}
+
+func TestSubtaskExtractor_NilRawFields(t *testing.T) {
+	extractor := &SubtaskExtractor{}
+
+	ticket := &Ticket{
+		Key:       "EPIC-15",
+		RawFields: nil,
+	}
+
+	result := extractor.Extract(ticket)
+
+	if result.ExistingPlan != "" {
+		t.Errorf("ExistingPlan = %q, want empty", result.ExistingPlan)
+	}
+}
+
+func TestSubtaskExtractor_SkipsMalformedEntries(t *testing.T) {
+	extractor := &SubtaskExtractor{}
+
+	ticket := &Ticket{
+		Key: "EPIC-16",
+		RawFields: map[string]any{
+			"subtasks": []any{
+				"not a map",
+				map[string]any{
+					"key": "PROJ-15",
+					"fields": map[string]any{
+						"summary": "Valid subtask",
+					},
+				},
+				map[string]any{
+					// no summary at all
+					"key": "PROJ-16",
+				},
+			},
+		},
+	}
+
+	result := extractor.Extract(ticket)
+
+	want := "- [PROJ-15] Valid subtask"
+	if result.ExistingPlan != want {
+		t.Errorf("ExistingPlan = %q, want %q", result.ExistingPlan, want)
+	}
+}
+
+func TestSubtaskExtractor_FlatStructure(t *testing.T) {
+	extractor := &SubtaskExtractor{}
+
+	ticket := &Ticket{
+		Key: "EPIC-17",
+		RawFields: map[string]any{
+			"subtasks": []any{
+				map[string]any{
+					"key":     "PROJ-17",
+					"summary": "Flat summary",
+					"status":  "Open",
+				},
+			},
+		},
+	}
+
+	result := extractor.Extract(ticket)
+
+	want := "- [PROJ-17] Flat summary (Open)"
+	if result.ExistingPlan != want {
+		t.Errorf("ExistingPlan = %q, want %q", result.ExistingPlan, want)
+	}
+}
+
+func TestSubtaskExtractor_DoesNotModifySpec(t *testing.T) {
+	extractor := &SubtaskExtractor{}
+
+	ticket := &Ticket{
+		Key: "EPIC-18",
+		RawFields: map[string]any{
+			"subtasks": []any{
+				map[string]any{
+					"key": "PROJ-18",
+					"fields": map[string]any{
+						"summary": "Subtask",
+					},
+				},
+			},
+		},
+	}
+
+	result := extractor.Extract(ticket)
+
+	if result.ExistingSpec != "" {
+		t.Errorf("ExistingSpec = %q, want empty (SubtaskExtractor should not modify spec)", result.ExistingSpec)
+	}
+}
+
 // Verify CommentMarkerExtractor satisfies ArtifactExtractor at compile time.
 var _ ArtifactExtractor = (*CommentMarkerExtractor)(nil)
 
@@ -518,3 +737,6 @@ var _ ArtifactExtractor = (*DescriptionMarkerExtractor)(nil)
 
 // Verify FieldExtractor satisfies ArtifactExtractor at compile time.
 var _ ArtifactExtractor = (*FieldExtractor)(nil)
+
+// Verify SubtaskExtractor satisfies ArtifactExtractor at compile time.
+var _ ArtifactExtractor = (*SubtaskExtractor)(nil)
