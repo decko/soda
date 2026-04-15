@@ -54,13 +54,14 @@ func (r *ClaudeRunner) Run(ctx context.Context, opts RunOpts) (*RunResult, error
 	}
 
 	return &RunResult{
-		Output:     result.Output,
-		RawText:    result.Result,
-		CostUSD:    result.CostUSD,
-		TokensIn:   result.Tokens.InputTokens,
-		TokensOut:  result.Tokens.OutputTokens,
-		DurationMs: result.Duration.Milliseconds(),
-		Turns:      result.Turns,
+		Output:        result.Output,
+		RawText:       result.Result,
+		CostUSD:       result.CostUSD,
+		TokensIn:      result.Tokens.InputTokens,
+		TokensOut:     result.Tokens.OutputTokens,
+		CacheTokensIn: result.Tokens.CacheCreationInputTokens + result.Tokens.CacheReadInputTokens,
+		DurationMs:    result.Duration.Milliseconds(),
+		Turns:         result.Turns,
 	}, nil
 }
 

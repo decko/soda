@@ -263,12 +263,13 @@ func (r *Runner) Run(ctx context.Context, opts runner.RunOpts) (*runner.RunResul
 // mapResult converts a claude.RunResult to a runner.RunResult.
 func mapResult(cr *claude.RunResult) *runner.RunResult {
 	return &runner.RunResult{
-		Output:     cr.Output,
-		RawText:    cr.Result,
-		CostUSD:    cr.CostUSD,
-		TokensIn:   cr.Tokens.InputTokens,
-		TokensOut:  cr.Tokens.OutputTokens,
-		DurationMs: cr.Duration.Milliseconds(),
-		Turns:      cr.Turns,
+		Output:        cr.Output,
+		RawText:       cr.Result,
+		CostUSD:       cr.CostUSD,
+		TokensIn:      cr.Tokens.InputTokens,
+		TokensOut:     cr.Tokens.OutputTokens,
+		CacheTokensIn: cr.Tokens.CacheCreationInputTokens + cr.Tokens.CacheReadInputTokens,
+		DurationMs:    cr.Duration.Milliseconds(),
+		Turns:         cr.Turns,
 	}
 }

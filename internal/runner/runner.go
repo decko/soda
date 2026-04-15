@@ -27,11 +27,12 @@ type RunOpts struct {
 
 // RunResult holds the parsed response from a phase execution.
 type RunResult struct {
-	Output     json.RawMessage // structured output matching the phase schema
-	RawText    string          // freeform text output
-	CostUSD    float64
-	TokensIn   int64
-	TokensOut  int64
-	DurationMs int64
-	Turns      int
+	Output        json.RawMessage // structured output matching the phase schema
+	RawText       string          // freeform text output
+	CostUSD       float64
+	TokensIn      int64
+	TokensOut     int64
+	CacheTokensIn int64 // tokens served from prompt cache (0 if unsupported)
+	DurationMs    int64
+	Turns         int
 }
