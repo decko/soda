@@ -151,6 +151,7 @@ func (e *Engine) skipPlanFromTriage() error {
 	if err := e.state.MarkRunning("plan"); err != nil {
 		return fmt.Errorf("engine: skip plan: mark running: %w", err)
 	}
+	e.emit(Event{Phase: "plan", Kind: EventPhaseStarted, Data: map[string]any{"generation": e.state.Meta().Phases["plan"].Generation}})
 
 	// Write the existing plan as the plan artifact.
 	if err := e.state.WriteArtifact("plan", []byte(plan)); err != nil {
@@ -168,6 +169,15 @@ func (e *Engine) skipPlanFromTriage() error {
 		Data: map[string]any{
 			"reason":    "triage set skip_plan=true; using ExistingPlan from ticket",
 			"plan_size": len(plan),
+		},
+	})
+
+	e.emit(Event{
+		Phase: "plan",
+		Kind:  EventPhaseCompleted,
+		Data: map[string]any{
+			"duration_ms": e.state.Meta().Phases["plan"].DurationMs,
+			"cost":        e.state.Meta().Phases["plan"].Cost,
 		},
 	})
 
@@ -431,16 +441,16 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 	}
 
 	// Mark phase running and notify callback.
-	e.emit(Event{Phase: phase.Name, Kind: EventPhaseStarted})
 	if err := e.state.MarkRunning(phase.Name); err != nil {
 		return fmt.Errorf("engine: mark running %s: %w", phase.Name, err)
 	}
+	e.emit(Event{Phase: phase.Name, Kind: EventPhaseStarted, Data: map[string]any{"generation": e.state.Meta().Phases[phase.Name].Generation}})
 
 	// Build prompt data and render template.
 	promptData, err := e.buildPromptData(phase)
 	if err != nil {
 		_ = e.state.MarkFailed(phase.Name, err)
-		e.emit(Event{Phase: phase.Name, Kind: EventPhaseFailed, Data: map[string]any{"error": err.Error()}})
+		e.emitPhaseFailed(phase.Name, err)
 		return fmt.Errorf("engine: build prompt data for %s: %w", phase.Name, err)
 	}
 
@@ -457,7 +467,7 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 	loadResult, err := e.config.Loader.LoadWithSource(phase.Prompt)
 	if err != nil {
 		_ = e.state.MarkFailed(phase.Name, err)
-		e.emit(Event{Phase: phase.Name, Kind: EventPhaseFailed, Data: map[string]any{"error": err.Error()}})
+		e.emitPhaseFailed(phase.Name, err)
 		return fmt.Errorf("engine: load template for %s: %w", phase.Name, err)
 	}
 
@@ -479,7 +489,7 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 	rendered, err := RenderPrompt(loadResult.Content, promptData)
 	if err != nil {
 		_ = e.state.MarkFailed(phase.Name, err)
-		e.emit(Event{Phase: phase.Name, Kind: EventPhaseFailed, Data: map[string]any{"error": err.Error()}})
+		e.emitPhaseFailed(phase.Name, err)
 		return fmt.Errorf("engine: render prompt for %s: %w", phase.Name, err)
 	}
 
@@ -506,7 +516,7 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 	result, err := e.runWithRetry(ctx, phase, opts)
 	if err != nil {
 		_ = e.state.MarkFailed(phase.Name, err)
-		e.emit(Event{Phase: phase.Name, Kind: EventPhaseFailed, Data: map[string]any{"error": err.Error()}})
+		e.emitPhaseFailed(phase.Name, err)
 		return err
 	}
 
@@ -1069,16 +1079,16 @@ func (e *Engine) runParallelReview(ctx context.Context, phase PhaseConfig) error
 	}
 
 	// Mark phase running.
-	e.emit(Event{Phase: phase.Name, Kind: EventPhaseStarted})
 	if err := e.state.MarkRunning(phase.Name); err != nil {
 		return fmt.Errorf("engine: mark running %s: %w", phase.Name, err)
 	}
+	e.emit(Event{Phase: phase.Name, Kind: EventPhaseStarted, Data: map[string]any{"generation": e.state.Meta().Phases[phase.Name].Generation}})
 
 	// Build prompt data shared by all reviewers.
 	promptData, err := e.buildPromptData(phase)
 	if err != nil {
 		_ = e.state.MarkFailed(phase.Name, err)
-		e.emit(Event{Phase: phase.Name, Kind: EventPhaseFailed, Data: map[string]any{"error": err.Error()}})
+		e.emitPhaseFailed(phase.Name, err)
 		return fmt.Errorf("engine: build prompt data for %s: %w", phase.Name, err)
 	}
 
@@ -1125,7 +1135,7 @@ func (e *Engine) runParallelReview(ctx context.Context, phase PhaseConfig) error
 	// Check for context cancellation first.
 	if err := ctx.Err(); err != nil {
 		_ = e.state.MarkFailed(phase.Name, err)
-		e.emit(Event{Phase: phase.Name, Kind: EventPhaseFailed, Data: map[string]any{"error": err.Error()}})
+		e.emitPhaseFailed(phase.Name, err)
 		return fmt.Errorf("engine: context cancelled during %s: %w", phase.Name, err)
 	}
 
@@ -1139,7 +1149,7 @@ func (e *Engine) runParallelReview(ctx context.Context, phase PhaseConfig) error
 	if len(reviewErrors) > 0 {
 		combinedErr := fmt.Errorf("engine: reviewer failures in %s: %s", phase.Name, strings.Join(reviewErrors, "; "))
 		_ = e.state.MarkFailed(phase.Name, combinedErr)
-		e.emit(Event{Phase: phase.Name, Kind: EventPhaseFailed, Data: map[string]any{"error": combinedErr.Error()}})
+		e.emitPhaseFailed(phase.Name, combinedErr)
 		return combinedErr
 	}
 
@@ -1388,10 +1398,10 @@ func (e *Engine) buildReviewArtifact(merged schemas.ReviewOutput) string {
 func (e *Engine) runMonitorStub(phase PhaseConfig) error {
 	prURL := e.extractPRURL()
 
-	e.emit(Event{Phase: phase.Name, Kind: EventPhaseStarted})
 	if err := e.state.MarkRunning(phase.Name); err != nil {
 		return fmt.Errorf("engine: mark running %s: %w", phase.Name, err)
 	}
+	e.emit(Event{Phase: phase.Name, Kind: EventPhaseStarted, Data: map[string]any{"generation": e.state.Meta().Phases[phase.Name].Generation}})
 
 	e.emit(Event{
 		Phase: phase.Name,
@@ -1434,4 +1444,16 @@ func (e *Engine) emit(event Event) {
 	if e.config.OnEvent != nil {
 		e.config.OnEvent(event)
 	}
+}
+
+// emitPhaseFailed emits a phase_failed event with error, duration, and cost
+// data from the phase state. Must be called after MarkFailed so the phase
+// state contains the final duration and cost values.
+func (e *Engine) emitPhaseFailed(phase string, phaseErr error) {
+	data := map[string]any{"error": phaseErr.Error()}
+	if ps := e.state.Meta().Phases[phase]; ps != nil {
+		data["duration_ms"] = ps.DurationMs
+		data["cost"] = ps.Cost
+	}
+	e.emit(Event{Phase: phase, Kind: EventPhaseFailed, Data: data})
 }

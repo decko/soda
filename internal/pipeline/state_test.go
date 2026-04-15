@@ -7,7 +7,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -261,7 +260,7 @@ func TestMarkFailed(t *testing.T) {
 		}
 	})
 
-	t.Run("event_includes_cost", func(t *testing.T) {
+	t.Run("no_duplicate_events", func(t *testing.T) {
 		dir := t.TempDir()
 		state, _ := LoadOrCreate(dir, "T-3")
 
@@ -276,23 +275,13 @@ func TestMarkFailed(t *testing.T) {
 			t.Fatalf("ReadEvents: %v", err)
 		}
 
-		// Find the phase_failed event.
-		var found bool
+		// State methods no longer emit events to events.jsonl; the engine
+		// is the single source of event logging via emit(). Verify that
+		// MarkRunning/MarkFailed do not write phase events.
 		for _, ev := range events {
-			if ev.Kind == EventPhaseFailed && ev.Phase == "plan" {
-				cost, ok := ev.Data["cost"]
-				if !ok {
-					t.Fatal("phase_failed event missing cost field")
-				}
-				if c := toFloat64(cost); !approxEqual(c, 0.42) {
-					t.Errorf("cost = %f, want 0.42", c)
-				}
-				found = true
-				break
+			if ev.Kind == EventPhaseStarted || ev.Kind == EventPhaseFailed || ev.Kind == EventPhaseCompleted {
+				t.Errorf("unexpected phase event %q in events.jsonl from state method", ev.Kind)
 			}
-		}
-		if !found {
-			t.Fatal("phase_failed event not found in events.jsonl")
 		}
 	})
 
@@ -598,11 +587,12 @@ func TestFullLifecycle(t *testing.T) {
 		t.Errorf("final TotalCost = %v, want 3.78", state2.Meta().TotalCost)
 	}
 
-	// Verify events.jsonl has entries
+	// State methods no longer write phase events to events.jsonl (the engine
+	// handles event logging via emit to avoid duplicates). Verify the file
+	// is either absent or empty.
 	eventsData, _ := os.ReadFile(filepath.Join(dir, "PROJ-100", "events.jsonl"))
-	eventLines := strings.Split(strings.TrimSpace(string(eventsData)), "\n")
-	if len(eventLines) < 8 {
-		t.Errorf("expected >= 8 events, got %d", len(eventLines))
+	if len(eventsData) > 0 {
+		t.Errorf("events.jsonl should be empty when using raw state methods, got %d bytes", len(eventsData))
 	}
 
 	// Verify log files exist

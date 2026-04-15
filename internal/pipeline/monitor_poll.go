@@ -78,10 +78,10 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 		}
 	}
 
-	e.emit(Event{Phase: phase.Name, Kind: EventPhaseStarted})
 	if err := e.state.MarkRunning(phase.Name); err != nil {
 		return fmt.Errorf("engine: mark running %s: %w", phase.Name, err)
 	}
+	e.emit(Event{Phase: phase.Name, Kind: EventPhaseStarted, Data: map[string]any{"generation": e.state.Meta().Phases[phase.Name].Generation}})
 
 	// Initialize or resume monitor state.
 	monState, err := e.state.ReadMonitorState()
@@ -123,9 +123,11 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 					"poll_count": monState.PollCount,
 				},
 			})
-			if err := e.state.MarkFailed(phase.Name, fmt.Errorf("monitor: max duration %s exceeded", polling.MaxDuration.Duration)); err != nil {
+			timeoutErr := fmt.Errorf("monitor: max duration %s exceeded", polling.MaxDuration.Duration)
+			if err := e.state.MarkFailed(phase.Name, timeoutErr); err != nil {
 				return fmt.Errorf("engine: mark failed %s: %w", phase.Name, err)
 			}
+			e.emitPhaseFailed(phase.Name, timeoutErr)
 			return nil
 		}
 
@@ -162,9 +164,11 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 					Data:  map[string]any{"duration_ms": e.state.Meta().Phases[phase.Name].DurationMs},
 				})
 			} else {
-				if err := e.state.MarkFailed(phase.Name, fmt.Errorf("monitor: PR %s", monState.Status)); err != nil {
+				failErr := fmt.Errorf("monitor: PR %s", monState.Status)
+				if err := e.state.MarkFailed(phase.Name, failErr); err != nil {
 					return fmt.Errorf("engine: mark failed %s: %w", phase.Name, err)
 				}
+				e.emitPhaseFailed(phase.Name, failErr)
 			}
 			return nil
 		}
