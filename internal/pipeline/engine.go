@@ -13,6 +13,7 @@ import (
 
 	"github.com/decko/soda/internal/claude"
 	"github.com/decko/soda/internal/git"
+	"github.com/decko/soda/internal/progress"
 	"github.com/decko/soda/internal/runner"
 	"github.com/decko/soda/internal/sandbox"
 	"github.com/decko/soda/schemas"
@@ -528,10 +529,19 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 	if err := e.state.MarkCompleted(phase.Name); err != nil {
 		return fmt.Errorf("engine: mark completed %s: %w", phase.Name, err)
 	}
+	completedData := map[string]any{
+		"duration_ms": e.state.Meta().Phases[phase.Name].DurationMs,
+		"cost":        e.state.Meta().Phases[phase.Name].Cost,
+	}
+	if result.Output != nil {
+		if summary := progress.PhaseSummary(phase.Name, result.Output); summary != "" {
+			completedData["summary"] = summary
+		}
+	}
 	e.emit(Event{
 		Phase: phase.Name,
 		Kind:  EventPhaseCompleted,
-		Data:  map[string]any{"duration_ms": e.state.Meta().Phases[phase.Name].DurationMs, "cost": e.state.Meta().Phases[phase.Name].Cost},
+		Data:  completedData,
 	})
 
 	// Domain gating.
@@ -1166,10 +1176,17 @@ func (e *Engine) runParallelReview(ctx context.Context, phase PhaseConfig) error
 	if err := e.state.MarkCompleted(phase.Name); err != nil {
 		return fmt.Errorf("engine: mark completed %s: %w", phase.Name, err)
 	}
+	reviewCompletedData := map[string]any{
+		"duration_ms": e.state.Meta().Phases[phase.Name].DurationMs,
+		"cost":        e.state.Meta().Phases[phase.Name].Cost,
+	}
+	if summary := progress.PhaseSummary(phase.Name, json.RawMessage(output)); summary != "" {
+		reviewCompletedData["summary"] = summary
+	}
 	e.emit(Event{
 		Phase: phase.Name,
 		Kind:  EventPhaseCompleted,
-		Data:  map[string]any{"duration_ms": e.state.Meta().Phases[phase.Name].DurationMs, "cost": e.state.Meta().Phases[phase.Name].Cost},
+		Data:  reviewCompletedData,
 	})
 
 	// Domain gating.

@@ -261,9 +261,44 @@ func TestMarkFailed(t *testing.T) {
 		}
 	})
 
+	t.Run("event_includes_cost", func(t *testing.T) {
+		dir := t.TempDir()
+		state, _ := LoadOrCreate(dir, "T-3")
+
+		state.MarkRunning("plan")
+		state.AccumulateCost("plan", 0.42)
+		if err := state.MarkFailed("plan", fmt.Errorf("budget exceeded")); err != nil {
+			t.Fatalf("MarkFailed: %v", err)
+		}
+
+		events, err := ReadEvents(filepath.Join(dir, "T-3"))
+		if err != nil {
+			t.Fatalf("ReadEvents: %v", err)
+		}
+
+		// Find the phase_failed event.
+		var found bool
+		for _, ev := range events {
+			if ev.Kind == EventPhaseFailed && ev.Phase == "plan" {
+				cost, ok := ev.Data["cost"]
+				if !ok {
+					t.Fatal("phase_failed event missing cost field")
+				}
+				if c := toFloat64(cost); !approxEqual(c, 0.42) {
+					t.Errorf("cost = %f, want 0.42", c)
+				}
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatal("phase_failed event not found in events.jsonl")
+		}
+	})
+
 	t.Run("error_on_unknown_phase", func(t *testing.T) {
 		dir := t.TempDir()
-		state, _ := LoadOrCreate(dir, "T-2")
+		state, _ := LoadOrCreate(dir, "T-4")
 
 		err := state.MarkFailed("nonexistent", fmt.Errorf("err"))
 		if err == nil {

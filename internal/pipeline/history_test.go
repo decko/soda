@@ -157,6 +157,96 @@ func TestBuildHistory_WithDetails(t *testing.T) {
 	}
 }
 
+func TestBuildHistory_FailedPhaseDetails(t *testing.T) {
+	dir := t.TempDir()
+
+	// Write a verify result with verdict=FAIL (result file exists even though phase failed).
+	verifyResult := map[string]any{
+		"verdict": "FAIL",
+	}
+	data, _ := json.Marshal(verifyResult)
+	if err := os.WriteFile(filepath.Join(dir, "verify.json"), data, 0644); err != nil {
+		t.Fatalf("WriteFile verify.json: %v", err)
+	}
+
+	events := []Event{
+		{Phase: "verify", Kind: EventPhaseStarted, Data: map[string]any{"generation": float64(1)}},
+		{Phase: "verify", Kind: EventPhaseFailed, Data: map[string]any{"error": "verification failed", "duration_ms": float64(20000), "cost": 0.15}},
+	}
+
+	h := BuildHistory(events, dir)
+	if len(h.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(h.Entries))
+	}
+
+	if h.Entries[0].Details != "FAIL" {
+		t.Errorf("details = %q, want %q", h.Entries[0].Details, "FAIL")
+	}
+	if h.Entries[0].Error != "verification failed" {
+		t.Errorf("error = %q, want %q", h.Entries[0].Error, "verification failed")
+	}
+}
+
+func TestBuildHistory_EventEmbeddedSummary(t *testing.T) {
+	// No result files on disk — details should come from event data "summary" field.
+	events := []Event{
+		{Phase: "triage", Kind: EventPhaseStarted, Data: map[string]any{"generation": float64(1)}},
+		{Phase: "triage", Kind: EventPhaseCompleted, Data: map[string]any{"cost": 0.10, "duration_ms": float64(5000), "summary": "low"}},
+	}
+
+	h := BuildHistory(events, "") // empty stateDir — no files to read
+	if len(h.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(h.Entries))
+	}
+	if h.Entries[0].Details != "low" {
+		t.Errorf("details = %q, want %q (from event summary)", h.Entries[0].Details, "low")
+	}
+}
+
+func TestBuildHistory_EventEmbeddedSummaryFailed(t *testing.T) {
+	// Failed phase with event-embedded summary and no result file.
+	events := []Event{
+		{Phase: "verify", Kind: EventPhaseStarted, Data: map[string]any{"generation": float64(1)}},
+		{Phase: "verify", Kind: EventPhaseFailed, Data: map[string]any{"error": "verification failed", "duration_ms": float64(20000), "cost": 0.15, "summary": "FAIL"}},
+	}
+
+	h := BuildHistory(events, "")
+	if len(h.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(h.Entries))
+	}
+	if h.Entries[0].Details != "FAIL" {
+		t.Errorf("details = %q, want %q (from event summary)", h.Entries[0].Details, "FAIL")
+	}
+	if h.Entries[0].Error != "verification failed" {
+		t.Errorf("error = %q, want %q", h.Entries[0].Error, "verification failed")
+	}
+}
+
+func TestBuildHistory_ResultFileOverridesEventSummary(t *testing.T) {
+	dir := t.TempDir()
+
+	// Write a triage result file.
+	triageResult := map[string]any{"complexity": "medium", "automatable": true}
+	data, _ := json.Marshal(triageResult)
+	if err := os.WriteFile(filepath.Join(dir, "triage.json"), data, 0644); err != nil {
+		t.Fatalf("WriteFile triage.json: %v", err)
+	}
+
+	// Event includes a stale summary — result file should take precedence.
+	events := []Event{
+		{Phase: "triage", Kind: EventPhaseStarted, Data: map[string]any{"generation": float64(1)}},
+		{Phase: "triage", Kind: EventPhaseCompleted, Data: map[string]any{"cost": 0.10, "duration_ms": float64(5000), "summary": "stale-summary"}},
+	}
+
+	h := BuildHistory(events, dir)
+	if len(h.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(h.Entries))
+	}
+	if h.Entries[0].Details != "medium" {
+		t.Errorf("details = %q, want %q (from result file, not event summary)", h.Entries[0].Details, "medium")
+	}
+}
+
 func TestBuildHistory_ArchivedDetails(t *testing.T) {
 	dir := t.TempDir()
 
@@ -244,6 +334,99 @@ func TestToFloat64(t *testing.T) {
 	if got := toFloat64("nope"); got != 0 {
 		t.Errorf("toFloat64(string) = %f, want 0", got)
 	}
+}
+
+func TestLoadPhaseResult(t *testing.T) {
+	t.Run("empty stateDir", func(t *testing.T) {
+		got := LoadPhaseResult("triage", 1, "")
+		if got != nil {
+			t.Errorf("expected nil, got %s", string(got))
+		}
+	})
+
+	t.Run("no result file", func(t *testing.T) {
+		dir := t.TempDir()
+		got := LoadPhaseResult("triage", 1, dir)
+		if got != nil {
+			t.Errorf("expected nil, got %s", string(got))
+		}
+	})
+
+	t.Run("current result file", func(t *testing.T) {
+		dir := t.TempDir()
+		data := []byte(`{"complexity":"low","automatable":true}`)
+		if err := os.WriteFile(filepath.Join(dir, "triage.json"), data, 0644); err != nil {
+			t.Fatal(err)
+		}
+		got := LoadPhaseResult("triage", 1, dir)
+		if string(got) != string(data) {
+			t.Errorf("got %s, want %s", string(got), string(data))
+		}
+	})
+
+	t.Run("archived result file", func(t *testing.T) {
+		dir := t.TempDir()
+		archived := []byte(`{"complexity":"high"}`)
+		current := []byte(`{"complexity":"low"}`)
+		if err := os.WriteFile(filepath.Join(dir, "triage.json.1"), archived, 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "triage.json"), current, 0644); err != nil {
+			t.Fatal(err)
+		}
+		got := LoadPhaseResult("triage", 1, dir)
+		if string(got) != string(archived) {
+			t.Errorf("got %s, want %s (archived)", string(got), string(archived))
+		}
+	})
+}
+
+func TestLoadFullOutputs(t *testing.T) {
+	dir := t.TempDir()
+
+	triageData := []byte(`{"complexity":"low","automatable":true}`)
+	planData := []byte(`{"tasks":[{"id":"1"}]}`)
+	if err := os.WriteFile(filepath.Join(dir, "triage.json"), triageData, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "plan.json"), planData, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	events := []Event{
+		{Phase: "triage", Kind: EventPhaseStarted, Data: map[string]any{"generation": float64(1)}},
+		{Phase: "triage", Kind: EventPhaseCompleted, Data: map[string]any{"cost": 0.10, "duration_ms": float64(5000)}},
+		{Phase: "plan", Kind: EventPhaseStarted, Data: map[string]any{"generation": float64(1)}},
+		{Phase: "plan", Kind: EventPhaseCompleted, Data: map[string]any{"cost": 0.20, "duration_ms": float64(10000)}},
+	}
+
+	h := BuildHistory(events, dir)
+
+	t.Run("all phases", func(t *testing.T) {
+		h2 := h // copy
+		h2.Entries = make([]PhaseGeneration, len(h.Entries))
+		copy(h2.Entries, h.Entries)
+		h2.LoadFullOutputs(dir, "")
+		if string(h2.Entries[0].FullOutput) != string(triageData) {
+			t.Errorf("triage full output = %s, want %s", string(h2.Entries[0].FullOutput), string(triageData))
+		}
+		if string(h2.Entries[1].FullOutput) != string(planData) {
+			t.Errorf("plan full output = %s, want %s", string(h2.Entries[1].FullOutput), string(planData))
+		}
+	})
+
+	t.Run("filtered to triage", func(t *testing.T) {
+		h2 := h
+		h2.Entries = make([]PhaseGeneration, len(h.Entries))
+		copy(h2.Entries, h.Entries)
+		h2.LoadFullOutputs(dir, "triage")
+		if string(h2.Entries[0].FullOutput) != string(triageData) {
+			t.Errorf("triage full output = %s, want %s", string(h2.Entries[0].FullOutput), string(triageData))
+		}
+		if h2.Entries[1].FullOutput != nil {
+			t.Errorf("plan full output should be nil when filtered, got %s", string(h2.Entries[1].FullOutput))
+		}
+	})
 }
 
 // Ensure Event timestamp parsing works with BuildHistory.
