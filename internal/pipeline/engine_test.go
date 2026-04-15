@@ -859,8 +859,8 @@ func TestEngine_GatePhase_TriageNotAutomatable(t *testing.T) {
 }
 
 func TestEngine_GatePhase_TriageSkipPlanDoesNotAffectGate(t *testing.T) {
-	// Triage output with skip_plan=true and extracted_plan set should still
-	// pass the gate when automatable=true. The gate only checks automatable.
+	// Triage output with skip_plan=true should still pass the gate when
+	// automatable=true. The gate only checks automatable.
 	phases := []PhaseConfig{
 		{
 			Name:   "triage",
@@ -873,7 +873,7 @@ func TestEngine_GatePhase_TriageSkipPlanDoesNotAffectGate(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true,"skip_plan":true,"extracted_plan":"Task 1: do the thing"}`),
+					Output:  json.RawMessage(`{"automatable":true,"skip_plan":true}`),
 					RawText: "Automatable with existing plan",
 					CostUSD: 0.05,
 				},
@@ -907,7 +907,7 @@ func TestEngine_GatePhase_TriageNotAutomatableWithSkipPlanStillBlocks(t *testing
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":false,"block_reason":"complex refactor","skip_plan":true,"extracted_plan":"some plan"}`),
+					Output:  json.RawMessage(`{"automatable":false,"block_reason":"complex refactor","skip_plan":true}`),
 					RawText: "Not automatable",
 					CostUSD: 0.05,
 				},
@@ -928,6 +928,327 @@ func TestEngine_GatePhase_TriageNotAutomatableWithSkipPlanStillBlocks(t *testing
 	}
 	if gateErr.Phase != "triage" {
 		t.Errorf("gate error phase = %q, want %q", gateErr.Phase, "triage")
+	}
+}
+
+func TestEngine_SkipPlanRouting_SkipsPlanPhaseWhenTriageSetSkipPlan(t *testing.T) {
+	// When triage sets skip_plan=true and the ticket has an ExistingPlan,
+	// the engine should skip the plan LLM call, write the ExistingPlan as
+	// the plan artifact, and proceed to implement.
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "plan",
+			Prompt:    "plan.md",
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			DependsOn: []string{"triage"},
+		},
+		{
+			Name:      "implement",
+			Prompt:    "implement.md",
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			DependsOn: []string{"plan"},
+		},
+	}
+
+	existingPlan := "## Tasks\n\n1. Task one\n2. Task two\n\n## Verification\n\nRun tests."
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true,"skip_plan":true}`),
+					RawText: "Triage with skip_plan",
+					CostUSD: 0.05,
+				},
+			}},
+			// No "plan" response — plan phase should not run.
+			"implement": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true}`),
+					RawText: "Implementation done",
+					CostUSD: 0.10,
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.Ticket.ExistingPlan = existingPlan
+		cfg.OnEvent = func(e Event) {
+			events = append(events, e)
+		}
+	})
+
+	err := engine.Run(context.Background())
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	// Plan phase should be completed.
+	if !state.IsCompleted("plan") {
+		t.Error("plan phase should be completed")
+	}
+
+	// Plan artifact should contain the ExistingPlan.
+	artifact, err := state.ReadArtifact("plan")
+	if err != nil {
+		t.Fatalf("reading plan artifact: %v", err)
+	}
+	if string(artifact) != existingPlan {
+		t.Errorf("plan artifact = %q, want %q", string(artifact), existingPlan)
+	}
+
+	// Runner should NOT have been called for "plan" phase.
+	for _, call := range mock.calls {
+		if call.Phase == "plan" {
+			t.Error("plan phase runner should not have been called when skip_plan=true")
+		}
+	}
+
+	// Implement should have been called and completed.
+	if !state.IsCompleted("implement") {
+		t.Error("implement should be completed")
+	}
+
+	// Check that plan_skipped_by_triage event was emitted.
+	foundSkipEvent := false
+	for _, ev := range events {
+		if ev.Kind == EventPlanSkippedByTriage {
+			foundSkipEvent = true
+			if ev.Phase != "plan" {
+				t.Errorf("skip event phase = %q, want %q", ev.Phase, "plan")
+			}
+			break
+		}
+	}
+	if !foundSkipEvent {
+		t.Error("expected plan_skipped_by_triage event")
+	}
+}
+
+func TestEngine_SkipPlanRouting_NoSkipWhenSkipPlanFalse(t *testing.T) {
+	// When triage does not set skip_plan (or sets it to false), the plan
+	// phase should run normally.
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "plan",
+			Prompt:    "plan.md",
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			DependsOn: []string{"triage"},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage without skip_plan",
+					CostUSD: 0.05,
+				},
+			}},
+			"plan": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tasks":[{"id":"1","description":"do it"}]}`),
+					RawText: "Plan from LLM",
+					CostUSD: 0.08,
+				},
+			}},
+		},
+	}
+
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.Ticket.ExistingPlan = "some plan content"
+	})
+
+	err := engine.Run(context.Background())
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	// Plan phase should have run via the runner.
+	planCalled := false
+	for _, call := range mock.calls {
+		if call.Phase == "plan" {
+			planCalled = true
+		}
+	}
+	if !planCalled {
+		t.Error("plan phase runner should have been called when skip_plan is not set")
+	}
+
+	if !state.IsCompleted("plan") {
+		t.Error("plan should be completed")
+	}
+}
+
+func TestEngine_SkipPlanRouting_NoSkipWhenExistingPlanEmpty(t *testing.T) {
+	// When triage sets skip_plan=true but the ticket has no ExistingPlan,
+	// the plan phase should run normally (skip_plan is ignored).
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "plan",
+			Prompt:    "plan.md",
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			DependsOn: []string{"triage"},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true,"skip_plan":true}`),
+					RawText: "Triage with skip_plan but no plan",
+					CostUSD: 0.05,
+				},
+			}},
+			"plan": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tasks":[{"id":"1","description":"do it"}]}`),
+					RawText: "Plan from LLM",
+					CostUSD: 0.08,
+				},
+			}},
+		},
+	}
+
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.Ticket.ExistingPlan = "" // empty plan
+	})
+
+	err := engine.Run(context.Background())
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	// Plan phase should have run via the runner since ExistingPlan is empty.
+	planCalled := false
+	for _, call := range mock.calls {
+		if call.Phase == "plan" {
+			planCalled = true
+		}
+	}
+	if !planCalled {
+		t.Error("plan phase runner should have been called when ExistingPlan is empty")
+	}
+
+	if !state.IsCompleted("plan") {
+		t.Error("plan should be completed")
+	}
+}
+
+func TestEngine_SkipPlanRouting_PlanArtifactAvailableToImplement(t *testing.T) {
+	// When skip_plan routes the plan, the implement phase should see the
+	// plan content in its prompt (via Artifacts.Plan).
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "plan",
+			Prompt:    "plan.md",
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			DependsOn: []string{"triage"},
+		},
+		{
+			Name:      "implement",
+			Prompt:    "implement.md",
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			DependsOn: []string{"plan"},
+		},
+	}
+
+	existingPlan := "## Tasks\n\n1. Update engine.go\n2. Add tests"
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true,"skip_plan":true}`),
+					RawText: "Triage output",
+					CostUSD: 0.05,
+				},
+			}},
+			"implement": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true}`),
+					RawText: "Implementation done",
+					CostUSD: 0.10,
+				},
+			}},
+		},
+	}
+
+	// Set up with custom implement template that renders {{.Artifacts.Plan}}.
+	stateDir := t.TempDir()
+	promptDir := t.TempDir()
+	workDir := t.TempDir()
+
+	templates := map[string]string{
+		"triage.md":    "Phase: triage\nTicket: {{.Ticket.Key}}\n",
+		"plan.md":      "Phase: plan\nTicket: {{.Ticket.Key}}\n",
+		"implement.md": "Phase: implement\nTicket: {{.Ticket.Key}}\nPlan:\n{{.Artifacts.Plan}}\n",
+	}
+	for name, content := range templates {
+		if err := os.WriteFile(filepath.Join(promptDir, name), []byte(content), 0644); err != nil {
+			t.Fatalf("write template %s: %v", name, err)
+		}
+	}
+
+	state, err := LoadOrCreate(stateDir, "TEST-1")
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+
+	engine := NewEngine(mock, state, EngineConfig{
+		Pipeline:   &PhasePipeline{Phases: phases},
+		Loader:     NewPromptLoader(promptDir),
+		Ticket:     TicketData{Key: "TEST-1", Summary: "Test ticket", ExistingPlan: existingPlan},
+		Model:      "test-model",
+		WorkDir:    workDir,
+		MaxCostUSD: 0,
+		Mode:       Autonomous,
+		SleepFunc:  func(time.Duration) {},
+		JitterFunc: func(time.Duration) time.Duration { return 0 },
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	// The implement phase should have received a prompt containing the plan.
+	var implementOpts *runner.RunOpts
+	for i, call := range mock.calls {
+		if call.Phase == "implement" {
+			implementOpts = &mock.calls[i]
+			break
+		}
+	}
+	if implementOpts == nil {
+		t.Fatal("implement phase was not called")
+	}
+
+	if !strings.Contains(implementOpts.SystemPrompt, existingPlan) {
+		t.Errorf("implement prompt should contain the existing plan, got: %s", implementOpts.SystemPrompt[:min(200, len(implementOpts.SystemPrompt))])
 	}
 }
 
