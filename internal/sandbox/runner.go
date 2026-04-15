@@ -5,6 +5,7 @@ package sandbox
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -218,23 +219,23 @@ func (r *Runner) Run(ctx context.Context, opts runner.RunOpts) (*runner.RunResul
 
 	// Check for OOM kill.
 	if oomCount > 0 {
-		return nil, &ExitError{
+		return nil, mapSandboxError(&ExitError{
 			Code:    exitCode,
 			Signal:  9, // SIGKILL from OOM
 			OOMKill: true,
 			Stderr:  stderr.Bytes(),
-		}
+		})
 	}
 
 	// Handle non-zero exit or wait error.
 	if waitErr != nil {
 		// waitErr from arapuca indicates signal kill: "killed by signal N"
 		sig := parseSignalFromError(waitErr)
-		return nil, &ExitError{
+		return nil, mapSandboxError(&ExitError{
 			Code:   0,
 			Signal: sig,
 			Stderr: stderr.Bytes(),
-		}
+		})
 	}
 
 	if exitCode != 0 {
@@ -245,16 +246,16 @@ func (r *Runner) Run(ctx context.Context, opts runner.RunOpts) (*runner.RunResul
 				return mapResult(result), nil
 			}
 		}
-		return nil, &ExitError{
+		return nil, mapSandboxError(&ExitError{
 			Code:   exitCode,
 			Stderr: stderr.Bytes(),
-		}
+		})
 	}
 
 	// Parse response.
 	result, err := claude.ParseResponse(stdout.Bytes())
 	if err != nil {
-		return nil, fmt.Errorf("sandbox: %w", err)
+		return nil, mapClaudeParseError(err)
 	}
 
 	return mapResult(result), nil
@@ -263,12 +264,51 @@ func (r *Runner) Run(ctx context.Context, opts runner.RunOpts) (*runner.RunResul
 // mapResult converts a claude.RunResult to a runner.RunResult.
 func mapResult(cr *claude.RunResult) *runner.RunResult {
 	return &runner.RunResult{
-		Output:     cr.Output,
-		RawText:    cr.Result,
-		CostUSD:    cr.CostUSD,
-		TokensIn:   cr.Tokens.InputTokens,
-		TokensOut:  cr.Tokens.OutputTokens,
-		DurationMs: cr.Duration.Milliseconds(),
-		Turns:      cr.Turns,
+		Output:        cr.Output,
+		RawText:       cr.Result,
+		CostUSD:       cr.CostUSD,
+		TokensIn:      cr.Tokens.InputTokens,
+		TokensOut:     cr.Tokens.OutputTokens,
+		CacheTokensIn: cr.Tokens.CacheCreationInputTokens + cr.Tokens.CacheReadInputTokens,
+		DurationMs:    cr.Duration.Milliseconds(),
+		Turns:         cr.Turns,
 	}
+}
+
+// mapSandboxError wraps ExitError into runner.TransientError so the pipeline
+// engine can classify sandbox process failures uniformly. OOM kills and
+// signal deaths are transient (retryable); non-zero exit codes with no
+// signal are also transient with reason "exit_code".
+func mapSandboxError(exitErr *ExitError) error {
+	if exitErr.OOMKill {
+		return &runner.TransientError{
+			Reason: "oom",
+			Err:    exitErr,
+		}
+	}
+	if exitErr.Signal != 0 {
+		return &runner.TransientError{
+			Reason: "signal",
+			Err:    exitErr,
+		}
+	}
+	return &runner.TransientError{
+		Reason: "exit_code",
+		Err:    exitErr,
+	}
+}
+
+// mapClaudeParseError wraps claude parse/semantic errors from ParseResponse
+// into runner error types. Falls back to runner.ParseError for unrecognized
+// error types.
+func mapClaudeParseError(err error) error {
+	var pe *claude.ParseError
+	if errors.As(err, &pe) {
+		return &runner.ParseError{Err: pe.Err}
+	}
+	var se *claude.SemanticError
+	if errors.As(err, &se) {
+		return &runner.SemanticError{Message: se.Message}
+	}
+	return &runner.ParseError{Err: fmt.Errorf("sandbox: %w", err)}
 }

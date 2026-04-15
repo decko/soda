@@ -11,11 +11,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/decko/soda/internal/claude"
 	"github.com/decko/soda/internal/git"
 	"github.com/decko/soda/internal/progress"
 	"github.com/decko/soda/internal/runner"
-	"github.com/decko/soda/internal/sandbox"
 	"github.com/decko/soda/schemas"
 )
 
@@ -592,7 +590,7 @@ func (e *Engine) runWithRetry(ctx context.Context, phase PhaseConfig, opts runne
 			})
 
 		case "parse":
-			var pe *claude.ParseError
+			var pe *runner.ParseError
 			if errors.As(err, &pe) {
 				opts.UserPrompt = opts.UserPrompt + "\n\n[RETRY] Previous attempt failed with parse error: " + pe.Error() + "\nPlease fix the output format."
 			}
@@ -603,7 +601,7 @@ func (e *Engine) runWithRetry(ctx context.Context, phase PhaseConfig, opts runne
 			})
 
 		case "semantic":
-			var se *claude.SemanticError
+			var se *runner.SemanticError
 			if errors.As(err, &se) {
 				opts.UserPrompt = opts.UserPrompt + "\n\n[RETRY] Previous attempt returned a semantic error: " + se.Message + "\nPlease address this issue."
 			}
@@ -621,28 +619,24 @@ func (e *Engine) runWithRetry(ctx context.Context, phase PhaseConfig, opts runne
 	}
 }
 
-// classifyError maps an error to a retry category.
+// classifyError maps an error to a retry category using agent-agnostic
+// runner error types. Backend runners (Claude, sandbox) are responsible
+// for wrapping their specific errors into runner.* types before returning.
 func classifyError(err error) string {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return "context"
 	}
-	var te *claude.TransientError
+	var te *runner.TransientError
 	if errors.As(err, &te) {
 		return "transient"
 	}
-	var pe *claude.ParseError
+	var pe *runner.ParseError
 	if errors.As(err, &pe) {
 		return "parse"
 	}
-	var se *claude.SemanticError
+	var se *runner.SemanticError
 	if errors.As(err, &se) {
 		return "semantic"
-	}
-	var ee *sandbox.ExitError
-	if errors.As(err, &ee) {
-		if ee.OOMKill || ee.Signal != 0 {
-			return "transient"
-		}
 	}
 	return "unknown"
 }

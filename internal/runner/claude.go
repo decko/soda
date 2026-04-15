@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -50,18 +51,45 @@ func (r *ClaudeRunner) Run(ctx context.Context, opts RunOpts) (*RunResult, error
 
 	result, err := r.inner.Stream(ctx, claudeOpts, nil)
 	if err != nil {
-		return nil, err
+		return nil, mapClaudeError(err)
 	}
 
 	return &RunResult{
-		Output:     result.Output,
-		RawText:    result.Result,
-		CostUSD:    result.CostUSD,
-		TokensIn:   result.Tokens.InputTokens,
-		TokensOut:  result.Tokens.OutputTokens,
-		DurationMs: result.Duration.Milliseconds(),
-		Turns:      result.Turns,
+		Output:        result.Output,
+		RawText:       result.Result,
+		CostUSD:       result.CostUSD,
+		TokensIn:      result.Tokens.InputTokens,
+		TokensOut:     result.Tokens.OutputTokens,
+		CacheTokensIn: result.Tokens.CacheCreationInputTokens + result.Tokens.CacheReadInputTokens,
+		DurationMs:    result.Duration.Milliseconds(),
+		Turns:         result.Turns,
 	}, nil
+}
+
+// mapClaudeError wraps claude-specific error types into agent-agnostic
+// runner error types. Non-claude errors (e.g., context cancellation) are
+// returned unchanged.
+func mapClaudeError(err error) error {
+	var te *claude.TransientError
+	if errors.As(err, &te) {
+		return &TransientError{
+			Reason: te.Reason,
+			Err:    te.Err,
+		}
+	}
+	var pe *claude.ParseError
+	if errors.As(err, &pe) {
+		return &ParseError{
+			Err: pe.Err,
+		}
+	}
+	var se *claude.SemanticError
+	if errors.As(err, &se) {
+		return &SemanticError{
+			Message: se.Message,
+		}
+	}
+	return err
 }
 
 // writeSystemPromptFile writes content to a temp file in dir and returns its absolute path.
