@@ -139,8 +139,9 @@ func createTicketSource(cfg *config.Config) (ticket.Source, error) {
 		})
 	case "github":
 		return ticket.NewGitHubSource(ticket.GitHubConfig{
-			Owner: cfg.GitHub.Owner,
-			Repo:  cfg.GitHub.Repo,
+			Owner:         cfg.GitHub.Owner,
+			Repo:          cfg.GitHub.Repo,
+			FetchComments: cfg.GitHub.FetchComments,
 		})
 	default:
 		return nil, fmt.Errorf("unsupported ticket source: %q", cfg.TicketSource)

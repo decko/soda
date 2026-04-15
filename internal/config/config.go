@@ -33,8 +33,9 @@ type JiraConfig struct {
 
 // GitHubTicketConfig holds GitHub Issues ticket source settings.
 type GitHubTicketConfig struct {
-	Owner string `yaml:"owner"`
-	Repo  string `yaml:"repo"`
+	Owner         string `yaml:"owner"`
+	Repo          string `yaml:"repo"`
+	FetchComments bool   `yaml:"fetch_comments"`
 }
 
 // SandboxConfig holds sandbox execution settings.

@@ -11,9 +11,10 @@ import (
 
 // GitHubConfig holds configuration for the GitHub Issues ticket source.
 type GitHubConfig struct {
-	Owner   string
-	Repo    string
-	Command string // gh binary path; defaults to "gh"
+	Owner         string
+	Repo          string
+	Command       string // gh binary path; defaults to "gh"
+	FetchComments bool   // when true, Fetch includes issue comments
 }
 
 // GitHubSource fetches tickets from GitHub Issues via the gh CLI.
