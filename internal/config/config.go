@@ -26,9 +26,22 @@ type Config struct {
 
 // JiraConfig holds Jira ticket source settings.
 type JiraConfig struct {
-	Command string `yaml:"command"`
-	Project string `yaml:"project"`
-	Query   string `yaml:"query"`
+	Command    string               `yaml:"command"`
+	Project    string               `yaml:"project"`
+	Query      string               `yaml:"query"`
+	Extraction JiraExtractionConfig `yaml:"extraction"`
+}
+
+// JiraExtractionConfig configures how to extract spec/plan artifacts from
+// Jira tickets. Multiple strategies can be configured; they are applied in
+// order: description markers, custom fields, subtasks. The first strategy
+// that finds content wins (later strategies do not overwrite).
+type JiraExtractionConfig struct {
+	Spec         ExtractionStrategy `yaml:"spec"`
+	Plan         ExtractionStrategy `yaml:"plan"`
+	SpecField    string             `yaml:"spec_field"`
+	PlanField    string             `yaml:"plan_field"`
+	SubtaskField string             `yaml:"subtask_field"`
 }
 
 // GitHubTicketConfig holds GitHub Issues ticket source settings.

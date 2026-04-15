@@ -54,6 +54,27 @@ func TestLoad(t *testing.T) {
 				if len(cfg.PhaseContext["plan"]) != 1 {
 					t.Errorf("PhaseContext[plan] = %v, want 1 entry", cfg.PhaseContext["plan"])
 				}
+				if cfg.Jira.Extraction.Spec.StartMarker != "<!-- spec:start -->" {
+					t.Errorf("Jira.Extraction.Spec.StartMarker = %q, want %q", cfg.Jira.Extraction.Spec.StartMarker, "<!-- spec:start -->")
+				}
+				if cfg.Jira.Extraction.Spec.EndMarker != "<!-- spec:end -->" {
+					t.Errorf("Jira.Extraction.Spec.EndMarker = %q, want %q", cfg.Jira.Extraction.Spec.EndMarker, "<!-- spec:end -->")
+				}
+				if cfg.Jira.Extraction.Plan.StartMarker != "<!-- plan:start -->" {
+					t.Errorf("Jira.Extraction.Plan.StartMarker = %q, want %q", cfg.Jira.Extraction.Plan.StartMarker, "<!-- plan:start -->")
+				}
+				if cfg.Jira.Extraction.Plan.EndMarker != "<!-- plan:end -->" {
+					t.Errorf("Jira.Extraction.Plan.EndMarker = %q, want %q", cfg.Jira.Extraction.Plan.EndMarker, "<!-- plan:end -->")
+				}
+				if cfg.Jira.Extraction.SpecField != "customfield_10050" {
+					t.Errorf("Jira.Extraction.SpecField = %q, want %q", cfg.Jira.Extraction.SpecField, "customfield_10050")
+				}
+				if cfg.Jira.Extraction.PlanField != "customfield_10051" {
+					t.Errorf("Jira.Extraction.PlanField = %q, want %q", cfg.Jira.Extraction.PlanField, "customfield_10051")
+				}
+				if cfg.Jira.Extraction.SubtaskField != "subtasks" {
+					t.Errorf("Jira.Extraction.SubtaskField = %q, want %q", cfg.Jira.Extraction.SubtaskField, "subtasks")
+				}
 				if cfg.GitHub.Owner != "myorg" {
 					t.Errorf("GitHub.Owner = %q, want %q", cfg.GitHub.Owner, "myorg")
 				}

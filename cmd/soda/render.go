@@ -169,34 +169,86 @@ func mapTicketComments(comments []ticket.Comment) []pipeline.TicketComment {
 	return out
 }
 
-// extractArtifacts runs the configured extraction strategy against the
-// ticket's comments, populating ExistingSpec and ExistingPlan in place.
-// It is a no-op when the ticket source is not "github" or no markers are
-// configured.
+// extractArtifacts runs configured extraction strategies against the
+// ticket, populating ExistingSpec and ExistingPlan in place. Strategies
+// are applied in order; the first to populate a field wins.
 func extractArtifacts(cfg *config.Config, t *ticket.Ticket) {
-	if cfg.TicketSource != "github" {
-		return
+	var extractors []ticket.ArtifactExtractor
+
+	switch cfg.TicketSource {
+	case "github":
+		extractors = buildGitHubExtractors(cfg)
+	case "jira":
+		extractors = buildJiraExtractors(cfg)
 	}
+
+	for _, ext := range extractors {
+		ext.Extract(t)
+	}
+}
+
+// buildGitHubExtractors returns extractors for GitHub comment markers.
+func buildGitHubExtractors(cfg *config.Config) []ticket.ArtifactExtractor {
 	spec := cfg.GitHub.Spec
 	plan := cfg.GitHub.Plan
 
-	// Skip if no markers are configured at all.
 	if spec.StartMarker == "" && spec.EndMarker == "" &&
 		plan.StartMarker == "" && plan.EndMarker == "" {
-		return
+		return nil
 	}
 
-	extractor := &ticket.CommentMarkerExtractor{
-		Spec: ticket.MarkerPair{
-			StartMarker: spec.StartMarker,
-			EndMarker:   spec.EndMarker,
-		},
-		Plan: ticket.MarkerPair{
-			StartMarker: plan.StartMarker,
-			EndMarker:   plan.EndMarker,
+	return []ticket.ArtifactExtractor{
+		&ticket.CommentMarkerExtractor{
+			Spec: ticket.MarkerPair{
+				StartMarker: spec.StartMarker,
+				EndMarker:   spec.EndMarker,
+			},
+			Plan: ticket.MarkerPair{
+				StartMarker: plan.StartMarker,
+				EndMarker:   plan.EndMarker,
+			},
 		},
 	}
-	extractor.Extract(t)
+}
+
+// buildJiraExtractors returns extractors for Jira, applied in order:
+// 1. Description markers (epic description strategy)
+// 2. Custom field values
+// 3. Subtask plan
+func buildJiraExtractors(cfg *config.Config) []ticket.ArtifactExtractor {
+	ext := cfg.Jira.Extraction
+	var extractors []ticket.ArtifactExtractor
+
+	// Strategy 1: description markers
+	if ext.Spec.StartMarker != "" || ext.Plan.StartMarker != "" {
+		extractors = append(extractors, &ticket.DescriptionMarkerExtractor{
+			Spec: ticket.MarkerPair{
+				StartMarker: ext.Spec.StartMarker,
+				EndMarker:   ext.Spec.EndMarker,
+			},
+			Plan: ticket.MarkerPair{
+				StartMarker: ext.Plan.StartMarker,
+				EndMarker:   ext.Plan.EndMarker,
+			},
+		})
+	}
+
+	// Strategy 2: custom field values
+	if ext.SpecField != "" || ext.PlanField != "" {
+		extractors = append(extractors, &ticket.FieldExtractor{
+			SpecField: ext.SpecField,
+			PlanField: ext.PlanField,
+		})
+	}
+
+	// Strategy 3: subtask plan
+	if ext.SubtaskField != "" {
+		extractors = append(extractors, &ticket.SubtaskExtractor{
+			Field: ext.SubtaskField,
+		})
+	}
+
+	return extractors
 }
 
 func loadArtifacts(state *pipeline.State, data *pipeline.PromptData) {
