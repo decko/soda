@@ -5,12 +5,34 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"text/tabwriter"
 	"time"
 
 	"github.com/decko/soda/internal/pipeline"
+	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 )
+
+// ANSI escape codes for status column colors (matching internal/progress).
+const (
+	statusColorReset  = "\033[0m"
+	statusColorGreen  = "\033[32m"
+	statusColorRed    = "\033[31m"
+	statusColorYellow = "\033[33m"
+	statusColorDim    = "\033[2m"
+)
+
+// pipelineEntry holds collected data for a single pipeline row.
+type pipelineEntry struct {
+	ticket    string
+	phase     string
+	status    string
+	elapsed   string
+	cost      string
+	submitted string
+	startedAt time.Time
+}
 
 func newStatusCmd() *cobra.Command {
 	return &cobra.Command{
@@ -49,10 +71,8 @@ func runStatus(stateDir string) error {
 		return fmt.Errorf("status: %w", phasesErr)
 	}
 
-	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "TICKET\tPHASE\tSTATUS\tELAPSED\tCOST")
-
-	found := false
+	// Collect pipeline entries.
+	var rows []pipelineEntry
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -65,28 +85,41 @@ func runStatus(stateDir string) error {
 			continue
 		}
 
-		phase, status := currentPhaseStatus(meta, pl.Phases)
+		phase, _ := currentPhaseStatus(meta, pl.Phases)
 		lockPath := filepath.Join(ticketDir, "lock")
-		lockInfo, lockErr := pipeline.ReadLockInfo(lockPath)
-		if lockErr == nil {
-			if lockInfo.IsAlive {
-				status = "running"
-			} else {
-				status = "stale"
-			}
-		}
+		lockInfo, _ := pipeline.ReadLockInfo(lockPath)
+		status := pipelineStatus(meta, lockInfo)
 
 		elapsed := formatElapsed(meta)
-		// Use meta.TotalCost — the authoritative accumulated total across all generations.
 		cost := fmt.Sprintf("$%.2f", meta.TotalCost)
 
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", meta.Ticket, phase, status, elapsed, cost)
-		found = true
+		rows = append(rows, pipelineEntry{
+			ticket:    meta.Ticket,
+			phase:     phase,
+			status:    status,
+			elapsed:   elapsed,
+			cost:      cost,
+			submitted: formatSubmitted(meta.StartedAt, time.Now()),
+			startedAt: meta.StartedAt,
+		})
 	}
 
-	if !found {
+	if len(rows) == 0 {
 		fmt.Println("No pipelines found.")
 		return nil
+	}
+
+	// Sort: running/stale first (group 0), then completed/failed (group 1);
+	// within each group, most recently started first.
+	sortEntries(rows)
+
+	// Render collected entries.
+	isTTY := isatty.IsTerminal(os.Stdout.Fd()) || isatty.IsCygwinTerminal(os.Stdout.Fd())
+	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "TICKET\tPHASE\tSTATUS\tSUBMITTED\tELAPSED\tCOST")
+	for _, r := range rows {
+		status := colorizeStatus(r.status, isTTY)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", r.ticket, r.phase, status, r.submitted, r.elapsed, r.cost)
 	}
 
 	return tw.Flush()
@@ -116,6 +149,98 @@ func currentPhaseStatus(meta *pipeline.PipelineMeta, phases []pipeline.PhaseConf
 	return latestPhase, latestStatus
 }
 
+// pipelineStatus computes a pipeline-level status from lock info and phase state.
+// Priority: lock alive → "running", lock stale → "stale", any phase failed → "failed",
+// all phases completed → "completed", otherwise fall back to the most advanced phase status.
+func pipelineStatus(meta *pipeline.PipelineMeta, lockInfo *pipeline.LockInfo) string {
+	if lockInfo != nil {
+		if lockInfo.IsAlive {
+			return "running"
+		}
+		return "stale"
+	}
+
+	// No lock file — derive status from phase states.
+	hasFailed := false
+	hasNonCompleted := false
+	hasAny := false
+	for _, ps := range meta.Phases {
+		hasAny = true
+		if ps.Status == pipeline.PhaseFailed {
+			hasFailed = true
+		}
+		if ps.Status != pipeline.PhaseCompleted && ps.Status != pipeline.PhaseSkipped {
+			hasNonCompleted = true
+		}
+	}
+	if hasFailed {
+		return "failed"
+	}
+	if hasAny && !hasNonCompleted {
+		return "completed"
+	}
+
+	// Fallback: use the most advanced phase's status.
+	status := ""
+	bestRank := -1
+	for _, ps := range meta.Phases {
+		r := phaseRank(ps.Status)
+		if r > bestRank {
+			bestRank = r
+			status = string(ps.Status)
+		}
+	}
+	if status == "" {
+		return "pending"
+	}
+	return status
+}
+
+// sortEntries sorts pipeline entries: running/stale pipelines first, then
+// completed/failed. Within each group, entries are sorted by StartedAt
+// descending (newest first).
+func sortEntries(rows []pipelineEntry) {
+	sort.SliceStable(rows, func(i, j int) bool {
+		gi, gj := statusGroup(rows[i].status), statusGroup(rows[j].status)
+		if gi != gj {
+			return gi < gj
+		}
+		return rows[i].startedAt.After(rows[j].startedAt)
+	})
+}
+
+// statusGroup returns 0 for active/in-progress pipelines (shown first)
+// and 1 for terminal states (shown after).
+func statusGroup(status string) int {
+	switch status {
+	case "running", "stale", "retrying", "pending":
+		return 0
+	default:
+		return 1
+	}
+}
+
+// colorizeStatus wraps the status string in ANSI color codes when isTTY is true.
+func colorizeStatus(status string, isTTY bool) string {
+	if !isTTY {
+		return status
+	}
+	switch status {
+	case "running":
+		return statusColorGreen + status + statusColorReset
+	case "completed":
+		return statusColorGreen + status + statusColorReset
+	case "failed":
+		return statusColorRed + status + statusColorReset
+	case "stale":
+		return statusColorYellow + status + statusColorReset
+	case "retrying":
+		return statusColorYellow + status + statusColorReset
+	default:
+		return statusColorDim + status + statusColorReset
+	}
+}
+
 func phaseRank(status pipeline.PhaseStatus) int {
 	switch status {
 	case pipeline.PhaseRunning:
@@ -129,6 +254,17 @@ func phaseRank(status pipeline.PhaseStatus) int {
 	default:
 		return 0
 	}
+}
+
+// formatSubmitted returns a human-friendly timestamp: time-only for today,
+// date+time for older entries.
+func formatSubmitted(startedAt, now time.Time) string {
+	sy, sm, sd := startedAt.Date()
+	ny, nm, nd := now.Date()
+	if sy == ny && sm == nm && sd == nd {
+		return startedAt.Format("15:04")
+	}
+	return startedAt.Format("Jan 02 15:04")
 }
 
 func formatElapsed(meta *pipeline.PipelineMeta) string {
