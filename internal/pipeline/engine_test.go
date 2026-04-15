@@ -858,6 +858,79 @@ func TestEngine_GatePhase_TriageNotAutomatable(t *testing.T) {
 	}
 }
 
+func TestEngine_GatePhase_TriageSkipPlanDoesNotAffectGate(t *testing.T) {
+	// Triage output with skip_plan=true and extracted_plan set should still
+	// pass the gate when automatable=true. The gate only checks automatable.
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true,"skip_plan":true,"extracted_plan":"Task 1: do the thing"}`),
+					RawText: "Automatable with existing plan",
+					CostUSD: 0.05,
+				},
+			}},
+		},
+	}
+
+	engine, state := setupEngine(t, phases, mock)
+
+	err := engine.Run(context.Background())
+	if err != nil {
+		t.Fatalf("expected no error when automatable=true with skip_plan, got: %v", err)
+	}
+
+	if !state.IsCompleted("triage") {
+		t.Error("triage should be completed")
+	}
+}
+
+func TestEngine_GatePhase_TriageNotAutomatableWithSkipPlanStillBlocks(t *testing.T) {
+	// Even if skip_plan=true, automatable=false should still gate.
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":false,"block_reason":"complex refactor","skip_plan":true,"extracted_plan":"some plan"}`),
+					RawText: "Not automatable",
+					CostUSD: 0.05,
+				},
+			}},
+		},
+	}
+
+	engine, _ := setupEngine(t, phases, mock)
+
+	err := engine.Run(context.Background())
+	if err == nil {
+		t.Fatal("expected PhaseGateError when automatable=false, even with skip_plan=true")
+	}
+
+	var gateErr *PhaseGateError
+	if !errors.As(err, &gateErr) {
+		t.Fatalf("expected PhaseGateError, got: %v", err)
+	}
+	if gateErr.Phase != "triage" {
+		t.Errorf("gate error phase = %q, want %q", gateErr.Phase, "triage")
+	}
+}
+
 func TestEngine_GatePhase_ReviewUnmarshalError(t *testing.T) {
 	phases := []PhaseConfig{
 		{

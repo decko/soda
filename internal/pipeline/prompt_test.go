@@ -311,6 +311,14 @@ func TestValidateTemplate(t *testing.T) {
 		}
 	})
 
+	t.Run("valid_template_with_existing_spec_and_plan", func(t *testing.T) {
+		tmpl := `{{- if .Ticket.ExistingSpec}}Spec: {{.Ticket.ExistingSpec}}{{- end}}
+{{- if .Ticket.ExistingPlan}}Plan: {{.Ticket.ExistingPlan}}{{- end}}`
+		if err := ValidateTemplate(tmpl); err != nil {
+			t.Fatalf("ValidateTemplate: %v", err)
+		}
+	})
+
 	t.Run("errors_on_syntax_error", func(t *testing.T) {
 		err := ValidateTemplate("{{.Invalid}")
 		if err == nil {
@@ -553,6 +561,155 @@ Verdict: {{.ReworkFeedback.Verdict}}
 		}
 		if !strings.Contains(result, "the feedback takes precedence") {
 			t.Error("implement prompt should say 'the feedback takes precedence' for verify rework feedback")
+		}
+	})
+
+	t.Run("renders_existing_spec_when_present", func(t *testing.T) {
+		tmpl := `{{- if .Ticket.ExistingSpec}}
+## Existing Spec
+{{.Ticket.ExistingSpec}}
+{{- end}}`
+		data := PromptData{
+			Ticket: TicketData{ExistingSpec: "The spec content here"},
+		}
+		result, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+		if !strings.Contains(result, "Existing Spec") {
+			t.Errorf("result should contain Existing Spec header, got: %s", result)
+		}
+		if !strings.Contains(result, "The spec content here") {
+			t.Errorf("result should contain spec content, got: %s", result)
+		}
+	})
+
+	t.Run("omits_existing_spec_when_empty", func(t *testing.T) {
+		tmpl := `{{- if .Ticket.ExistingSpec}}
+## Existing Spec
+{{.Ticket.ExistingSpec}}
+{{- end}}`
+		data := PromptData{}
+		result, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+		if strings.Contains(result, "Existing Spec") {
+			t.Errorf("result should not contain Existing Spec when empty, got: %s", result)
+		}
+	})
+
+	t.Run("renders_existing_plan_when_present", func(t *testing.T) {
+		tmpl := `{{- if .Ticket.ExistingPlan}}
+## Existing Plan
+{{.Ticket.ExistingPlan}}
+{{- end}}`
+		data := PromptData{
+			Ticket: TicketData{ExistingPlan: "Step 1: do stuff\nStep 2: more stuff"},
+		}
+		result, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+		if !strings.Contains(result, "Existing Plan") {
+			t.Errorf("result should contain Existing Plan header, got: %s", result)
+		}
+		if !strings.Contains(result, "Step 1: do stuff") {
+			t.Errorf("result should contain plan content, got: %s", result)
+		}
+	})
+
+	t.Run("omits_existing_plan_when_empty", func(t *testing.T) {
+		tmpl := `{{- if .Ticket.ExistingPlan}}
+## Existing Plan
+{{.Ticket.ExistingPlan}}
+{{- end}}`
+		data := PromptData{}
+		result, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+		if strings.Contains(result, "Existing Plan") {
+			t.Errorf("result should not contain Existing Plan when empty, got: %s", result)
+		}
+	})
+
+	t.Run("renders_triage_prompt_with_existing_spec_and_plan", func(t *testing.T) {
+		// Read the actual embedded triage.md template.
+		tmplBytes, err := os.ReadFile(filepath.Join("..", "..", "cmd", "soda", "embeds", "prompts", "triage.md"))
+		if err != nil {
+			t.Skipf("skipping: cannot read embedded triage.md: %v", err)
+		}
+		tmpl := string(tmplBytes)
+
+		data := PromptData{
+			Ticket: TicketData{
+				Key:          "TEST-134",
+				Summary:      "Test plan routing",
+				Type:         "feat",
+				Description:  "A test ticket with existing plan",
+				ExistingSpec: "The reviewed specification content",
+				ExistingPlan: "Task 1: update schema\nTask 2: update prompt",
+			},
+			Config: PromptConfigData{
+				Repos: []RepoConfig{{Name: "soda", Forge: "github", Description: "test repo"}},
+			},
+		}
+
+		result, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+		if !strings.Contains(result, "Existing Spec (from issue)") {
+			t.Errorf("triage prompt should contain Existing Spec section;\ngot: %s", result)
+		}
+		if !strings.Contains(result, "The reviewed specification content") {
+			t.Errorf("triage prompt should contain spec content;\ngot: %s", result)
+		}
+		if !strings.Contains(result, "Existing Plan (from issue)") {
+			t.Errorf("triage prompt should contain Existing Plan section;\ngot: %s", result)
+		}
+		if !strings.Contains(result, "Task 1: update schema") {
+			t.Errorf("triage prompt should contain plan content;\ngot: %s", result)
+		}
+		if !strings.Contains(result, "skip_plan") {
+			t.Errorf("triage prompt should contain plan routing instructions mentioning skip_plan;\ngot: %s", result)
+		}
+	})
+
+	t.Run("renders_triage_prompt_without_spec_plan_when_absent", func(t *testing.T) {
+		// Read the actual embedded triage.md template.
+		tmplBytes, err := os.ReadFile(filepath.Join("..", "..", "cmd", "soda", "embeds", "prompts", "triage.md"))
+		if err != nil {
+			t.Skipf("skipping: cannot read embedded triage.md: %v", err)
+		}
+		tmpl := string(tmplBytes)
+
+		data := PromptData{
+			Ticket: TicketData{
+				Key:         "TEST-134",
+				Summary:     "Test no spec/plan",
+				Type:        "feat",
+				Description: "A ticket without existing spec or plan",
+			},
+			Config: PromptConfigData{
+				Repos: []RepoConfig{{Name: "soda", Forge: "github", Description: "test repo"}},
+			},
+		}
+
+		result, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+		if strings.Contains(result, "Existing Spec (from issue)") {
+			t.Errorf("triage prompt should NOT contain Existing Spec section when empty;\ngot: %s", result)
+		}
+		if strings.Contains(result, "Existing Plan (from issue)") {
+			t.Errorf("triage prompt should NOT contain Existing Plan section when empty;\ngot: %s", result)
+		}
+		// Core triage content should still be present.
+		if !strings.Contains(result, "TEST-134") {
+			t.Errorf("triage prompt should still contain ticket key;\ngot: %s", result)
 		}
 	})
 
