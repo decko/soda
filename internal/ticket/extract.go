@@ -46,6 +46,32 @@ func (e *CommentMarkerExtractor) Extract(t *Ticket) *Ticket {
 	return t
 }
 
+// DescriptionMarkerExtractor scans the ticket description (not comments) for
+// content delimited by configurable marker pairs. This is useful for Jira epics
+// whose description embeds spec or plan content between markers.
+type DescriptionMarkerExtractor struct {
+	Spec MarkerPair
+	Plan MarkerPair
+}
+
+// Extract scans the ticket description for marker-delimited content and
+// populates ExistingSpec and ExistingPlan. Existing non-empty values are
+// not overwritten.
+func (e *DescriptionMarkerExtractor) Extract(t *Ticket) *Ticket {
+	if t == nil {
+		return t
+	}
+
+	if content := extractBetweenMarkers(t.Description, e.Spec.StartMarker, e.Spec.EndMarker); content != "" && t.ExistingSpec == "" {
+		t.ExistingSpec = content
+	}
+	if content := extractBetweenMarkers(t.Description, e.Plan.StartMarker, e.Plan.EndMarker); content != "" && t.ExistingPlan == "" {
+		t.ExistingPlan = content
+	}
+
+	return t
+}
+
 // extractBetweenMarkers returns the trimmed text between startMarker and
 // endMarker within body. Returns "" if either marker is empty or not found.
 func extractBetweenMarkers(body, startMarker, endMarker string) string {

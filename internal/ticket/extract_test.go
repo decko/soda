@@ -239,5 +239,107 @@ func TestCommentMarkerExtractor_MultilineContent(t *testing.T) {
 	}
 }
 
+func TestDescriptionMarkerExtractor_HappyPath(t *testing.T) {
+	extractor := &DescriptionMarkerExtractor{
+		Spec: MarkerPair{
+			StartMarker: "<!-- spec:start -->",
+			EndMarker:   "<!-- spec:end -->",
+		},
+		Plan: MarkerPair{
+			StartMarker: "<!-- plan:start -->",
+			EndMarker:   "<!-- plan:end -->",
+		},
+	}
+
+	ticket := &Ticket{
+		Key: "EPIC-1",
+		Description: "Epic overview.\n\n" +
+			"<!-- spec:start -->\nThe spec from the epic.\n<!-- spec:end -->\n\n" +
+			"<!-- plan:start -->\nThe plan from the epic.\n<!-- plan:end -->",
+	}
+
+	result := extractor.Extract(ticket)
+
+	if result.ExistingSpec != "The spec from the epic." {
+		t.Errorf("ExistingSpec = %q, want %q", result.ExistingSpec, "The spec from the epic.")
+	}
+	if result.ExistingPlan != "The plan from the epic." {
+		t.Errorf("ExistingPlan = %q, want %q", result.ExistingPlan, "The plan from the epic.")
+	}
+}
+
+func TestDescriptionMarkerExtractor_DoesNotOverwrite(t *testing.T) {
+	extractor := &DescriptionMarkerExtractor{
+		Spec: MarkerPair{
+			StartMarker: "<!-- spec:start -->",
+			EndMarker:   "<!-- spec:end -->",
+		},
+	}
+
+	ticket := &Ticket{
+		Key:          "EPIC-2",
+		Description:  "<!-- spec:start -->\nNew spec.\n<!-- spec:end -->",
+		ExistingSpec: "Already set spec.",
+	}
+
+	result := extractor.Extract(ticket)
+
+	if result.ExistingSpec != "Already set spec." {
+		t.Errorf("ExistingSpec = %q, want %q (should not overwrite)", result.ExistingSpec, "Already set spec.")
+	}
+}
+
+func TestDescriptionMarkerExtractor_NoMarkers(t *testing.T) {
+	extractor := &DescriptionMarkerExtractor{
+		Spec: MarkerPair{
+			StartMarker: "<!-- spec:start -->",
+			EndMarker:   "<!-- spec:end -->",
+		},
+	}
+
+	ticket := &Ticket{
+		Key:         "EPIC-3",
+		Description: "Just a plain description with no markers.",
+	}
+
+	result := extractor.Extract(ticket)
+
+	if result.ExistingSpec != "" {
+		t.Errorf("ExistingSpec = %q, want empty", result.ExistingSpec)
+	}
+}
+
+func TestDescriptionMarkerExtractor_NilTicket(t *testing.T) {
+	extractor := &DescriptionMarkerExtractor{
+		Spec: MarkerPair{
+			StartMarker: "<!-- spec:start -->",
+			EndMarker:   "<!-- spec:end -->",
+		},
+	}
+
+	result := extractor.Extract(nil)
+	if result != nil {
+		t.Errorf("Extract(nil) = %v, want nil", result)
+	}
+}
+
+func TestDescriptionMarkerExtractor_EmptyMarkerConfig(t *testing.T) {
+	extractor := &DescriptionMarkerExtractor{}
+
+	ticket := &Ticket{
+		Key:         "EPIC-4",
+		Description: "<!-- spec:start -->\nSome content.\n<!-- spec:end -->",
+	}
+
+	result := extractor.Extract(ticket)
+
+	if result.ExistingSpec != "" {
+		t.Errorf("ExistingSpec = %q, want empty (no markers configured)", result.ExistingSpec)
+	}
+}
+
 // Verify CommentMarkerExtractor satisfies ArtifactExtractor at compile time.
 var _ ArtifactExtractor = (*CommentMarkerExtractor)(nil)
+
+// Verify DescriptionMarkerExtractor satisfies ArtifactExtractor at compile time.
+var _ ArtifactExtractor = (*DescriptionMarkerExtractor)(nil)
