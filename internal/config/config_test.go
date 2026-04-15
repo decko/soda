@@ -54,6 +54,27 @@ func TestLoad(t *testing.T) {
 				if len(cfg.PhaseContext["plan"]) != 1 {
 					t.Errorf("PhaseContext[plan] = %v, want 1 entry", cfg.PhaseContext["plan"])
 				}
+				if cfg.GitHub.Owner != "myorg" {
+					t.Errorf("GitHub.Owner = %q, want %q", cfg.GitHub.Owner, "myorg")
+				}
+				if cfg.GitHub.Repo != "my-service" {
+					t.Errorf("GitHub.Repo = %q, want %q", cfg.GitHub.Repo, "my-service")
+				}
+				if !cfg.GitHub.FetchComments {
+					t.Error("GitHub.FetchComments = false, want true")
+				}
+				if cfg.GitHub.Spec.StartMarker != "<!-- spec:start -->" {
+					t.Errorf("GitHub.Spec.StartMarker = %q, want %q", cfg.GitHub.Spec.StartMarker, "<!-- spec:start -->")
+				}
+				if cfg.GitHub.Spec.EndMarker != "<!-- spec:end -->" {
+					t.Errorf("GitHub.Spec.EndMarker = %q, want %q", cfg.GitHub.Spec.EndMarker, "<!-- spec:end -->")
+				}
+				if cfg.GitHub.Plan.StartMarker != "<!-- plan:start -->" {
+					t.Errorf("GitHub.Plan.StartMarker = %q, want %q", cfg.GitHub.Plan.StartMarker, "<!-- plan:start -->")
+				}
+				if cfg.GitHub.Plan.EndMarker != "<!-- plan:end -->" {
+					t.Errorf("GitHub.Plan.EndMarker = %q, want %q", cfg.GitHub.Plan.EndMarker, "<!-- plan:end -->")
+				}
 			},
 		},
 		{

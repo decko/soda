@@ -70,6 +70,8 @@ type TicketData struct {
 	Priority           string
 	AcceptanceCriteria []string
 	Comments           []TicketComment
+	ExistingSpec       string
+	ExistingPlan       string
 }
 
 // TicketComment holds a single ticket comment for prompt templates.

@@ -33,9 +33,19 @@ type JiraConfig struct {
 
 // GitHubTicketConfig holds GitHub Issues ticket source settings.
 type GitHubTicketConfig struct {
-	Owner         string `yaml:"owner"`
-	Repo          string `yaml:"repo"`
-	FetchComments bool   `yaml:"fetch_comments"`
+	Owner         string             `yaml:"owner"`
+	Repo          string             `yaml:"repo"`
+	FetchComments bool               `yaml:"fetch_comments"`
+	Spec          ExtractionStrategy `yaml:"spec"`
+	Plan          ExtractionStrategy `yaml:"plan"`
+}
+
+// ExtractionStrategy configures how to extract a named artifact from ticket
+// comments. The extractor scans comments for lines matching StartMarker /
+// EndMarker and captures the text between them.
+type ExtractionStrategy struct {
+	StartMarker string `yaml:"start_marker"`
+	EndMarker   string `yaml:"end_marker"`
 }
 
 // SandboxConfig holds sandbox execution settings.

@@ -18,6 +18,12 @@ Summary: {{.Ticket.Summary}}
 ## Triage Assessment
 {{.Artifacts.Triage}}
 
+{{- if .Ticket.ExistingSpec}}
+
+## Existing Spec
+{{.Ticket.ExistingSpec}}
+{{- end}}
+
 {{- if .Context.RepoConventions}}
 
 ## Repo Conventions

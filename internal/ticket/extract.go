@@ -1,0 +1,68 @@
+package ticket
+
+import "strings"
+
+// ArtifactExtractor extracts named artifacts from a ticket's comments.
+// Implementations scan comment bodies for delimited content and populate
+// the corresponding Ticket fields (e.g. ExistingSpec, ExistingPlan).
+type ArtifactExtractor interface {
+	// Extract scans the ticket's comments and populates artifact fields
+	// (ExistingSpec, ExistingPlan) in place. It returns the modified ticket
+	// for convenience.
+	Extract(t *Ticket) *Ticket
+}
+
+// MarkerPair defines start/end comment markers for a single artifact.
+type MarkerPair struct {
+	StartMarker string
+	EndMarker   string
+}
+
+// CommentMarkerExtractor scans ticket comments for content delimited by
+// configurable marker pairs. When multiple comments contain the same
+// markers, the last one wins (most recent update takes precedence).
+type CommentMarkerExtractor struct {
+	Spec MarkerPair
+	Plan MarkerPair
+}
+
+// Extract scans comment bodies for marker-delimited content and populates
+// ExistingSpec and ExistingPlan on the ticket. If no markers are configured
+// or no matching content is found, the fields are left empty.
+func (e *CommentMarkerExtractor) Extract(t *Ticket) *Ticket {
+	if t == nil {
+		return t
+	}
+
+	for _, comment := range t.Comments {
+		if content := extractBetweenMarkers(comment.Body, e.Spec.StartMarker, e.Spec.EndMarker); content != "" {
+			t.ExistingSpec = content
+		}
+		if content := extractBetweenMarkers(comment.Body, e.Plan.StartMarker, e.Plan.EndMarker); content != "" {
+			t.ExistingPlan = content
+		}
+	}
+
+	return t
+}
+
+// extractBetweenMarkers returns the trimmed text between startMarker and
+// endMarker within body. Returns "" if either marker is empty or not found.
+func extractBetweenMarkers(body, startMarker, endMarker string) string {
+	if startMarker == "" || endMarker == "" {
+		return ""
+	}
+
+	startIdx := strings.Index(body, startMarker)
+	if startIdx < 0 {
+		return ""
+	}
+	contentStart := startIdx + len(startMarker)
+
+	endIdx := strings.Index(body[contentStart:], endMarker)
+	if endIdx < 0 {
+		return ""
+	}
+
+	return strings.TrimSpace(body[contentStart : contentStart+endIdx])
+}

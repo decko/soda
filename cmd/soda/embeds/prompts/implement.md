@@ -8,6 +8,18 @@ Summary: {{.Ticket.Summary}}
 ## Implementation Plan
 {{.Artifacts.Plan}}
 
+{{- if .Ticket.ExistingSpec}}
+
+## Existing Spec
+{{.Ticket.ExistingSpec}}
+{{- end}}
+
+{{- if .Ticket.ExistingPlan}}
+
+## Existing Plan
+{{.Ticket.ExistingPlan}}
+{{- end}}
+
 {{- if .ReworkFeedback}}
 {{- if eq .ReworkFeedback.Source "review"}}
 

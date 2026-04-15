@@ -62,6 +62,9 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 		return fmt.Errorf("run: fetch ticket: %w", err)
 	}
 
+	// Extract artifacts from comments (spec/plan) if configured.
+	extractArtifacts(cfg, t)
+
 	ticketData := pipeline.TicketData{
 		Key:                t.Key,
 		Summary:            t.Summary,
@@ -70,6 +73,8 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 		Priority:           t.Priority,
 		AcceptanceCriteria: t.AcceptanceCriteria,
 		Comments:           mapTicketComments(t.Comments),
+		ExistingSpec:       t.ExistingSpec,
+		ExistingPlan:       t.ExistingPlan,
 	}
 
 	// Load pipeline config
