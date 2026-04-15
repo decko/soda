@@ -3,8 +3,11 @@ package pipeline
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/decko/soda/schemas"
 )
 
 func TestDurationUnmarshalYAML(t *testing.T) {
@@ -108,6 +111,77 @@ func TestLoadPipeline(t *testing.T) {
 		}
 		if monitor.Polling.MaxDuration.Duration != 4*time.Hour {
 			t.Errorf("monitor max_duration = %v, want 4h", monitor.Polling.MaxDuration.Duration)
+		}
+	})
+
+	t.Run("resolves_generated_schemas", func(t *testing.T) {
+		pipeline, err := LoadPipeline("../../phases.yaml")
+		if err != nil {
+			t.Fatalf("LoadPipeline: %v", err)
+		}
+
+		// All phases should have schemas resolved from the generated constants.
+		for _, phase := range pipeline.Phases {
+			if strings.TrimSpace(phase.Schema) == "" {
+				t.Errorf("phase %q has empty schema after resolution", phase.Name)
+				continue
+			}
+			want := schemas.SchemaFor(phase.Name)
+			if want == "" {
+				t.Errorf("schemas.SchemaFor(%q) returned empty — phase not registered", phase.Name)
+				continue
+			}
+			if phase.Schema != want {
+				t.Errorf("phase %q schema does not match generated schema", phase.Name)
+			}
+		}
+	})
+
+	t.Run("inline_schema_overrides_generated", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "phases.yaml")
+		content := `phases:
+  - name: triage
+    prompt: prompts/triage.md
+    schema: '{"type":"object","properties":{"custom":{"type":"string"}}}'
+    timeout: 1m
+`
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		pipeline, err := LoadPipeline(path)
+		if err != nil {
+			t.Fatalf("LoadPipeline: %v", err)
+		}
+
+		// Inline schema should NOT be overwritten by the generated one.
+		got := pipeline.Phases[0].Schema
+		want := `{"type":"object","properties":{"custom":{"type":"string"}}}`
+		if got != want {
+			t.Errorf("inline schema was overridden:\ngot:  %s\nwant: %s", got, want)
+		}
+	})
+
+	t.Run("unknown_phase_gets_no_schema", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "phases.yaml")
+		content := `phases:
+  - name: custom-phase
+    prompt: prompts/custom.md
+    timeout: 1m
+`
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		pipeline, err := LoadPipeline(path)
+		if err != nil {
+			t.Fatalf("LoadPipeline: %v", err)
+		}
+
+		if pipeline.Phases[0].Schema != "" {
+			t.Errorf("unknown phase got schema: %q", pipeline.Phases[0].Schema)
 		}
 	})
 

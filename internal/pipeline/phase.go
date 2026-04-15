@@ -3,8 +3,10 @@ package pipeline
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
+	"github.com/decko/soda/schemas"
 	"gopkg.in/yaml.v3"
 )
 
@@ -85,6 +87,17 @@ func LoadPipeline(path string) (*PhasePipeline, error) {
 
 	if len(pipeline.Phases) == 0 {
 		return nil, fmt.Errorf("pipeline: no phases defined in %s", path)
+	}
+
+	// Resolve schemas: if a phase has no inline schema, look up the
+	// generated schema by phase name from the schemas package.
+	for idx := range pipeline.Phases {
+		phase := &pipeline.Phases[idx]
+		if strings.TrimSpace(phase.Schema) == "" {
+			if generated := schemas.SchemaFor(phase.Name); generated != "" {
+				phase.Schema = generated
+			}
+		}
 	}
 
 	return &pipeline, nil

@@ -45,7 +45,7 @@ Triage → Plan → Implement → Verify → Review → Submit → Monitor
 | Submit | Push branch, create PR/MR | git + gh/glab | 3m |
 | Monitor | Poll for review comments, respond (polling loop) | Full | 4h max |
 
-Phase definitions, tools, timeouts, and retry policies are in `phases.yaml`.
+Phase definitions, tools, timeouts, and retry policies are in `phases.yaml`. Output schemas are generated from Go structs in `schemas/` via `go generate ./schemas/...` and resolved automatically at pipeline load time.
 
 ### Review rework routing
 
@@ -99,7 +99,7 @@ soda/
 │       ├── picker.go          # Interactive ticket picker
 │       └── styles.go          # Lipgloss styles
 ├── prompts/                   # Phase prompt templates (go:embed)
-├── schemas/                   # Structured output schemas (Go structs)
+├── schemas/                   # Structured output schemas (Go structs + generated JSON schemas)
 ├── phases.yaml                # Phase pipeline configuration
 ├── config.example.yaml        # Example user config
 ├── go.mod
@@ -204,6 +204,7 @@ Atomic writes: always write to `.tmp` then rename. Archive on re-run (`verify.js
 - **Pre-commit hook**: `.githooks/pre-commit` enforces `gofmt` and `go vet` on staged `.go` files. Setup: `./scripts/setup-hooks.sh`
 - **Testing**: `go test ./...`
 - **Building**: `go build -o soda ./cmd/soda`
+- **Code generation**: `go generate ./schemas/...` regenerates JSON schemas from Go struct types. Run after modifying structs in `schemas/`.
 - **No single-char variables**: use descriptive names in loops and closures
 - **Errors**: wrap with `fmt.Errorf("context: %w", err)`, never discard
 - **Interfaces**: define at the consumer, not the producer. Keep minimal.
