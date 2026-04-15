@@ -3,6 +3,16 @@ jira:
   command: wtmcp
   project: MYPROJECT
   query: "labels = ai-workable AND status = Refinement"
+  extraction:
+    spec:
+      start_marker: "<!-- spec:start -->"
+      end_marker: "<!-- spec:end -->"
+    plan:
+      start_marker: "<!-- plan:start -->"
+      end_marker: "<!-- plan:end -->"
+    spec_field: "customfield_10050"
+    plan_field: "customfield_10051"
+    subtask_field: "subtasks"
 github:
   owner: myorg
   repo: my-service
