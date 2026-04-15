@@ -87,16 +87,7 @@ func renderEventsHistory(meta *pipeline.PipelineMeta, events []pipeline.Event, s
 			cost = fmt.Sprintf("$%.2f", entry.Cost)
 		}
 
-		details := entry.Details
-		if entry.Superseded {
-			details = "(superseded)"
-		}
-		if entry.Error != "" && !entry.Superseded {
-			details = entry.Error
-			if len(details) > 60 {
-				details = details[:57] + "..."
-			}
-		}
+		details := formatDetails(entry.Details, entry.Error, entry.Superseded)
 
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
 			entry.Phase, gen, sym, dur, cost, details)
@@ -178,6 +169,26 @@ func renderMetaHistory(meta *pipeline.PipelineMeta) error {
 	}
 
 	return nil
+}
+
+// formatDetails builds the details column text for a history entry.
+// When both outcome details and an error are present, they are joined
+// with " — " so the reader sees both at a glance.
+func formatDetails(details, errMsg string, superseded bool) string {
+	if superseded {
+		return "(superseded)"
+	}
+	if errMsg != "" {
+		errText := errMsg
+		if len(errText) > 60 {
+			errText = errText[:57] + "..."
+		}
+		if details != "" {
+			return details + " — " + errText
+		}
+		return errText
+	}
+	return details
 }
 
 // statusSymbol returns a status symbol for display.
