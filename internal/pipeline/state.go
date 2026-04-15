@@ -127,15 +127,7 @@ func (s *State) MarkRunning(phase string) error {
 	ps.PlanHash = ""
 	ps.startedAt = time.Now()
 
-	if err := s.flushMeta(); err != nil {
-		return err
-	}
-
-	return s.LogEvent(Event{
-		Phase: phase,
-		Kind:  "phase_started",
-		Data:  map[string]any{"generation": ps.Generation},
-	})
+	return s.flushMeta()
 }
 
 // MarkCompleted marks a phase as completed with its duration.
@@ -150,18 +142,7 @@ func (s *State) MarkCompleted(phase string) error {
 		ps.DurationMs = time.Since(ps.startedAt).Milliseconds()
 	}
 
-	if err := s.flushMeta(); err != nil {
-		return err
-	}
-
-	return s.LogEvent(Event{
-		Phase: phase,
-		Kind:  "phase_completed",
-		Data: map[string]any{
-			"duration_ms": ps.DurationMs,
-			"cost":        ps.Cost,
-		},
-	})
+	return s.flushMeta()
 }
 
 // MarkFailed marks a phase as failed with the error and duration.
@@ -177,19 +158,7 @@ func (s *State) MarkFailed(phase string, phaseErr error) error {
 		ps.DurationMs = time.Since(ps.startedAt).Milliseconds()
 	}
 
-	if err := s.flushMeta(); err != nil {
-		return err
-	}
-
-	return s.LogEvent(Event{
-		Phase: phase,
-		Kind:  "phase_failed",
-		Data: map[string]any{
-			"error":       ps.Error,
-			"duration_ms": ps.DurationMs,
-			"cost":        ps.Cost,
-		},
-	})
+	return s.flushMeta()
 }
 
 // AccumulateCost adds cost to the phase and total. Phase must exist (via MarkRunning).
