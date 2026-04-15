@@ -173,8 +173,9 @@ func renderSessionRow(session SessionInfo, selected bool) string {
 	cost := fmt.Sprintf("$%.2f", session.Cost)
 
 	summary := session.Summary
-	if len(summary) > 36 {
-		summary = summary[:33] + "..."
+	summaryRunes := []rune(summary)
+	if len(summaryRunes) > 36 {
+		summary = string(summaryRunes[:33]) + "..."
 	}
 
 	line := fmt.Sprintf("%s%-36s  %s  %s",

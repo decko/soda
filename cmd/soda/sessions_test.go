@@ -205,6 +205,11 @@ func TestTruncate(t *testing.T) {
 		{"this is a long string", 10, "this is..."},
 		{"ab", 3, "ab"},
 		{"abcd", 3, "abc"},
+		// Multi-byte UTF-8: each CJK character is 3 bytes but 1 rune.
+		{"日本語テスト", 5, "日本..."},
+		{"日本語テスト", 6, "日本語テスト"}, // exactly fits (6 runes)
+		{"日本語テスト", 3, "日本語"},    // maxLen<=3, no ellipsis
+		{"café résumé done", 10, "café ré..."},
 	}
 	for _, tc := range tests {
 		got := truncate(tc.input, tc.maxLen)

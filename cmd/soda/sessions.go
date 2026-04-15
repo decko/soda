@@ -244,15 +244,16 @@ func formatLastRun(startedAt, now time.Time) string {
 	return fmt.Sprintf("%dd ago", days)
 }
 
-// truncate shortens a string to maxLen, adding "..." if truncated.
+// truncate shortens a string to maxLen runes, adding "..." if truncated.
 func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
 		return s
 	}
 	if maxLen <= 3 {
-		return s[:maxLen]
+		return string(runes[:maxLen])
 	}
-	return s[:maxLen-3] + "..."
+	return string(runes[:maxLen-3]) + "..."
 }
 
 // runSessionsTUI launches the interactive TUI session browser. When the user
