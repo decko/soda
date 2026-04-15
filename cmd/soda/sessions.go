@@ -19,13 +19,14 @@ import (
 
 // sessionEntry holds data for one row in the sessions listing.
 type sessionEntry struct {
-	ticket    string
-	summary   string
-	status    string
-	cost      string
-	elapsed   string
-	lastRun   string
-	startedAt time.Time
+	ticket     string
+	summary    string
+	status     string
+	cost       string
+	elapsed    string
+	lastRun    string
+	startedAt  time.Time
+	elapsedDur time.Duration
 }
 
 func newSessionsCmd() *cobra.Command {
@@ -136,18 +137,20 @@ func collectSessions(stateDir string, now time.Time) ([]sessionEntry, error) {
 		lockInfo, _ := pipeline.ReadLockInfo(lockPath)
 		status := pipelineStatus(meta, lockInfo)
 
-		elapsed := formatElapsed(meta)
+		elapsedDur := computeElapsed(meta, now)
+		elapsed := elapsedDur.Truncate(time.Second).String()
 		cost := fmt.Sprintf("$%.2f", meta.TotalCost)
 		lastRun := formatLastRun(meta.StartedAt, now)
 
 		rows = append(rows, sessionEntry{
-			ticket:    meta.Ticket,
-			summary:   meta.Summary,
-			status:    status,
-			cost:      cost,
-			elapsed:   elapsed,
-			lastRun:   lastRun,
-			startedAt: meta.StartedAt,
+			ticket:     meta.Ticket,
+			summary:    meta.Summary,
+			status:     status,
+			cost:       cost,
+			elapsed:    elapsed,
+			lastRun:    lastRun,
+			startedAt:  meta.StartedAt,
+			elapsedDur: elapsedDur,
 		})
 	}
 
@@ -177,9 +180,7 @@ func sortSessions(rows []sessionEntry, sortBy string) {
 		})
 	case "elapsed":
 		sort.SliceStable(rows, func(i, j int) bool {
-			// Use startedAt as a proxy — sessions that started earlier
-			// have been running longer.
-			return rows[i].startedAt.Before(rows[j].startedAt)
+			return rows[i].elapsedDur > rows[j].elapsedDur // longest elapsed first
 		})
 	default: // "date" or unrecognized
 		sort.SliceStable(rows, func(i, j int) bool {
@@ -193,6 +194,24 @@ func parseCost(s string) float64 {
 	var cost float64
 	fmt.Sscanf(s, "$%f", &cost)
 	return cost
+}
+
+// computeElapsed returns the actual elapsed duration for a pipeline session.
+// For running sessions it uses wall-clock time since start; for completed
+// sessions it sums the DurationMs of individual phases.
+func computeElapsed(meta *pipeline.PipelineMeta, now time.Time) time.Duration {
+	var totalMs int64
+	hasRunning := false
+	for _, ps := range meta.Phases {
+		if ps.Status == pipeline.PhaseRunning {
+			hasRunning = true
+		}
+		totalMs += ps.DurationMs
+	}
+	if hasRunning {
+		return now.Sub(meta.StartedAt)
+	}
+	return time.Duration(totalMs) * time.Millisecond
 }
 
 // formatLastRun returns a human-friendly relative time string.

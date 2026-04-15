@@ -123,9 +123,9 @@ func TestSortSessions(t *testing.T) {
 	now := time.Date(2025, 6, 15, 14, 0, 0, 0, time.UTC)
 
 	rows := []sessionEntry{
-		{ticket: "A", cost: "$1.00", startedAt: now.Add(-3 * time.Hour)},
-		{ticket: "B", cost: "$5.00", startedAt: now.Add(-1 * time.Hour)},
-		{ticket: "C", cost: "$0.50", startedAt: now.Add(-2 * time.Hour)},
+		{ticket: "A", cost: "$1.00", startedAt: now.Add(-3 * time.Hour), elapsedDur: 10 * time.Minute},
+		{ticket: "B", cost: "$5.00", startedAt: now.Add(-1 * time.Hour), elapsedDur: 30 * time.Minute},
+		{ticket: "C", cost: "$0.50", startedAt: now.Add(-2 * time.Hour), elapsedDur: 2 * time.Minute},
 	}
 
 	t.Run("sort by date (default)", func(t *testing.T) {
@@ -156,7 +156,9 @@ func TestSortSessions(t *testing.T) {
 		r := make([]sessionEntry, len(rows))
 		copy(r, rows)
 		sortSessions(r, "elapsed")
-		wantOrder := []string{"A", "C", "B"} // longest running first
+		// B (30m) > A (10m) > C (2m) — sorted by actual elapsed duration,
+		// NOT by startedAt. A was started earliest but has only 10m elapsed.
+		wantOrder := []string{"B", "A", "C"} // longest elapsed first
 		for i, want := range wantOrder {
 			if r[i].ticket != want {
 				t.Errorf("rows[%d].ticket = %q, want %q", i, r[i].ticket, want)
@@ -251,6 +253,42 @@ func TestSessionsSummaryLine(t *testing.T) {
 				t.Errorf("sessionsSummaryLine() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestComputeElapsed_CompletedPhases(t *testing.T) {
+	now := time.Date(2025, 6, 15, 14, 0, 0, 0, time.UTC)
+
+	meta := &pipeline.PipelineMeta{
+		StartedAt: now.Add(-10 * time.Hour), // started long ago
+		Phases: map[string]*pipeline.PhaseState{
+			"triage":    {Status: pipeline.PhaseCompleted, DurationMs: 120000}, // 2m
+			"implement": {Status: pipeline.PhaseCompleted, DurationMs: 300000}, // 5m
+		},
+	}
+
+	got := computeElapsed(meta, now)
+	want := 7 * time.Minute
+	if got != want {
+		t.Errorf("computeElapsed() = %v, want %v (should sum DurationMs, not wall-clock)", got, want)
+	}
+}
+
+func TestComputeElapsed_RunningPhase(t *testing.T) {
+	now := time.Date(2025, 6, 15, 14, 0, 0, 0, time.UTC)
+
+	meta := &pipeline.PipelineMeta{
+		StartedAt: now.Add(-5 * time.Minute),
+		Phases: map[string]*pipeline.PhaseState{
+			"triage":    {Status: pipeline.PhaseCompleted, DurationMs: 60000},
+			"implement": {Status: pipeline.PhaseRunning},
+		},
+	}
+
+	got := computeElapsed(meta, now)
+	want := 5 * time.Minute
+	if got != want {
+		t.Errorf("computeElapsed() = %v, want %v (should use wall-clock for running)", got, want)
 	}
 }
 
