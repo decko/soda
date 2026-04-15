@@ -6,8 +6,7 @@
 phases:
   - name: triage
     prompt: prompts/triage.md
-    schema: |
-      {"type":"object","properties":{"ticket_key":{"type":"string"},"repo":{"type":"string"},"code_area":{"type":"string"},"files":{"type":"array","items":{"type":"string"}},"complexity":{"type":"string"},"approach":{"type":"string"},"risks":{"type":"array","items":{"type":"string"}},"automatable":{"type":"boolean"},"block_reason":{"type":"string"},"skip_plan":{"type":"boolean","default":false}},"required":["ticket_key","repo","code_area","files","complexity","approach","risks","automatable"]}
+    # schema: generated from schemas.TriageOutput (go generate ./schemas/...)
     tools:
       - Read
       - Glob
@@ -23,8 +22,7 @@ phases:
 
   - name: plan
     prompt: prompts/plan.md
-    schema: |
-      {"type":"object","properties":{"ticket_key":{"type":"string"},"approach":{"type":"string"},"tasks":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"description":{"type":"string"},"files":{"type":"array","items":{"type":"string"}},"done_when":{"type":"string"},"depends_on":{"type":"array","items":{"type":"string"}}},"required":["id","description","files","done_when"]}},"verification":{"type":"object","properties":{"commands":{"type":"array","items":{"type":"string"}},"manual_steps":{"type":"array","items":{"type":"string"}}},"required":["commands"]},"deviations":{"type":"array","items":{"type":"string"}}},"required":["ticket_key","approach","tasks","verification"]}
+    # schema: generated from schemas.PlanOutput (go generate ./schemas/...)
     tools:
       - Read
       - Glob
@@ -41,8 +39,7 @@ phases:
 
   - name: implement
     prompt: prompts/implement.md
-    schema: |
-      {"type":"object","properties":{"ticket_key":{"type":"string"},"branch":{"type":"string"},"commits":{"type":"array","items":{"type":"object","properties":{"hash":{"type":"string"},"message":{"type":"string"},"task_id":{"type":"string"}},"required":["hash","message","task_id"]}},"files_changed":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"action":{"type":"string"}},"required":["path","action"]}},"task_results":{"type":"array","items":{"type":"object","properties":{"task_id":{"type":"string"},"status":{"type":"string"},"reason":{"type":"string"}},"required":["task_id","status"]}},"tests_passed":{"type":"boolean"},"test_output":{"type":"string"},"deviations":{"type":"array","items":{"type":"string"}}},"required":["ticket_key","branch","commits","files_changed","task_results","tests_passed"]}
+    # schema: generated from schemas.ImplementOutput (go generate ./schemas/...)
     tools:
       - Read
       - Write
@@ -60,8 +57,7 @@ phases:
 
   - name: verify
     prompt: prompts/verify.md
-    schema: |
-      {"type":"object","properties":{"ticket_key":{"type":"string"},"verdict":{"type":"string"},"criteria_results":{"type":"array","items":{"type":"object","properties":{"criterion":{"type":"string"},"passed":{"type":"boolean"},"evidence":{"type":"string"}},"required":["criterion","passed","evidence"]}},"command_results":{"type":"array","items":{"type":"object","properties":{"command":{"type":"string"},"exit_code":{"type":"integer"},"output":{"type":"string"},"passed":{"type":"boolean"}},"required":["command","exit_code","output","passed"]}},"code_issues":{"type":"array","items":{"type":"object","properties":{"file":{"type":"string"},"line":{"type":"integer"},"severity":{"type":"string"},"issue":{"type":"string"}},"required":["file","severity","issue"]}},"fixes_required":{"type":"array","items":{"type":"string"}}},"required":["ticket_key","verdict","criteria_results","command_results"]}
+    # schema: generated from schemas.VerifyOutput (go generate ./schemas/...)
     tools:
       - Read
       - Glob
@@ -78,8 +74,7 @@ phases:
 
   - name: review
     type: parallel-review
-    schema: |
-      {"type":"object","properties":{"ticket_key":{"type":"string"},"findings":{"type":"array","items":{"type":"object","properties":{"severity":{"type":"string"},"file":{"type":"string"},"line":{"type":"integer"},"issue":{"type":"string"},"suggestion":{"type":"string"}},"required":["severity","file","issue","suggestion"]}},"verdict":{"type":"string"}},"required":["ticket_key","findings","verdict"]}
+    # schema: generated from schemas.ReviewOutput (go generate ./schemas/...)
     tools:
       - Read
       - Glob
@@ -108,8 +103,7 @@ phases:
 
   - name: submit
     prompt: prompts/submit.md
-    schema: |
-      {"type":"object","properties":{"ticket_key":{"type":"string"},"pr_url":{"type":"string"},"pr_number":{"type":"integer"},"title":{"type":"string"},"branch":{"type":"string"},"target":{"type":"string"},"forge":{"type":"string"}},"required":["ticket_key","pr_url","pr_number","title","branch","target","forge"]}
+    # schema: generated from schemas.SubmitOutput (go generate ./schemas/...)
     tools:
       - Bash(git:*)
       - Bash(gh:*)
@@ -126,8 +120,7 @@ phases:
 
   - name: monitor
     prompt: prompts/monitor.md
-    schema: |
-      {"type":"object","properties":{"ticket_key":{"type":"string"},"pr_url":{"type":"string"},"comments_handled":{"type":"array","items":{"type":"object","properties":{"comment_id":{"type":"string"},"author":{"type":"string"},"content":{"type":"string"},"action":{"type":"string"},"response":{"type":"string"}},"required":["comment_id","author","content","action","response"]}},"files_changed":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"action":{"type":"string"}},"required":["path","action"]}},"commits":{"type":"array","items":{"type":"object","properties":{"hash":{"type":"string"},"message":{"type":"string"},"task_id":{"type":"string"}},"required":["hash","message","task_id"]}},"tests_passed":{"type":"boolean"}},"required":["ticket_key","pr_url","comments_handled","tests_passed"]}
+    # schema: generated from schemas.MonitorOutput (go generate ./schemas/...)
     type: polling     # not one-shot
     tools:
       - Read
