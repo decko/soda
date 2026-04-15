@@ -100,6 +100,9 @@ func BuildHistory(events []Event, stateDir string) History {
 			if v, ok := ev.Data["cost"]; ok {
 				h.Entries[idx].Cost = toFloat64(v)
 			}
+			// Load details from result JSON (may exist even for failed phases,
+			// e.g. verify with verdict=FAIL).
+			h.Entries[idx].Details = loadPhaseDetails(ev.Phase, h.Entries[idx].Generation, stateDir)
 
 		case EventPhaseSkipped:
 			entry := PhaseGeneration{

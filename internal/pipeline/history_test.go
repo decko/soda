@@ -157,6 +157,36 @@ func TestBuildHistory_WithDetails(t *testing.T) {
 	}
 }
 
+func TestBuildHistory_FailedPhaseDetails(t *testing.T) {
+	dir := t.TempDir()
+
+	// Write a verify result with verdict=FAIL (result file exists even though phase failed).
+	verifyResult := map[string]any{
+		"verdict": "FAIL",
+	}
+	data, _ := json.Marshal(verifyResult)
+	if err := os.WriteFile(filepath.Join(dir, "verify.json"), data, 0644); err != nil {
+		t.Fatalf("WriteFile verify.json: %v", err)
+	}
+
+	events := []Event{
+		{Phase: "verify", Kind: EventPhaseStarted, Data: map[string]any{"generation": float64(1)}},
+		{Phase: "verify", Kind: EventPhaseFailed, Data: map[string]any{"error": "verification failed", "duration_ms": float64(20000), "cost": 0.15}},
+	}
+
+	h := BuildHistory(events, dir)
+	if len(h.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(h.Entries))
+	}
+
+	if h.Entries[0].Details != "FAIL" {
+		t.Errorf("details = %q, want %q", h.Entries[0].Details, "FAIL")
+	}
+	if h.Entries[0].Error != "verification failed" {
+		t.Errorf("error = %q, want %q", h.Entries[0].Error, "verification failed")
+	}
+}
+
 func TestBuildHistory_ArchivedDetails(t *testing.T) {
 	dir := t.TempDir()
 
