@@ -41,6 +41,7 @@ func newRootCmd() *cobra.Command {
 	cmd.AddCommand(
 		newRunCmd(),
 		newStatusCmd(),
+		newSessionsCmd(),
 		newHistoryCmd(),
 		newCleanCmd(),
 		newRenderCmd(),
