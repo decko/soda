@@ -14,9 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/decko/soda/internal/claude"
 	"github.com/decko/soda/internal/runner"
-	"github.com/decko/soda/internal/sandbox"
 	"github.com/decko/soda/schemas"
 )
 
@@ -257,7 +255,7 @@ func TestEngine_DependencyNotMet(t *testing.T) {
 	mock := &flexMockRunner{
 		responses: map[string][]flexResponse{
 			"triage": {{
-				err: &claude.TransientError{Reason: "timeout", Err: fmt.Errorf("connection reset")},
+				err: &runner.TransientError{Reason: "timeout", Err: fmt.Errorf("connection reset")},
 			}},
 		},
 	}
@@ -295,8 +293,8 @@ func TestEngine_TransientRetryWithBackoff(t *testing.T) {
 	mock := &flexMockRunner{
 		responses: map[string][]flexResponse{
 			"triage": {
-				{err: &claude.TransientError{Reason: "timeout", Err: fmt.Errorf("fail1")}},
-				{err: &claude.TransientError{Reason: "timeout", Err: fmt.Errorf("fail2")}},
+				{err: &runner.TransientError{Reason: "timeout", Err: fmt.Errorf("fail1")}},
+				{err: &runner.TransientError{Reason: "timeout", Err: fmt.Errorf("fail2")}},
 				{result: &runner.RunResult{
 					Output:  json.RawMessage(`{"automatable":true}`),
 					RawText: "success",
@@ -346,8 +344,7 @@ func TestEngine_ParseRetryAppendsError(t *testing.T) {
 		},
 	}
 
-	parseErr := &claude.ParseError{
-		Raw: []byte("bad output"),
+	parseErr := &runner.ParseError{
 		Err: fmt.Errorf("expected JSON object"),
 	}
 
@@ -402,9 +399,9 @@ func TestEngine_MaxRetriesExhausted(t *testing.T) {
 	mock := &flexMockRunner{
 		responses: map[string][]flexResponse{
 			"triage": {
-				{err: &claude.TransientError{Reason: "timeout", Err: fmt.Errorf("fail1")}},
-				{err: &claude.TransientError{Reason: "timeout", Err: fmt.Errorf("fail2")}},
-				{err: &claude.TransientError{Reason: "timeout", Err: fmt.Errorf("fail3")}},
+				{err: &runner.TransientError{Reason: "timeout", Err: fmt.Errorf("fail1")}},
+				{err: &runner.TransientError{Reason: "timeout", Err: fmt.Errorf("fail2")}},
+				{err: &runner.TransientError{Reason: "timeout", Err: fmt.Errorf("fail3")}},
 			},
 		},
 	}
@@ -696,15 +693,15 @@ func TestClassifyError(t *testing.T) {
 	}{
 		{"context_canceled", context.Canceled, "context"},
 		{"context_deadline", context.DeadlineExceeded, "context"},
-		{"transient", &claude.TransientError{Reason: "timeout", Err: fmt.Errorf("x")}, "transient"},
-		{"parse", &claude.ParseError{Err: fmt.Errorf("x")}, "parse"},
-		{"semantic", &claude.SemanticError{Message: "bad"}, "semantic"},
+		{"transient", &runner.TransientError{Reason: "timeout", Err: fmt.Errorf("x")}, "transient"},
+		{"parse", &runner.ParseError{Err: fmt.Errorf("x")}, "parse"},
+		{"semantic", &runner.SemanticError{Message: "bad"}, "semantic"},
 		{"unknown", fmt.Errorf("something else"), "unknown"},
-		{"wrapped_transient", fmt.Errorf("wrap: %w", &claude.TransientError{Reason: "r", Err: fmt.Errorf("x")}), "transient"},
-		{"sandbox_oom", &sandbox.ExitError{OOMKill: true, Signal: 9}, "transient"},
-		{"sandbox_signal", &sandbox.ExitError{Signal: 15}, "transient"},
-		{"sandbox_exit_code", &sandbox.ExitError{Code: 1}, "unknown"},
-		{"wrapped_sandbox_oom", fmt.Errorf("wrap: %w", &sandbox.ExitError{OOMKill: true}), "transient"},
+		{"wrapped_transient", fmt.Errorf("wrap: %w", &runner.TransientError{Reason: "r", Err: fmt.Errorf("x")}), "transient"},
+		{"sandbox_oom_as_transient", &runner.TransientError{Reason: "oom", Err: fmt.Errorf("sandbox: OOM killed")}, "transient"},
+		{"sandbox_signal_as_transient", &runner.TransientError{Reason: "signal", Err: fmt.Errorf("sandbox: killed by signal 15")}, "transient"},
+		{"sandbox_exit_as_transient", &runner.TransientError{Reason: "exit_code", Err: fmt.Errorf("sandbox: exited with code 1")}, "transient"},
+		{"wrapped_sandbox_transient", fmt.Errorf("wrap: %w", &runner.TransientError{Reason: "oom", Err: fmt.Errorf("sandbox: OOM")}), "transient"},
 	}
 
 	for _, tt := range tests {
@@ -1673,7 +1670,7 @@ func TestEnginePhaseGating(t *testing.T) {
 		mock := &flexMockRunner{
 			responses: map[string][]flexResponse{
 				"triage": {
-					{err: &claude.SemanticError{Message: "output incomplete"}},
+					{err: &runner.SemanticError{Message: "output incomplete"}},
 					{result: &runner.RunResult{
 						Output:  json.RawMessage(`{"automatable":true}`),
 						RawText: "Triage complete",
@@ -3563,7 +3560,7 @@ func TestEngine_ParallelReview_ReviewerFails(t *testing.T) {
 				},
 			}},
 			"review/ai-harness": {{
-				err: &claude.TransientError{Reason: "timeout", Err: fmt.Errorf("connection reset")},
+				err: &runner.TransientError{Reason: "timeout", Err: fmt.Errorf("connection reset")},
 			}},
 		},
 	}
@@ -3655,7 +3652,7 @@ func TestEngine_ParallelReview_DependencyCheck(t *testing.T) {
 	mock := &flexMockRunner{
 		responses: map[string][]flexResponse{
 			"implement": {{
-				err: &claude.TransientError{Reason: "timeout", Err: fmt.Errorf("fail")},
+				err: &runner.TransientError{Reason: "timeout", Err: fmt.Errorf("fail")},
 			}},
 		},
 	}
