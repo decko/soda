@@ -74,6 +74,9 @@ func runRender(cmd *cobra.Command, cfg *config.Config, phaseName, ticketKey stri
 		return fmt.Errorf("render: fetch ticket: %w", err)
 	}
 
+	// Extract artifacts from comments (spec/plan) if configured.
+	extractArtifacts(cfg, t)
+
 	// Build prompt data
 	promptData := pipeline.PromptData{
 		Ticket: pipeline.TicketData{
@@ -84,6 +87,8 @@ func runRender(cmd *cobra.Command, cfg *config.Config, phaseName, ticketKey stri
 			Priority:           t.Priority,
 			AcceptanceCriteria: t.AcceptanceCriteria,
 			Comments:           mapTicketComments(t.Comments),
+			ExistingSpec:       t.ExistingSpec,
+			ExistingPlan:       t.ExistingPlan,
 		},
 	}
 
@@ -162,6 +167,36 @@ func mapTicketComments(comments []ticket.Comment) []pipeline.TicketComment {
 		}
 	}
 	return out
+}
+
+// extractArtifacts runs the configured extraction strategy against the
+// ticket's comments, populating ExistingSpec and ExistingPlan in place.
+// It is a no-op when the ticket source is not "github" or no markers are
+// configured.
+func extractArtifacts(cfg *config.Config, t *ticket.Ticket) {
+	if cfg.TicketSource != "github" {
+		return
+	}
+	spec := cfg.GitHub.Spec
+	plan := cfg.GitHub.Plan
+
+	// Skip if no markers are configured at all.
+	if spec.StartMarker == "" && spec.EndMarker == "" &&
+		plan.StartMarker == "" && plan.EndMarker == "" {
+		return
+	}
+
+	extractor := &ticket.CommentMarkerExtractor{
+		Spec: ticket.MarkerPair{
+			StartMarker: spec.StartMarker,
+			EndMarker:   spec.EndMarker,
+		},
+		Plan: ticket.MarkerPair{
+			StartMarker: plan.StartMarker,
+			EndMarker:   plan.EndMarker,
+		},
+	}
+	extractor.Extract(t)
 }
 
 func loadArtifacts(state *pipeline.State, data *pipeline.PromptData) {

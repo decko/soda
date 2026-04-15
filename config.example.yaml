@@ -7,6 +7,21 @@ jira:
   project: MYPROJECT
   query: "labels = ai-workable AND status = Refinement"
 
+# GitHub Issues source (alternative to Jira)
+# github:
+#   owner: myorg
+#   repo: my-service
+#   fetch_comments: true
+#   # Extraction strategies: pull spec/plan from ticket comments using markers.
+#   # When configured, comments are scanned for content between start/end markers.
+#   # If multiple comments contain the same markers, the last one wins.
+#   spec:
+#     start_marker: "<!-- spec:start -->"
+#     end_marker: "<!-- spec:end -->"
+#   plan:
+#     start_marker: "<!-- plan:start -->"
+#     end_marker: "<!-- plan:end -->"
+
 # Default execution mode
 mode: autonomous   # or "checkpoint"
 
