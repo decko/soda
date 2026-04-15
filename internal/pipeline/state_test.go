@@ -590,7 +590,9 @@ func TestCrashSafety_OrphanedTmp(t *testing.T) {
 
 	// Simulate crash: leave orphaned meta.json.tmp with corrupt data
 	metaTmp := filepath.Join(dir, "T-1", "meta.json.tmp")
-	os.WriteFile(metaTmp, []byte("corrupt"), 0644)
+	if err := os.WriteFile(metaTmp, []byte("corrupt"), 0644); err != nil {
+		t.Fatalf("WriteFile meta.json.tmp: %v", err)
+	}
 
 	// Resume should read the real meta.json, ignoring the orphaned .tmp
 	state2, err := LoadOrCreate(dir, "T-1")

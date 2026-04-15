@@ -97,7 +97,9 @@ func TestStaleDetection(t *testing.T) {
 		// Simulate a stale lock: write lock file with a dead PID but no flock held.
 		// This simulates a process that crashed after writing the lock file.
 		lockPath := dir + "/lock"
-		os.WriteFile(lockPath, []byte(`{"pid":4194300,"acquired_at":"2026-01-01T00:00:00Z"}`), 0644)
+		if err := os.WriteFile(lockPath, []byte(`{"pid":4194300,"acquired_at":"2026-01-01T00:00:00Z"}`), 0644); err != nil {
+			t.Fatalf("WriteFile lock: %v", err)
+		}
 
 		// acquireLock should succeed because no flock is actually held
 		fd, err := acquireLock(dir)
@@ -164,7 +166,9 @@ func TestReadLockInfo(t *testing.T) {
 	// Write a dead PID
 	info.PID = 999999999
 	data, _ = json.Marshal(info)
-	os.WriteFile(lockPath, data, 0644)
+	if err := os.WriteFile(lockPath, data, 0644); err != nil {
+		t.Fatalf("WriteFile lock (dead pid): %v", err)
+	}
 
 	got, err = ReadLockInfo(lockPath)
 	if err != nil {

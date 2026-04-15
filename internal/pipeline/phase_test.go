@@ -121,7 +121,9 @@ func TestLoadPipeline(t *testing.T) {
 	t.Run("errors_on_invalid_yaml", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "bad.yaml")
-		os.WriteFile(path, []byte("not: [valid: yaml: {{{"), 0644)
+		if err := os.WriteFile(path, []byte("not: [valid: yaml: {{{"), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
 
 		_, err := LoadPipeline(path)
 		if err == nil {

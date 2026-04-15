@@ -227,44 +227,60 @@ func TestCODEOWNERSAuthority_EmptyRules(t *testing.T) {
 func TestFindCODEOWNERS(t *testing.T) {
 	tests := []struct {
 		name    string
-		setup   func(root string)
+		setup   func(t testing.TB, root string)
 		wantEnd string // expected suffix of the found path, or "" for not found
 	}{
 		{
 			name: "github_directory",
-			setup: func(root string) {
-				os.MkdirAll(filepath.Join(root, ".github"), 0755)
-				os.WriteFile(filepath.Join(root, ".github", "CODEOWNERS"), []byte("* @a\n"), 0644)
+			setup: func(t testing.TB, root string) {
+				if err := os.MkdirAll(filepath.Join(root, ".github"), 0755); err != nil {
+					t.Fatalf("MkdirAll .github: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(root, ".github", "CODEOWNERS"), []byte("* @a\n"), 0644); err != nil {
+					t.Fatalf("WriteFile CODEOWNERS: %v", err)
+				}
 			},
 			wantEnd: ".github/CODEOWNERS",
 		},
 		{
 			name: "root_directory",
-			setup: func(root string) {
-				os.WriteFile(filepath.Join(root, "CODEOWNERS"), []byte("* @a\n"), 0644)
+			setup: func(t testing.TB, root string) {
+				if err := os.WriteFile(filepath.Join(root, "CODEOWNERS"), []byte("* @a\n"), 0644); err != nil {
+					t.Fatalf("WriteFile CODEOWNERS: %v", err)
+				}
 			},
 			wantEnd: "CODEOWNERS",
 		},
 		{
 			name: "docs_directory",
-			setup: func(root string) {
-				os.MkdirAll(filepath.Join(root, "docs"), 0755)
-				os.WriteFile(filepath.Join(root, "docs", "CODEOWNERS"), []byte("* @a\n"), 0644)
+			setup: func(t testing.TB, root string) {
+				if err := os.MkdirAll(filepath.Join(root, "docs"), 0755); err != nil {
+					t.Fatalf("MkdirAll docs: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(root, "docs", "CODEOWNERS"), []byte("* @a\n"), 0644); err != nil {
+					t.Fatalf("WriteFile CODEOWNERS: %v", err)
+				}
 			},
 			wantEnd: "docs/CODEOWNERS",
 		},
 		{
 			name: "prefers_github_over_root",
-			setup: func(root string) {
-				os.MkdirAll(filepath.Join(root, ".github"), 0755)
-				os.WriteFile(filepath.Join(root, ".github", "CODEOWNERS"), []byte("* @a\n"), 0644)
-				os.WriteFile(filepath.Join(root, "CODEOWNERS"), []byte("* @b\n"), 0644)
+			setup: func(t testing.TB, root string) {
+				if err := os.MkdirAll(filepath.Join(root, ".github"), 0755); err != nil {
+					t.Fatalf("MkdirAll .github: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(root, ".github", "CODEOWNERS"), []byte("* @a\n"), 0644); err != nil {
+					t.Fatalf("WriteFile .github/CODEOWNERS: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(root, "CODEOWNERS"), []byte("* @b\n"), 0644); err != nil {
+					t.Fatalf("WriteFile CODEOWNERS: %v", err)
+				}
 			},
 			wantEnd: ".github/CODEOWNERS",
 		},
 		{
 			name:    "not_found",
-			setup:   func(root string) {},
+			setup:   func(t testing.TB, root string) {},
 			wantEnd: "",
 		},
 	}
@@ -272,7 +288,7 @@ func TestFindCODEOWNERS(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			root := t.TempDir()
-			tt.setup(root)
+			tt.setup(t, root)
 
 			got := FindCODEOWNERS(root)
 			if tt.wantEnd == "" {

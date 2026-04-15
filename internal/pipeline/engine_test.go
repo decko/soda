@@ -2718,8 +2718,12 @@ func TestEngine_PromptLoadedFallbackEvent(t *testing.T) {
 	overrideDir := t.TempDir()
 	embeddedDir := t.TempDir()
 
-	os.WriteFile(filepath.Join(overrideDir, "triage.md"), []byte("{{.BogusField}}"), 0644)
-	os.WriteFile(filepath.Join(embeddedDir, "triage.md"), []byte("Phase: triage\nTicket: {{.Ticket.Key}}\n"), 0644)
+	if err := os.WriteFile(filepath.Join(overrideDir, "triage.md"), []byte("{{.BogusField}}"), 0644); err != nil {
+		t.Fatalf("WriteFile override triage.md: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(embeddedDir, "triage.md"), []byte("Phase: triage\nTicket: {{.Ticket.Key}}\n"), 0644); err != nil {
+		t.Fatalf("WriteFile embedded triage.md: %v", err)
+	}
 
 	stateDir := t.TempDir()
 	state, err := LoadOrCreate(stateDir, "FALLBACK-1")

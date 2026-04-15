@@ -12,7 +12,9 @@ import (
 func TestPromptLoader(t *testing.T) {
 	t.Run("loads_from_first_directory", func(t *testing.T) {
 		dir := t.TempDir()
-		os.WriteFile(filepath.Join(dir, "triage.md"), []byte("triage prompt"), 0644)
+		if err := os.WriteFile(filepath.Join(dir, "triage.md"), []byte("triage prompt"), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
 
 		loader := NewPromptLoader(dir)
 		content, err := loader.Load("triage.md")
@@ -27,8 +29,12 @@ func TestPromptLoader(t *testing.T) {
 	t.Run("prefers_first_directory_override", func(t *testing.T) {
 		override := t.TempDir()
 		builtin := t.TempDir()
-		os.WriteFile(filepath.Join(override, "plan.md"), []byte("custom plan"), 0644)
-		os.WriteFile(filepath.Join(builtin, "plan.md"), []byte("default plan"), 0644)
+		if err := os.WriteFile(filepath.Join(override, "plan.md"), []byte("custom plan"), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(builtin, "plan.md"), []byte("default plan"), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
 
 		loader := NewPromptLoader(override, builtin)
 		content, err := loader.Load("plan.md")
@@ -43,7 +49,9 @@ func TestPromptLoader(t *testing.T) {
 	t.Run("falls_back_to_second_directory", func(t *testing.T) {
 		override := t.TempDir() // empty
 		builtin := t.TempDir()
-		os.WriteFile(filepath.Join(builtin, "verify.md"), []byte("builtin verify"), 0644)
+		if err := os.WriteFile(filepath.Join(builtin, "verify.md"), []byte("builtin verify"), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
 
 		loader := NewPromptLoader(override, builtin)
 		content, err := loader.Load("verify.md")
@@ -77,8 +85,12 @@ func TestLoadWithSource(t *testing.T) {
 	t.Run("returns_override_source", func(t *testing.T) {
 		override := t.TempDir()
 		builtin := t.TempDir()
-		os.WriteFile(filepath.Join(override, "plan.md"), []byte("custom {{.Ticket.Key}}"), 0644)
-		os.WriteFile(filepath.Join(builtin, "plan.md"), []byte("default plan"), 0644)
+		if err := os.WriteFile(filepath.Join(override, "plan.md"), []byte("custom {{.Ticket.Key}}"), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(builtin, "plan.md"), []byte("default plan"), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
 
 		loader := NewPromptLoader(override, builtin)
 		result, err := loader.LoadWithSource("plan.md")
@@ -102,7 +114,9 @@ func TestLoadWithSource(t *testing.T) {
 	t.Run("returns_embedded_source", func(t *testing.T) {
 		override := t.TempDir() // empty
 		builtin := t.TempDir()
-		os.WriteFile(filepath.Join(builtin, "verify.md"), []byte("builtin verify"), 0644)
+		if err := os.WriteFile(filepath.Join(builtin, "verify.md"), []byte("builtin verify"), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
 
 		loader := NewPromptLoader(override, builtin)
 		result, err := loader.LoadWithSource("verify.md")
@@ -120,8 +134,12 @@ func TestLoadWithSource(t *testing.T) {
 	t.Run("falls_back_on_invalid_override_syntax", func(t *testing.T) {
 		override := t.TempDir()
 		builtin := t.TempDir()
-		os.WriteFile(filepath.Join(override, "bad.md"), []byte("{{.Invalid}"), 0644)
-		os.WriteFile(filepath.Join(builtin, "bad.md"), []byte("fallback content"), 0644)
+		if err := os.WriteFile(filepath.Join(override, "bad.md"), []byte("{{.Invalid}"), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(builtin, "bad.md"), []byte("fallback content"), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
 
 		loader := NewPromptLoader(override, builtin)
 		result, err := loader.LoadWithSource("bad.md")
@@ -145,8 +163,12 @@ func TestLoadWithSource(t *testing.T) {
 	t.Run("falls_back_on_invalid_override_field", func(t *testing.T) {
 		override := t.TempDir()
 		builtin := t.TempDir()
-		os.WriteFile(filepath.Join(override, "plan.md"), []byte("{{.NonExistentField}}"), 0644)
-		os.WriteFile(filepath.Join(builtin, "plan.md"), []byte("default plan"), 0644)
+		if err := os.WriteFile(filepath.Join(override, "plan.md"), []byte("{{.NonExistentField}}"), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(builtin, "plan.md"), []byte("default plan"), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
 
 		loader := NewPromptLoader(override, builtin)
 		result, err := loader.LoadWithSource("plan.md")
@@ -168,9 +190,15 @@ func TestLoadWithSource(t *testing.T) {
 		configDir := t.TempDir()
 		workDir := t.TempDir()
 		embedDir := t.TempDir()
-		os.WriteFile(filepath.Join(configDir, "t.md"), []byte("config override {{.Ticket.Key}}"), 0644)
-		os.WriteFile(filepath.Join(workDir, "t.md"), []byte("work override"), 0644)
-		os.WriteFile(filepath.Join(embedDir, "t.md"), []byte("embedded"), 0644)
+		if err := os.WriteFile(filepath.Join(configDir, "t.md"), []byte("config override {{.Ticket.Key}}"), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(workDir, "t.md"), []byte("work override"), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(embedDir, "t.md"), []byte("embedded"), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
 
 		loader := NewPromptLoader(configDir, workDir, embedDir)
 		result, err := loader.LoadWithSource("t.md")
@@ -189,9 +217,15 @@ func TestLoadWithSource(t *testing.T) {
 		dir1 := t.TempDir()
 		dir2 := t.TempDir()
 		dir3 := t.TempDir()
-		os.WriteFile(filepath.Join(dir1, "p.md"), []byte("{{.Bad1}"), 0644)
-		os.WriteFile(filepath.Join(dir2, "p.md"), []byte("{{.Bad2}"), 0644)
-		os.WriteFile(filepath.Join(dir3, "p.md"), []byte("final good"), 0644)
+		if err := os.WriteFile(filepath.Join(dir1, "p.md"), []byte("{{.Bad1}"), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir2, "p.md"), []byte("{{.Bad2}"), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir3, "p.md"), []byte("final good"), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
 
 		loader := NewPromptLoader(dir1, dir2, dir3)
 		result, err := loader.LoadWithSource("p.md")
@@ -209,7 +243,9 @@ func TestLoadWithSource(t *testing.T) {
 	t.Run("single_dir_skips_validation", func(t *testing.T) {
 		dir := t.TempDir()
 		// Even an invalid template in the only (embedded) dir is returned as-is.
-		os.WriteFile(filepath.Join(dir, "only.md"), []byte("raw content no templates"), 0644)
+		if err := os.WriteFile(filepath.Join(dir, "only.md"), []byte("raw content no templates"), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
 
 		loader := NewPromptLoader(dir)
 		result, err := loader.LoadWithSource("only.md")
@@ -227,8 +263,12 @@ func TestLoadWithSource(t *testing.T) {
 	t.Run("load_delegates_to_load_with_source", func(t *testing.T) {
 		override := t.TempDir()
 		builtin := t.TempDir()
-		os.WriteFile(filepath.Join(override, "x.md"), []byte("{{.Bogus}"), 0644)
-		os.WriteFile(filepath.Join(builtin, "x.md"), []byte("safe content"), 0644)
+		if err := os.WriteFile(filepath.Join(override, "x.md"), []byte("{{.Bogus}"), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(builtin, "x.md"), []byte("safe content"), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
 
 		loader := NewPromptLoader(override, builtin)
 		content, err := loader.Load("x.md")

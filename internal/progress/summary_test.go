@@ -185,6 +185,48 @@ func TestSubmitSummary(t *testing.T) {
 	}
 }
 
+func TestMonitorSummary(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "multiple comments handled",
+			input: `{"comments_handled":[{"id":"IC_1"},{"id":"IC_2"},{"id":"IC_3"}]}`,
+			want:  "3 comments handled",
+		},
+		{
+			name:  "single comment handled",
+			input: `{"comments_handled":[{"id":"IC_1"}]}`,
+			want:  "1 comment handled",
+		},
+		{
+			name:  "no comments handled",
+			input: `{"comments_handled":[]}`,
+			want:  "no comments handled",
+		},
+		{
+			name:  "missing comments_handled field",
+			input: `{}`,
+			want:  "no comments handled",
+		},
+		{
+			name:  "invalid json",
+			input: `{broken`,
+			want:  "",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := PhaseSummary("monitor", json.RawMessage(tc.input))
+			if got != tc.want {
+				t.Errorf("PhaseSummary(monitor, %s) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestPhaseSummaryUnknownPhase(t *testing.T) {
 	got := PhaseSummary("unknown", json.RawMessage(`{"foo":"bar"}`))
 	if got != "" {

@@ -123,11 +123,15 @@ func TestArchiveArtifact(t *testing.T) {
 		path := filepath.Join(dir, "verify.json")
 
 		// Create and archive generation 1
-		os.WriteFile(path, []byte("gen1"), 0644)
+		if err := os.WriteFile(path, []byte("gen1"), 0644); err != nil {
+			t.Fatalf("WriteFile gen1: %v", err)
+		}
 		archiveArtifact(path, 1)
 
 		// Create and archive generation 2
-		os.WriteFile(path, []byte("gen2"), 0644)
+		if err := os.WriteFile(path, []byte("gen2"), 0644); err != nil {
+			t.Fatalf("WriteFile gen2: %v", err)
+		}
 		archiveArtifact(path, 2)
 
 		// Both archives should exist with correct content
