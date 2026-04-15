@@ -3,6 +3,16 @@ jira:
   command: wtmcp
   project: MYPROJECT
   query: "labels = ai-workable AND status = Refinement"
+github:
+  owner: myorg
+  repo: my-service
+  fetch_comments: true
+  spec:
+    start_marker: "<!-- spec:start -->"
+    end_marker: "<!-- spec:end -->"
+  plan:
+    start_marker: "<!-- plan:start -->"
+    end_marker: "<!-- plan:end -->"
 mode: autonomous
 model: claude-opus-4-6
 sandbox:
