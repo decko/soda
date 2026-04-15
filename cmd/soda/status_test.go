@@ -135,7 +135,7 @@ func TestFormatSubmitted(t *testing.T) {
 			name:      "same day → time only",
 			startedAt: time.Date(2025, 6, 15, 9, 5, 0, 0, time.UTC),
 			now:       now,
-			want:      "09:05",
+			want:      "       09:05",
 		},
 		{
 			name:      "yesterday → date + time",
