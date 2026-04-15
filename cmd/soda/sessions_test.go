@@ -1,0 +1,407 @@
+package main
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/decko/soda/internal/pipeline"
+)
+
+func writeMeta(t *testing.T, dir string, meta *pipeline.PipelineMeta) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	data, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "meta.json"), data, 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+}
+
+func TestCollectSessions_Empty(t *testing.T) {
+	dir := t.TempDir()
+	rows, err := collectSessions(dir, time.Now())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("expected 0 rows, got %d", len(rows))
+	}
+}
+
+func TestCollectSessions_NonexistentDir(t *testing.T) {
+	rows, err := collectSessions("/tmp/nonexistent-soda-sessions-test", time.Now())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("expected 0 rows, got %d", len(rows))
+	}
+}
+
+func TestCollectSessions_ReadsMeta(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2025, 6, 15, 14, 0, 0, 0, time.UTC)
+
+	writeMeta(t, filepath.Join(dir, "TICKET-1"), &pipeline.PipelineMeta{
+		Ticket:    "TICKET-1",
+		Summary:   "First ticket",
+		StartedAt: now.Add(-2 * time.Hour),
+		TotalCost: 1.23,
+		Phases: map[string]*pipeline.PhaseState{
+			"triage":    {Status: pipeline.PhaseCompleted},
+			"implement": {Status: pipeline.PhaseCompleted},
+		},
+	})
+	writeMeta(t, filepath.Join(dir, "TICKET-2"), &pipeline.PipelineMeta{
+		Ticket:    "TICKET-2",
+		Summary:   "Second ticket",
+		StartedAt: now.Add(-30 * time.Minute),
+		TotalCost: 5.58,
+		Phases: map[string]*pipeline.PhaseState{
+			"triage": {Status: pipeline.PhaseFailed, Error: "timeout"},
+		},
+	})
+
+	rows, err := collectSessions(dir, now)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(rows))
+	}
+
+	// Verify fields populated
+	found := map[string]bool{}
+	for _, row := range rows {
+		found[row.ticket] = true
+		if row.cost == "" || row.elapsed == "" || row.status == "" {
+			t.Errorf("row %s: missing fields (cost=%q, elapsed=%q, status=%q)", row.ticket, row.cost, row.elapsed, row.status)
+		}
+	}
+	if !found["TICKET-1"] || !found["TICKET-2"] {
+		t.Errorf("expected both tickets, found: %v", found)
+	}
+}
+
+func TestCollectSessions_DirNameDiffersFromTicket(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2025, 6, 15, 14, 0, 0, 0, time.UTC)
+
+	// Directory name is slugified, but meta.Ticket has the original key.
+	writeMeta(t, filepath.Join(dir, "proj-42-slugified"), &pipeline.PipelineMeta{
+		Ticket:    "PROJ-42",
+		Summary:   "Slugified dir test",
+		StartedAt: now.Add(-1 * time.Hour),
+		TotalCost: 2.50,
+		Phases: map[string]*pipeline.PhaseState{
+			"triage": {Status: pipeline.PhaseCompleted},
+		},
+	})
+
+	rows, err := collectSessions(dir, now)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(rows))
+	}
+	if rows[0].ticket != "PROJ-42" {
+		t.Errorf("ticket = %q, want %q", rows[0].ticket, "PROJ-42")
+	}
+	if rows[0].dirName != "proj-42-slugified" {
+		t.Errorf("dirName = %q, want %q", rows[0].dirName, "proj-42-slugified")
+	}
+	if rows[0].costRaw != 2.50 {
+		t.Errorf("costRaw = %f, want %f", rows[0].costRaw, 2.50)
+	}
+}
+
+func TestFilterSessionsByStatus(t *testing.T) {
+	rows := []sessionEntry{
+		{ticket: "A", status: "completed"},
+		{ticket: "B", status: "failed"},
+		{ticket: "C", status: "completed"},
+		{ticket: "D", status: "running"},
+	}
+
+	completed := filterSessionsByStatus(rows, "completed")
+	if len(completed) != 2 {
+		t.Errorf("expected 2 completed, got %d", len(completed))
+	}
+	for _, row := range completed {
+		if row.status != "completed" {
+			t.Errorf("expected completed, got %q", row.status)
+		}
+	}
+
+	running := filterSessionsByStatus(rows, "running")
+	if len(running) != 1 {
+		t.Errorf("expected 1 running, got %d", len(running))
+	}
+
+	none := filterSessionsByStatus(rows, "stale")
+	if len(none) != 0 {
+		t.Errorf("expected 0 stale, got %d", len(none))
+	}
+}
+
+func TestSortSessions(t *testing.T) {
+	now := time.Date(2025, 6, 15, 14, 0, 0, 0, time.UTC)
+
+	rows := []sessionEntry{
+		{ticket: "A", cost: "$1.00", costRaw: 1.00, startedAt: now.Add(-3 * time.Hour), elapsedDur: 10 * time.Minute},
+		{ticket: "B", cost: "$5.00", costRaw: 5.00, startedAt: now.Add(-1 * time.Hour), elapsedDur: 30 * time.Minute},
+		{ticket: "C", cost: "$0.50", costRaw: 0.50, startedAt: now.Add(-2 * time.Hour), elapsedDur: 2 * time.Minute},
+	}
+
+	t.Run("sort by date (default)", func(t *testing.T) {
+		r := make([]sessionEntry, len(rows))
+		copy(r, rows)
+		sortSessions(r, "date")
+		wantOrder := []string{"B", "C", "A"} // newest first
+		for i, want := range wantOrder {
+			if r[i].ticket != want {
+				t.Errorf("rows[%d].ticket = %q, want %q", i, r[i].ticket, want)
+			}
+		}
+	})
+
+	t.Run("sort by cost", func(t *testing.T) {
+		r := make([]sessionEntry, len(rows))
+		copy(r, rows)
+		sortSessions(r, "cost")
+		wantOrder := []string{"B", "A", "C"} // highest cost first
+		for i, want := range wantOrder {
+			if r[i].ticket != want {
+				t.Errorf("rows[%d].ticket = %q, want %q", i, r[i].ticket, want)
+			}
+		}
+	})
+
+	t.Run("sort by elapsed", func(t *testing.T) {
+		r := make([]sessionEntry, len(rows))
+		copy(r, rows)
+		sortSessions(r, "elapsed")
+		// B (30m) > A (10m) > C (2m) — sorted by actual elapsed duration,
+		// NOT by startedAt. A was started earliest but has only 10m elapsed.
+		wantOrder := []string{"B", "A", "C"} // longest elapsed first
+		for i, want := range wantOrder {
+			if r[i].ticket != want {
+				t.Errorf("rows[%d].ticket = %q, want %q", i, r[i].ticket, want)
+			}
+		}
+	})
+}
+
+func TestFormatLastRun(t *testing.T) {
+	now := time.Date(2025, 6, 15, 14, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name      string
+		startedAt time.Time
+		want      string
+	}{
+		{"just now", now, "now"},
+		{"30 seconds ago", now.Add(-30 * time.Second), "now"},
+		{"1 minute ago", now.Add(-90 * time.Second), "1m ago"},
+		{"5 minutes ago", now.Add(-5 * time.Minute), "5m ago"},
+		{"1 hour ago", now.Add(-time.Hour), "1h ago"},
+		{"3 hours ago", now.Add(-3 * time.Hour), "3h ago"},
+		{"1 day ago", now.Add(-24 * time.Hour), "1d ago"},
+		{"3 days ago", now.Add(-72 * time.Hour), "3d ago"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := formatLastRun(tc.startedAt, now)
+			if got != tc.want {
+				t.Errorf("formatLastRun() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestTruncate(t *testing.T) {
+	tests := []struct {
+		input  string
+		maxLen int
+		want   string
+	}{
+		{"short", 10, "short"},
+		{"exactly ten", 11, "exactly ten"},
+		{"this is a long string", 10, "this is..."},
+		{"ab", 3, "ab"},
+		{"abcd", 3, "abc"},
+		// Multi-byte UTF-8: each CJK character is 3 bytes but 1 rune.
+		{"日本語テスト", 5, "日本..."},
+		{"日本語テスト", 6, "日本語テスト"}, // exactly fits (6 runes)
+		{"日本語テスト", 3, "日本語"},    // maxLen<=3, no ellipsis
+		{"café résumé done", 10, "café ré..."},
+	}
+	for _, tc := range tests {
+		got := truncate(tc.input, tc.maxLen)
+		if got != tc.want {
+			t.Errorf("truncate(%q, %d) = %q, want %q", tc.input, tc.maxLen, got, tc.want)
+		}
+	}
+}
+
+func TestSessionsSummaryLine(t *testing.T) {
+	tests := []struct {
+		name string
+		rows []sessionEntry
+		want string
+	}{
+		{
+			name: "mixed statuses",
+			rows: []sessionEntry{
+				{status: "completed"},
+				{status: "completed"},
+				{status: "running"},
+				{status: "failed"},
+			},
+			want: "4 sessions (1 running, 2 completed, 1 failed)",
+		},
+		{
+			name: "all completed",
+			rows: []sessionEntry{
+				{status: "completed"},
+				{status: "completed"},
+			},
+			want: "2 sessions (2 completed)",
+		},
+		{
+			name: "single session",
+			rows: []sessionEntry{
+				{status: "running"},
+			},
+			want: "1 session (1 running)",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sessionsSummaryLine(tc.rows)
+			if got != tc.want {
+				t.Errorf("sessionsSummaryLine() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestComputeElapsed_CompletedPhases(t *testing.T) {
+	now := time.Date(2025, 6, 15, 14, 0, 0, 0, time.UTC)
+
+	meta := &pipeline.PipelineMeta{
+		StartedAt: now.Add(-10 * time.Hour), // started long ago
+		Phases: map[string]*pipeline.PhaseState{
+			"triage":    {Status: pipeline.PhaseCompleted, DurationMs: 120000}, // 2m
+			"implement": {Status: pipeline.PhaseCompleted, DurationMs: 300000}, // 5m
+		},
+	}
+
+	got := computeElapsed(meta, now)
+	want := 7 * time.Minute
+	if got != want {
+		t.Errorf("computeElapsed() = %v, want %v (should sum DurationMs, not wall-clock)", got, want)
+	}
+}
+
+func TestComputeElapsed_RunningPhase(t *testing.T) {
+	now := time.Date(2025, 6, 15, 14, 0, 0, 0, time.UTC)
+
+	meta := &pipeline.PipelineMeta{
+		StartedAt: now.Add(-5 * time.Minute),
+		Phases: map[string]*pipeline.PhaseState{
+			"triage":    {Status: pipeline.PhaseCompleted, DurationMs: 60000},
+			"implement": {Status: pipeline.PhaseRunning},
+		},
+	}
+
+	got := computeElapsed(meta, now)
+	want := 5 * time.Minute
+	if got != want {
+		t.Errorf("computeElapsed() = %v, want %v (should use wall-clock for running)", got, want)
+	}
+}
+
+func TestNewSessionsCmd_Flags(t *testing.T) {
+	cmd := newSessionsCmd()
+
+	statusFlag := cmd.Flags().Lookup("status")
+	if statusFlag == nil {
+		t.Fatal("--status flag not found")
+	}
+	if statusFlag.DefValue != "" {
+		t.Errorf("--status default = %q, want empty", statusFlag.DefValue)
+	}
+
+	sortFlag := cmd.Flags().Lookup("sort")
+	if sortFlag == nil {
+		t.Fatal("--sort flag not found")
+	}
+	if sortFlag.DefValue != "date" {
+		t.Errorf("--sort default = %q, want %q", sortFlag.DefValue, "date")
+	}
+
+	allFlag := cmd.Flags().Lookup("all")
+	if allFlag == nil {
+		t.Fatal("--all flag not found")
+	}
+	if allFlag.DefValue != "false" {
+		t.Errorf("--all default = %q, want %q", allFlag.DefValue, "false")
+	}
+
+	tuiFlag := cmd.Flags().Lookup("tui")
+	if tuiFlag == nil {
+		t.Fatal("--tui flag not found")
+	}
+	if tuiFlag.DefValue != "false" {
+		t.Errorf("--tui default = %q, want %q", tuiFlag.DefValue, "false")
+	}
+}
+
+func TestSessionsToTUI(t *testing.T) {
+	now := time.Date(2025, 6, 15, 14, 0, 0, 0, time.UTC)
+
+	rows := []sessionEntry{
+		{ticket: "A", dirName: "dir-a", summary: "First", status: "completed", cost: "$1.23", costRaw: 1.23, elapsed: "5m", startedAt: now.Add(-2 * time.Hour)},
+		{ticket: "B", dirName: "dir-b", summary: "Second", status: "failed", cost: "$5.58", costRaw: 5.58, elapsed: "12m", startedAt: now.Add(-30 * time.Minute)},
+	}
+
+	sessions := sessionsToTUI(rows)
+	if len(sessions) != 2 {
+		t.Fatalf("expected 2 sessions, got %d", len(sessions))
+	}
+
+	if sessions[0].Ticket != "A" {
+		t.Errorf("session 0 ticket = %q, want %q", sessions[0].Ticket, "A")
+	}
+	if sessions[0].DirName != "dir-a" {
+		t.Errorf("session 0 dirName = %q, want %q", sessions[0].DirName, "dir-a")
+	}
+	if sessions[0].Summary != "First" {
+		t.Errorf("session 0 summary = %q, want %q", sessions[0].Summary, "First")
+	}
+	if sessions[0].Status != "completed" {
+		t.Errorf("session 0 status = %q, want %q", sessions[0].Status, "completed")
+	}
+	if sessions[0].Cost != 1.23 {
+		t.Errorf("session 0 cost = %f, want %f", sessions[0].Cost, 1.23)
+	}
+
+	if sessions[1].Ticket != "B" {
+		t.Errorf("session 1 ticket = %q, want %q", sessions[1].Ticket, "B")
+	}
+	if sessions[1].DirName != "dir-b" {
+		t.Errorf("session 1 dirName = %q, want %q", sessions[1].DirName, "dir-b")
+	}
+	if sessions[1].Cost != 5.58 {
+		t.Errorf("session 1 cost = %f, want %f", sessions[1].Cost, 5.58)
+	}
+}
