@@ -172,23 +172,34 @@ func renderSessionRow(session SessionInfo, selected bool) string {
 	statusIcon := sessionStatusIcon(session.Status)
 	cost := fmt.Sprintf("$%.2f", session.Cost)
 
+	// Pad plain text to fixed column widths before applying styles so that
+	// ANSI escape sequences don't break alignment.
+	ticket := padRight(session.Ticket, 12)
 	summary := session.Summary
 	summaryRunes := []rune(summary)
 	if len(summaryRunes) > 36 {
 		summary = string(summaryRunes[:33]) + "..."
 	}
+	summary = padRight(summary, 36)
 
-	line := fmt.Sprintf("%s%-36s  %s  %s",
-		stylePending.Render(session.Ticket),
-		"  "+summary,
-		statusIcon,
-		styleStatsValue.Render(cost),
-	)
+	line := stylePending.Render(ticket) + "  " +
+		stylePending.Render(summary) + "  " +
+		statusIcon + "  " +
+		styleStatsValue.Render(cost)
 
 	if selected {
 		return styleRunning.Render(cursor) + line
 	}
 	return stylePending.Render(cursor) + line
+}
+
+// padRight pads s with spaces to the given width (measured in runes).
+func padRight(s string, width int) string {
+	r := []rune(s)
+	if len(r) >= width {
+		return s
+	}
+	return s + strings.Repeat(" ", width-len(r))
 }
 
 func sessionStatusIcon(status string) string {
