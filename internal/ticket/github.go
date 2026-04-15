@@ -11,9 +11,10 @@ import (
 
 // GitHubConfig holds configuration for the GitHub Issues ticket source.
 type GitHubConfig struct {
-	Owner   string
-	Repo    string
-	Command string // gh binary path; defaults to "gh"
+	Owner         string
+	Repo          string
+	Command       string // gh binary path; defaults to "gh"
+	FetchComments bool   // when true, Fetch includes issue comments
 }
 
 // GitHubSource fetches tickets from GitHub Issues via the gh CLI.
@@ -38,10 +39,15 @@ func (s *GitHubSource) repo() string {
 
 // Fetch retrieves a single GitHub issue by number.
 func (s *GitHubSource) Fetch(ctx context.Context, key string) (*Ticket, error) {
+	jsonFields := "number,title,body,labels,state,assignees"
+	if s.config.FetchComments {
+		jsonFields += ",comments"
+	}
+
 	out, err := exec.CommandContext(ctx, s.config.Command,
 		"issue", "view", key,
 		"--repo", s.repo(),
-		"--json", "number,title,body,labels,state,assignees",
+		"--json", jsonFields,
 	).Output()
 	if err != nil {
 		return nil, fmt.Errorf("ticket: github fetch %s: %w%s", key, err, exitStderr(err))
@@ -89,12 +95,13 @@ func (s *GitHubSource) List(ctx context.Context, query string) ([]Ticket, error)
 // GitHub API response types
 
 type ghIssue struct {
-	Number    int       `json:"number"`
-	Title     string    `json:"title"`
-	Body      string    `json:"body"`
-	State     string    `json:"state"`
-	Labels    []ghLabel `json:"labels"`
-	Assignees []ghUser  `json:"assignees"`
+	Number    int         `json:"number"`
+	Title     string      `json:"title"`
+	Body      string      `json:"body"`
+	State     string      `json:"state"`
+	Labels    []ghLabel   `json:"labels"`
+	Assignees []ghUser    `json:"assignees"`
+	Comments  []ghComment `json:"comments"`
 }
 
 type ghLabel struct {
@@ -103,6 +110,12 @@ type ghLabel struct {
 
 type ghUser struct {
 	Login string `json:"login"`
+}
+
+type ghComment struct {
+	Author    ghUser `json:"author"`
+	Body      string `json:"body"`
+	CreatedAt string `json:"createdAt"`
 }
 
 func (issue *ghIssue) toTicket() *Ticket {
@@ -127,6 +140,15 @@ func (issue *ghIssue) toTicket() *Ticket {
 		status = strings.ToUpper(issue.State[:1]) + issue.State[1:]
 	}
 
+	var comments []Comment
+	for _, c := range issue.Comments {
+		comments = append(comments, Comment{
+			Author:    c.Author.Login,
+			Body:      c.Body,
+			CreatedAt: c.CreatedAt,
+		})
+	}
+
 	return &Ticket{
 		Key:                fmt.Sprintf("%d", issue.Number),
 		Summary:            issue.Title,
@@ -135,6 +157,7 @@ func (issue *ghIssue) toTicket() *Ticket {
 		Status:             status,
 		Labels:             labels,
 		AcceptanceCriteria: ExtractCriteria(issue.Body),
+		Comments:           comments,
 		RawFields:          rawFields,
 	}
 }

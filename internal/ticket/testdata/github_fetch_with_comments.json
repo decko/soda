@@ -1,0 +1,25 @@
+{
+  "number": 36,
+  "title": "Add GitHub Issues ticket source",
+  "body": "Implement a GitHub Issues source.\n\n## Acceptance Criteria\n- [ ] Fetch retrieves a single issue\n- [ ] List returns open issues\n- [ ] Labels are mapped correctly",
+  "state": "open",
+  "labels": [
+    {"name": "enhancement"},
+    {"name": "ticket"}
+  ],
+  "assignees": [
+    {"login": "ddebrito"}
+  ],
+  "comments": [
+    {
+      "author": {"login": "reviewer1"},
+      "body": "Looks good, but please add tests.",
+      "createdAt": "2025-07-01T10:00:00Z"
+    },
+    {
+      "author": {"login": "ddebrito"},
+      "body": "Done, tests added in the latest commit.",
+      "createdAt": "2025-07-01T12:30:00Z"
+    }
+  ]
+}

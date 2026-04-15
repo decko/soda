@@ -12,5 +12,13 @@ type Ticket struct {
 	Status             string         `json:"status"`
 	Labels             []string       `json:"labels"`
 	AcceptanceCriteria []string       `json:"acceptance_criteria"`
+	Comments           []Comment      `json:"comments,omitempty"`
 	RawFields          map[string]any `json:"raw_fields,omitempty"`
+}
+
+// Comment holds a single comment from a ticket.
+type Comment struct {
+	Author    string `json:"author"`
+	Body      string `json:"body"`
+	CreatedAt string `json:"created_at"`
 }

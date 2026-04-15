@@ -69,6 +69,7 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 		Type:               t.Type,
 		Priority:           t.Priority,
 		AcceptanceCriteria: t.AcceptanceCriteria,
+		Comments:           mapTicketComments(t.Comments),
 	}
 
 	// Load pipeline config
