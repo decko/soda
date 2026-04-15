@@ -336,6 +336,99 @@ func TestToFloat64(t *testing.T) {
 	}
 }
 
+func TestLoadPhaseResult(t *testing.T) {
+	t.Run("empty stateDir", func(t *testing.T) {
+		got := LoadPhaseResult("triage", 1, "")
+		if got != nil {
+			t.Errorf("expected nil, got %s", string(got))
+		}
+	})
+
+	t.Run("no result file", func(t *testing.T) {
+		dir := t.TempDir()
+		got := LoadPhaseResult("triage", 1, dir)
+		if got != nil {
+			t.Errorf("expected nil, got %s", string(got))
+		}
+	})
+
+	t.Run("current result file", func(t *testing.T) {
+		dir := t.TempDir()
+		data := []byte(`{"complexity":"low","automatable":true}`)
+		if err := os.WriteFile(filepath.Join(dir, "triage.json"), data, 0644); err != nil {
+			t.Fatal(err)
+		}
+		got := LoadPhaseResult("triage", 1, dir)
+		if string(got) != string(data) {
+			t.Errorf("got %s, want %s", string(got), string(data))
+		}
+	})
+
+	t.Run("archived result file", func(t *testing.T) {
+		dir := t.TempDir()
+		archived := []byte(`{"complexity":"high"}`)
+		current := []byte(`{"complexity":"low"}`)
+		if err := os.WriteFile(filepath.Join(dir, "triage.json.1"), archived, 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "triage.json"), current, 0644); err != nil {
+			t.Fatal(err)
+		}
+		got := LoadPhaseResult("triage", 1, dir)
+		if string(got) != string(archived) {
+			t.Errorf("got %s, want %s (archived)", string(got), string(archived))
+		}
+	})
+}
+
+func TestLoadFullOutputs(t *testing.T) {
+	dir := t.TempDir()
+
+	triageData := []byte(`{"complexity":"low","automatable":true}`)
+	planData := []byte(`{"tasks":[{"id":"1"}]}`)
+	if err := os.WriteFile(filepath.Join(dir, "triage.json"), triageData, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "plan.json"), planData, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	events := []Event{
+		{Phase: "triage", Kind: EventPhaseStarted, Data: map[string]any{"generation": float64(1)}},
+		{Phase: "triage", Kind: EventPhaseCompleted, Data: map[string]any{"cost": 0.10, "duration_ms": float64(5000)}},
+		{Phase: "plan", Kind: EventPhaseStarted, Data: map[string]any{"generation": float64(1)}},
+		{Phase: "plan", Kind: EventPhaseCompleted, Data: map[string]any{"cost": 0.20, "duration_ms": float64(10000)}},
+	}
+
+	h := BuildHistory(events, dir)
+
+	t.Run("all phases", func(t *testing.T) {
+		h2 := h // copy
+		h2.Entries = make([]PhaseGeneration, len(h.Entries))
+		copy(h2.Entries, h.Entries)
+		h2.LoadFullOutputs(dir, "")
+		if string(h2.Entries[0].FullOutput) != string(triageData) {
+			t.Errorf("triage full output = %s, want %s", string(h2.Entries[0].FullOutput), string(triageData))
+		}
+		if string(h2.Entries[1].FullOutput) != string(planData) {
+			t.Errorf("plan full output = %s, want %s", string(h2.Entries[1].FullOutput), string(planData))
+		}
+	})
+
+	t.Run("filtered to triage", func(t *testing.T) {
+		h2 := h
+		h2.Entries = make([]PhaseGeneration, len(h.Entries))
+		copy(h2.Entries, h.Entries)
+		h2.LoadFullOutputs(dir, "triage")
+		if string(h2.Entries[0].FullOutput) != string(triageData) {
+			t.Errorf("triage full output = %s, want %s", string(h2.Entries[0].FullOutput), string(triageData))
+		}
+		if h2.Entries[1].FullOutput != nil {
+			t.Errorf("plan full output should be nil when filtered, got %s", string(h2.Entries[1].FullOutput))
+		}
+	})
+}
+
 // Ensure Event timestamp parsing works with BuildHistory.
 func TestBuildHistory_PreservesTimestamps(t *testing.T) {
 	ts := time.Date(2026, 4, 11, 10, 0, 0, 0, time.UTC)

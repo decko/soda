@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,7 +14,7 @@ import (
 )
 
 func newHistoryCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "history <ticket>",
 		Short: "Show phase details for a ticket",
 		Args:  cobra.ExactArgs(1),
@@ -21,12 +23,19 @@ func newHistoryCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return runHistory(cfg.StateDir, args[0])
+			detail, _ := cmd.Flags().GetBool("detail")
+			phase, _ := cmd.Flags().GetString("phase")
+			return runHistory(cfg.StateDir, args[0], detail, phase)
 		},
 	}
+
+	cmd.Flags().Bool("detail", false, "show full structured output for all phases")
+	cmd.Flags().String("phase", "", "filter to a specific phase and show full details")
+
+	return cmd
 }
 
-func runHistory(stateDir, ticketKey string) error {
+func runHistory(stateDir, ticketKey string, detail bool, phaseFilter string) error {
 	ticketDir := filepath.Join(stateDir, ticketKey)
 	metaPath := filepath.Join(ticketDir, "meta.json")
 	meta, err := pipeline.ReadMeta(metaPath)
@@ -51,7 +60,7 @@ func runHistory(stateDir, ticketKey string) error {
 		fmt.Fprintf(os.Stderr, "warning: could not read events: %v\n", eventsErr)
 	}
 	if len(events) > 0 {
-		return renderEventsHistory(meta, events, ticketDir)
+		return renderEventsHistory(meta, events, ticketDir, detail, phaseFilter)
 	}
 
 	// Fallback: meta-only rendering for old state dirs without events.jsonl.
@@ -59,9 +68,31 @@ func runHistory(stateDir, ticketKey string) error {
 }
 
 // renderEventsHistory renders the full multi-generation history table
-// reconstructed from events.jsonl.
-func renderEventsHistory(meta *pipeline.PipelineMeta, events []pipeline.Event, stateDir string) error {
+// reconstructed from events.jsonl. When detail is true, the full structured
+// output JSON is printed after each phase row. When phaseFilter is non-empty,
+// only entries for that phase are shown with their full output.
+func renderEventsHistory(meta *pipeline.PipelineMeta, events []pipeline.Event, stateDir string, detail bool, phaseFilter string) error {
 	h := pipeline.BuildHistory(events, stateDir)
+
+	// When --detail or --phase is used, load full outputs.
+	if detail || phaseFilter != "" {
+		h.LoadFullOutputs(stateDir, phaseFilter)
+	}
+
+	// Filter entries when --phase is specified.
+	entries := h.Entries
+	if phaseFilter != "" {
+		var filtered []pipeline.PhaseGeneration
+		for _, e := range entries {
+			if e.Phase == phaseFilter {
+				filtered = append(filtered, e)
+			}
+		}
+		entries = filtered
+		if len(entries) == 0 {
+			return fmt.Errorf("history: no entries found for phase %q", phaseFilter)
+		}
+	}
 
 	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, "Phase\tGen\tStatus\tDuration\tCost\tDetails")
@@ -69,7 +100,16 @@ func renderEventsHistory(meta *pipeline.PipelineMeta, events []pipeline.Event, s
 	var lastFailPhase string
 	var lastFailError string
 
-	for _, entry := range h.Entries {
+	// Collect full outputs to print after the table (to avoid breaking
+	// tabwriter alignment).
+	type outputBlock struct {
+		phase      string
+		generation int
+		data       json.RawMessage
+	}
+	var outputs []outputBlock
+
+	for _, entry := range entries {
 		sym := statusSymbol(entry.Status, entry.Superseded)
 
 		gen := fmt.Sprintf("%d", entry.Generation)
@@ -92,6 +132,14 @@ func renderEventsHistory(meta *pipeline.PipelineMeta, events []pipeline.Event, s
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
 			entry.Phase, gen, sym, dur, cost, details)
 
+		if len(entry.FullOutput) > 0 {
+			outputs = append(outputs, outputBlock{
+				phase:      entry.Phase,
+				generation: entry.Generation,
+				data:       entry.FullOutput,
+			})
+		}
+
 		if entry.Status == pipeline.PhaseFailed && entry.Error != "" && !entry.Superseded {
 			lastFailPhase = entry.Phase
 			lastFailError = entry.Error
@@ -99,10 +147,12 @@ func renderEventsHistory(meta *pipeline.PipelineMeta, events []pipeline.Event, s
 	}
 
 	// Total line using meta.TotalCost as the authoritative total.
-	fmt.Fprintf(tw, "\t\t\t\t──────────\t\n")
-	fmt.Fprintf(tw, "\t\t\tTotal:\t$%.2f\t\n", meta.TotalCost)
-	if h.SupersededCost > 0 {
-		fmt.Fprintf(tw, "\t\t\tSuperseded:\t$%.2f\t\n", h.SupersededCost)
+	if phaseFilter == "" {
+		fmt.Fprintf(tw, "\t\t\t\t──────────\t\n")
+		fmt.Fprintf(tw, "\t\t\tTotal:\t$%.2f\t\n", meta.TotalCost)
+		if h.SupersededCost > 0 {
+			fmt.Fprintf(tw, "\t\t\tSuperseded:\t$%.2f\t\n", h.SupersededCost)
+		}
 	}
 	if err := tw.Flush(); err != nil {
 		return fmt.Errorf("history: flush output: %w", err)
@@ -112,7 +162,23 @@ func renderEventsHistory(meta *pipeline.PipelineMeta, events []pipeline.Event, s
 		fmt.Printf("\nLast failure (%s):\n  Error: %s\n", lastFailPhase, lastFailError)
 	}
 
+	// Print full structured outputs after the table.
+	for _, ob := range outputs {
+		fmt.Printf("\n--- %s (gen %d) ---\n", ob.phase, ob.generation)
+		fmt.Println(prettyJSON(ob.data))
+	}
+
 	return nil
+}
+
+// prettyJSON formats raw JSON with indentation. Falls back to the raw
+// content if the data cannot be parsed.
+func prettyJSON(data json.RawMessage) string {
+	var buf bytes.Buffer
+	if err := json.Indent(&buf, data, "", "  "); err != nil {
+		return string(data)
+	}
+	return buf.String()
 }
 
 // renderMetaHistory renders a simple history table from meta.json only.

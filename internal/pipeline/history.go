@@ -18,8 +18,9 @@ type PhaseGeneration struct {
 	Cost       float64
 	DurationMs int64
 	Error      string
-	Details    string // one-line summary from result JSON
-	Superseded bool   // true if a later generation exists
+	Details    string          // one-line summary from result JSON
+	FullOutput json.RawMessage // full structured output JSON (populated by LoadFullOutputs)
+	Superseded bool            // true if a later generation exists
 }
 
 // History holds the reconstructed multi-generation history for a ticket.
@@ -161,6 +162,43 @@ func loadPhaseDetails(phase string, generation int, stateDir string) string {
 	}
 
 	return progress.PhaseSummary(phase, json.RawMessage(data))
+}
+
+// LoadPhaseResult reads the full structured output JSON for a phase generation.
+// It checks for an archived file (<phase>.json.<generation>) first, then
+// falls back to the current result file (<phase>.json). Returns nil if no
+// result file exists.
+func LoadPhaseResult(phase string, generation int, stateDir string) json.RawMessage {
+	if stateDir == "" {
+		return nil
+	}
+
+	path := filepath.Join(stateDir, phase+".json")
+	archivePath := fmt.Sprintf("%s.%d", path, generation)
+	data, err := os.ReadFile(archivePath)
+	if err != nil {
+		data, err = os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+	}
+	return json.RawMessage(data)
+}
+
+// LoadFullOutputs populates the FullOutput field on all history entries by
+// reading result JSON files from stateDir. If phaseFilter is non-empty, only
+// entries matching that phase name are loaded.
+func (h *History) LoadFullOutputs(stateDir, phaseFilter string) {
+	for i := range h.Entries {
+		if phaseFilter != "" && h.Entries[i].Phase != phaseFilter {
+			continue
+		}
+		h.Entries[i].FullOutput = LoadPhaseResult(
+			h.Entries[i].Phase,
+			h.Entries[i].Generation,
+			stateDir,
+		)
+	}
 }
 
 // FormatDuration formats a duration from milliseconds as "Xs" or "XmYYs".
