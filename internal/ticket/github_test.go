@@ -197,5 +197,78 @@ func TestGitHubSource_Fetch_NotFound(t *testing.T) {
 	}
 }
 
+func TestGitHubSource_Fetch_WithComments(t *testing.T) {
+	t.Setenv("MOCK_GH_FIXTURE", "github_fetch_with_comments.json")
+
+	source, err := NewGitHubSource(GitHubConfig{
+		Owner:         "decko",
+		Repo:          "soda",
+		Command:       mockGHBinary(t),
+		FetchComments: true,
+	})
+	if err != nil {
+		t.Fatalf("NewGitHubSource: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	ticket, err := source.Fetch(ctx, "36")
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+
+	if ticket.Key != "36" {
+		t.Errorf("Key = %q, want %q", ticket.Key, "36")
+	}
+
+	// Comments should be populated
+	if len(ticket.Comments) != 2 {
+		t.Fatalf("Comments len = %d, want 2", len(ticket.Comments))
+	}
+	if ticket.Comments[0].Author != "reviewer1" {
+		t.Errorf("Comments[0].Author = %q, want %q", ticket.Comments[0].Author, "reviewer1")
+	}
+	if ticket.Comments[0].Body != "Looks good, but please add tests." {
+		t.Errorf("Comments[0].Body = %q, want %q", ticket.Comments[0].Body, "Looks good, but please add tests.")
+	}
+	if ticket.Comments[0].CreatedAt != "2025-07-01T10:00:00Z" {
+		t.Errorf("Comments[0].CreatedAt = %q, want %q", ticket.Comments[0].CreatedAt, "2025-07-01T10:00:00Z")
+	}
+	if ticket.Comments[1].Author != "ddebrito" {
+		t.Errorf("Comments[1].Author = %q, want %q", ticket.Comments[1].Author, "ddebrito")
+	}
+	if ticket.Comments[1].CreatedAt != "2025-07-01T12:30:00Z" {
+		t.Errorf("Comments[1].CreatedAt = %q, want %q", ticket.Comments[1].CreatedAt, "2025-07-01T12:30:00Z")
+	}
+}
+
+func TestGitHubSource_Fetch_DefaultNoComments(t *testing.T) {
+	t.Setenv("MOCK_GH_FIXTURE", "github_fetch.json")
+
+	source, err := NewGitHubSource(GitHubConfig{
+		Owner:   "decko",
+		Repo:    "soda",
+		Command: mockGHBinary(t),
+		// FetchComments defaults to false
+	})
+	if err != nil {
+		t.Fatalf("NewGitHubSource: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	ticket, err := source.Fetch(ctx, "36")
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+
+	// Comments should be nil/empty when FetchComments is false
+	if len(ticket.Comments) != 0 {
+		t.Errorf("Comments len = %d, want 0 when FetchComments is false", len(ticket.Comments))
+	}
+}
+
 // Verify GitHubSource satisfies Source interface at compile time.
 var _ Source = (*GitHubSource)(nil)
