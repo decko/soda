@@ -187,6 +187,66 @@ func TestBuildHistory_FailedPhaseDetails(t *testing.T) {
 	}
 }
 
+func TestBuildHistory_EventEmbeddedSummary(t *testing.T) {
+	// No result files on disk — details should come from event data "summary" field.
+	events := []Event{
+		{Phase: "triage", Kind: EventPhaseStarted, Data: map[string]any{"generation": float64(1)}},
+		{Phase: "triage", Kind: EventPhaseCompleted, Data: map[string]any{"cost": 0.10, "duration_ms": float64(5000), "summary": "low"}},
+	}
+
+	h := BuildHistory(events, "") // empty stateDir — no files to read
+	if len(h.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(h.Entries))
+	}
+	if h.Entries[0].Details != "low" {
+		t.Errorf("details = %q, want %q (from event summary)", h.Entries[0].Details, "low")
+	}
+}
+
+func TestBuildHistory_EventEmbeddedSummaryFailed(t *testing.T) {
+	// Failed phase with event-embedded summary and no result file.
+	events := []Event{
+		{Phase: "verify", Kind: EventPhaseStarted, Data: map[string]any{"generation": float64(1)}},
+		{Phase: "verify", Kind: EventPhaseFailed, Data: map[string]any{"error": "verification failed", "duration_ms": float64(20000), "cost": 0.15, "summary": "FAIL"}},
+	}
+
+	h := BuildHistory(events, "")
+	if len(h.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(h.Entries))
+	}
+	if h.Entries[0].Details != "FAIL" {
+		t.Errorf("details = %q, want %q (from event summary)", h.Entries[0].Details, "FAIL")
+	}
+	if h.Entries[0].Error != "verification failed" {
+		t.Errorf("error = %q, want %q", h.Entries[0].Error, "verification failed")
+	}
+}
+
+func TestBuildHistory_ResultFileOverridesEventSummary(t *testing.T) {
+	dir := t.TempDir()
+
+	// Write a triage result file.
+	triageResult := map[string]any{"complexity": "medium", "automatable": true}
+	data, _ := json.Marshal(triageResult)
+	if err := os.WriteFile(filepath.Join(dir, "triage.json"), data, 0644); err != nil {
+		t.Fatalf("WriteFile triage.json: %v", err)
+	}
+
+	// Event includes a stale summary — result file should take precedence.
+	events := []Event{
+		{Phase: "triage", Kind: EventPhaseStarted, Data: map[string]any{"generation": float64(1)}},
+		{Phase: "triage", Kind: EventPhaseCompleted, Data: map[string]any{"cost": 0.10, "duration_ms": float64(5000), "summary": "stale-summary"}},
+	}
+
+	h := BuildHistory(events, dir)
+	if len(h.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(h.Entries))
+	}
+	if h.Entries[0].Details != "medium" {
+		t.Errorf("details = %q, want %q (from result file, not event summary)", h.Entries[0].Details, "medium")
+	}
+}
+
 func TestBuildHistory_ArchivedDetails(t *testing.T) {
 	dir := t.TempDir()
 

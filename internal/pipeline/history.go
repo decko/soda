@@ -80,8 +80,15 @@ func BuildHistory(events []Event, stateDir string) History {
 			if v, ok := ev.Data["duration_ms"]; ok {
 				h.Entries[idx].DurationMs = toInt64(v)
 			}
-			// Load details from result JSON.
+			// Load details from result JSON; fall back to event-embedded summary.
 			h.Entries[idx].Details = loadPhaseDetails(ev.Phase, h.Entries[idx].Generation, stateDir)
+			if h.Entries[idx].Details == "" {
+				if v, ok := ev.Data["summary"]; ok {
+					if s, ok := v.(string); ok {
+						h.Entries[idx].Details = s
+					}
+				}
+			}
 
 		case EventPhaseFailed:
 			idx, ok := currentIdx[ev.Phase]
@@ -101,8 +108,15 @@ func BuildHistory(events []Event, stateDir string) History {
 				h.Entries[idx].Cost = toFloat64(v)
 			}
 			// Load details from result JSON (may exist even for failed phases,
-			// e.g. verify with verdict=FAIL).
+			// e.g. verify with verdict=FAIL); fall back to event-embedded summary.
 			h.Entries[idx].Details = loadPhaseDetails(ev.Phase, h.Entries[idx].Generation, stateDir)
+			if h.Entries[idx].Details == "" {
+				if v, ok := ev.Data["summary"]; ok {
+					if s, ok := v.(string); ok {
+						h.Entries[idx].Details = s
+					}
+				}
+			}
 
 		case EventPhaseSkipped:
 			entry := PhaseGeneration{
