@@ -1160,6 +1160,7 @@ func (e *Engine) runParallelReview(ctx context.Context, phase PhaseConfig) error
 	output, err := json.Marshal(merged)
 	if err != nil {
 		_ = e.state.MarkFailed(phase.Name, err)
+		e.emitPhaseFailed(phase.Name, err)
 		return fmt.Errorf("engine: marshal review output for %s: %w", phase.Name, err)
 	}
 

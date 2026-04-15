@@ -147,8 +147,8 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 		if err != nil {
 			e.emit(Event{
 				Phase: phase.Name,
-				Kind:  EventPhaseFailed,
-				Data:  map[string]any{"error": fmt.Sprintf("check PR status: %v", err)},
+				Kind:  EventMonitorWarning,
+				Data:  map[string]any{"warning": fmt.Sprintf("check PR status: %v", err)},
 			})
 			// Non-fatal — continue polling.
 		}

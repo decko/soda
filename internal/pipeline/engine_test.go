@@ -4787,3 +4787,161 @@ func TestEngine_SkippedReviewPhaseReworkSignalRoutesToImplement(t *testing.T) {
 		}
 	}
 }
+
+// TestEngine_PhaseLifecycleEvents verifies that the engine emits exactly one
+// phase_started and one phase_completed (or phase_failed) event per phase, and
+// that those events carry the expected data fields. This is the core acceptance
+// criterion for ticket #152: the engine is the single source of phase lifecycle
+// event logging.
+func TestEngine_PhaseLifecycleEvents(t *testing.T) {
+	t.Run("completed_phase_emits_started_and_completed", func(t *testing.T) {
+		phases := []PhaseConfig{
+			{
+				Name:   "triage",
+				Prompt: "triage.md",
+				Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+		}
+
+		mock := &flexMockRunner{
+			responses: map[string][]flexResponse{
+				"triage": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"automatable":true}`),
+						RawText: "Triage output",
+						CostUSD: 0.25,
+					},
+				}},
+			},
+		}
+
+		var events []Event
+		engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+			cfg.OnEvent = func(e Event) {
+				events = append(events, e)
+			}
+		})
+
+		if err := engine.Run(context.Background()); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+
+		// Count phase lifecycle events for "triage".
+		var started, completed, failed int
+		var startedEv, completedEv Event
+		for _, ev := range events {
+			if ev.Phase != "triage" {
+				continue
+			}
+			switch ev.Kind {
+			case EventPhaseStarted:
+				started++
+				startedEv = ev
+			case EventPhaseCompleted:
+				completed++
+				completedEv = ev
+			case EventPhaseFailed:
+				failed++
+			}
+		}
+
+		if started != 1 {
+			t.Errorf("phase_started count = %d, want 1", started)
+		}
+		if completed != 1 {
+			t.Errorf("phase_completed count = %d, want 1", completed)
+		}
+		if failed != 0 {
+			t.Errorf("phase_failed count = %d, want 0", failed)
+		}
+
+		// phase_started must include generation.
+		if gen, ok := startedEv.Data["generation"]; !ok {
+			t.Error("phase_started missing 'generation' field")
+		} else if toFloat64(gen) != 1 {
+			t.Errorf("phase_started generation = %v, want 1", gen)
+		}
+
+		// phase_completed must include duration_ms and cost.
+		if _, ok := completedEv.Data["duration_ms"]; !ok {
+			t.Error("phase_completed missing 'duration_ms' field")
+		}
+		if cost, ok := completedEv.Data["cost"]; !ok {
+			t.Error("phase_completed missing 'cost' field")
+		} else if !approxEqual(toFloat64(cost), 0.25) {
+			t.Errorf("phase_completed cost = %v, want 0.25", cost)
+		}
+	})
+
+	t.Run("failed_phase_emits_started_and_failed", func(t *testing.T) {
+		phases := []PhaseConfig{
+			{
+				Name:   "plan",
+				Prompt: "plan.md",
+				Retry:  RetryConfig{Transient: 0, Parse: 0, Semantic: 0},
+			},
+		}
+
+		mock := &flexMockRunner{
+			responses: map[string][]flexResponse{
+				"plan": {{
+					err: fmt.Errorf("LLM call failed"),
+				}},
+			},
+		}
+
+		var events []Event
+		engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+			cfg.OnEvent = func(e Event) {
+				events = append(events, e)
+			}
+		})
+
+		_ = engine.Run(context.Background()) // expected to fail
+
+		// Count phase lifecycle events for "plan".
+		var started, completed, failed int
+		var startedEv, failedEv Event
+		for _, ev := range events {
+			if ev.Phase != "plan" {
+				continue
+			}
+			switch ev.Kind {
+			case EventPhaseStarted:
+				started++
+				startedEv = ev
+			case EventPhaseCompleted:
+				completed++
+			case EventPhaseFailed:
+				failed++
+				failedEv = ev
+			}
+		}
+
+		if started != 1 {
+			t.Errorf("phase_started count = %d, want 1", started)
+		}
+		if completed != 0 {
+			t.Errorf("phase_completed count = %d, want 0", completed)
+		}
+		if failed != 1 {
+			t.Errorf("phase_failed count = %d, want 1", failed)
+		}
+
+		// phase_started must include generation.
+		if _, ok := startedEv.Data["generation"]; !ok {
+			t.Error("phase_started missing 'generation' field")
+		}
+
+		// phase_failed must include error, duration_ms, and cost.
+		if _, ok := failedEv.Data["error"]; !ok {
+			t.Error("phase_failed missing 'error' field")
+		}
+		if _, ok := failedEv.Data["duration_ms"]; !ok {
+			t.Error("phase_failed missing 'duration_ms' field")
+		}
+		if _, ok := failedEv.Data["cost"]; !ok {
+			t.Error("phase_failed missing 'cost' field")
+		}
+	})
+}
