@@ -24,6 +24,18 @@ Priority: {{.Ticket.Priority}}
 - **{{.Name}}** ({{.Forge}}) — {{.Description}}
 {{- end}}
 
+{{- if .Ticket.ExistingSpec}}
+
+## Existing Spec (from issue)
+{{.Ticket.ExistingSpec}}
+{{- end}}
+
+{{- if .Ticket.ExistingPlan}}
+
+## Existing Plan (from issue)
+{{.Ticket.ExistingPlan}}
+{{- end}}
+
 {{- if .Context.ProjectContext}}
 
 ## Project Context
@@ -46,3 +58,9 @@ Assess this ticket and produce a structured classification:
 7. **Decide if automatable** — can an agent implement this end-to-end, or does it need human decisions?
 
 Read the relevant codebase before answering. Do not guess file paths.
+
+## Plan routing
+
+If an existing plan is provided above and appears complete (has concrete tasks with files, acceptance criteria, and a verification strategy), set `skip_plan: true`. The engine will use the existing plan directly and skip the plan phase.
+
+If no plan is provided, or the plan is incomplete or outdated relative to the codebase, leave `skip_plan` as false.

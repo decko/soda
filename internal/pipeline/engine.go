@@ -123,6 +123,56 @@ func (e *Engine) ensureWorktree(ctx context.Context) error {
 	return nil
 }
 
+// triageRequestsSkipPlan reads the triage result and returns true when the
+// LLM set skip_plan=true and the ticket carries a non-empty ExistingPlan.
+func (e *Engine) triageRequestsSkipPlan() bool {
+	raw, err := e.state.ReadResult("triage")
+	if err != nil {
+		return false
+	}
+	var result struct {
+		SkipPlan bool `json:"skip_plan"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return false
+	}
+	return result.SkipPlan && e.config.Ticket.ExistingPlan != ""
+}
+
+// skipPlanFromTriage writes the ticket's ExistingPlan as the plan artifact,
+// marks the plan phase as completed, and emits a skip event. This lets
+// downstream phases (implement, verify, review) see a populated plan
+// artifact without running the plan LLM call.
+func (e *Engine) skipPlanFromTriage() error {
+	plan := e.config.Ticket.ExistingPlan
+
+	// Mark running so the PhaseState entry is created/archived.
+	if err := e.state.MarkRunning("plan"); err != nil {
+		return fmt.Errorf("engine: skip plan: mark running: %w", err)
+	}
+
+	// Write the existing plan as the plan artifact.
+	if err := e.state.WriteArtifact("plan", []byte(plan)); err != nil {
+		return fmt.Errorf("engine: skip plan: write artifact: %w", err)
+	}
+
+	// Mark completed so downstream dependency checks pass.
+	if err := e.state.MarkCompleted("plan"); err != nil {
+		return fmt.Errorf("engine: skip plan: mark completed: %w", err)
+	}
+
+	e.emit(Event{
+		Phase: "plan",
+		Kind:  EventPlanSkippedByTriage,
+		Data: map[string]any{
+			"reason":    "triage set skip_plan=true; using ExistingPlan from ticket",
+			"plan_size": len(plan),
+		},
+	})
+
+	return nil
+}
+
 // shouldSkip returns true if a completed phase can be skipped because none
 // of its dependencies were re-run in this execution.
 func (e *Engine) shouldSkip(phase PhaseConfig) bool {
@@ -265,6 +315,26 @@ func (e *Engine) executePhases(ctx context.Context, phases []PhaseConfig, forceF
 					return err
 				}
 				e.emit(Event{Phase: phase.Name, Kind: EventPhaseSkipped})
+				continue
+			}
+
+			// Skip-plan routing: when triage set skip_plan=true and the
+			// ticket carries an ExistingPlan, write the plan artifact from
+			// ticket data and mark the phase completed — no LLM call needed.
+			if phase.Name == "plan" && e.triageRequestsSkipPlan() {
+				if err := e.skipPlanFromTriage(); err != nil {
+					return err
+				}
+				e.reranPhases[phase.Name] = true
+
+				if e.config.Mode == Checkpoint {
+					e.emit(Event{Phase: phase.Name, Kind: EventCheckpointPause})
+					select {
+					case <-e.confirmCh:
+					case <-ctx.Done():
+						return fmt.Errorf("engine: context cancelled during checkpoint: %w", ctx.Err())
+					}
+				}
 				continue
 			}
 

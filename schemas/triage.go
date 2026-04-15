@@ -12,4 +12,5 @@ type TriageOutput struct {
 	Risks       []string `json:"risks"`
 	Automatable bool     `json:"automatable"`
 	BlockReason string   `json:"block_reason,omitempty"` // why not automatable
+	SkipPlan    bool     `json:"skip_plan,omitempty"`    // true when an existing plan is complete; engine uses ExistingPlan from ticket
 }

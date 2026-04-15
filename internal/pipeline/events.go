@@ -49,6 +49,7 @@ const (
 	EventMonitorCommentSkipped    = "monitor_comment_skipped"
 	EventMonitorProfileApplied    = "monitor_profile_applied"
 	EventMonitorWarning           = "monitor_warning"
+	EventPlanSkippedByTriage      = "plan_skipped_by_triage"
 	EventReworkFeedbackInjected   = "rework_feedback_injected"
 	EventReworkFeedbackSkipped    = "rework_feedback_skipped"
 	EventPromptLoaded             = "prompt_loaded"
