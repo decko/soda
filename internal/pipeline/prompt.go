@@ -69,6 +69,15 @@ type TicketData struct {
 	Type               string
 	Priority           string
 	AcceptanceCriteria []string
+	Comments           []TicketComment
+}
+
+// TicketComment holds a single ticket comment for prompt templates.
+// Named TicketComment (not Comment) to avoid ambiguity with PR/review comments.
+type TicketComment struct {
+	Author    string
+	Body      string
+	CreatedAt string
 }
 
 // PromptConfigData holds config fields accessible from templates.
