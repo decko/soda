@@ -20,9 +20,11 @@ import (
 // sessionEntry holds data for one row in the sessions listing.
 type sessionEntry struct {
 	ticket     string
+	dirName    string // filesystem directory name (may differ from ticket)
 	summary    string
 	status     string
 	cost       string
+	costRaw    float64 // raw cost for sorting/computation; avoids re-parsing the display string
 	elapsed    string
 	lastRun    string
 	startedAt  time.Time
@@ -144,9 +146,11 @@ func collectSessions(stateDir string, now time.Time) ([]sessionEntry, error) {
 
 		rows = append(rows, sessionEntry{
 			ticket:     meta.Ticket,
+			dirName:    entry.Name(),
 			summary:    meta.Summary,
 			status:     status,
 			cost:       cost,
+			costRaw:    meta.TotalCost,
 			elapsed:    elapsed,
 			lastRun:    lastRun,
 			startedAt:  meta.StartedAt,
@@ -173,10 +177,7 @@ func sortSessions(rows []sessionEntry, sortBy string) {
 	switch sortBy {
 	case "cost":
 		sort.SliceStable(rows, func(i, j int) bool {
-			// Parse cost strings for comparison.
-			ci := parseCost(rows[i].cost)
-			cj := parseCost(rows[j].cost)
-			return ci > cj // highest cost first
+			return rows[i].costRaw > rows[j].costRaw // highest cost first
 		})
 	case "elapsed":
 		sort.SliceStable(rows, func(i, j int) bool {
@@ -187,13 +188,6 @@ func sortSessions(rows []sessionEntry, sortBy string) {
 			return rows[i].startedAt.After(rows[j].startedAt) // newest first
 		})
 	}
-}
-
-// parseCost extracts a float from a "$X.XX" string.
-func parseCost(s string) float64 {
-	var cost float64
-	fmt.Sscanf(s, "$%f", &cost)
-	return cost
 }
 
 // computeElapsed returns the actual elapsed duration for a pipeline session.
@@ -291,10 +285,16 @@ func runSessionsTUI(stateDir, statusFilter, sortBy string, limit int, now time.T
 		return nil
 	}
 
+	// Use DirName for path-based lookups; fall back to Ticket for display.
+	dirKey := result.DirName
+	if dirKey == "" {
+		dirKey = result.Ticket
+	}
+
 	switch result.Action {
 	case tui.SessionActionView:
-		// Drill into session history.
-		return runHistory(stateDir, result.Ticket, false, "")
+		// Drill into session history using the directory name for correct path.
+		return runHistory(stateDir, dirKey, false, "")
 	case tui.SessionActionResume:
 		fmt.Printf("To resume: soda run %s --from last\n", result.Ticket)
 	case tui.SessionActionDelete:
@@ -310,9 +310,10 @@ func sessionsToTUI(rows []sessionEntry) []tui.SessionInfo {
 	for idx, row := range rows {
 		sessions[idx] = tui.SessionInfo{
 			Ticket:    row.ticket,
+			DirName:   row.dirName,
 			Summary:   row.summary,
 			Status:    row.status,
-			Cost:      parseCost(row.cost),
+			Cost:      row.costRaw,
 			Elapsed:   row.elapsed,
 			StartedAt: row.startedAt,
 		}

@@ -13,6 +13,7 @@ import (
 // in the TUI session browser.
 type SessionInfo struct {
 	Ticket    string
+	DirName   string // filesystem directory name; used for path lookups (may differ from Ticket)
 	Summary   string
 	Status    string
 	Cost      float64
@@ -36,8 +37,9 @@ const (
 
 // SessionResult is returned when the user selects an action on a session.
 type SessionResult struct {
-	Ticket string
-	Action SessionAction
+	Ticket  string
+	DirName string // filesystem directory name for path construction
+	Action  SessionAction
 }
 
 // SessionsModel is a bubbletea model for browsing pipeline sessions.
@@ -110,9 +112,11 @@ func (m SessionsModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "enter":
+		s := m.sessions[m.cursor]
 		m.result = &SessionResult{
-			Ticket: m.sessions[m.cursor].Ticket,
-			Action: SessionActionView,
+			Ticket:  s.Ticket,
+			DirName: s.DirName,
+			Action:  SessionActionView,
 		}
 		return m, tea.Quit
 
@@ -120,8 +124,9 @@ func (m SessionsModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		s := m.sessions[m.cursor]
 		if s.Status == "failed" || s.Status == "stale" {
 			m.result = &SessionResult{
-				Ticket: s.Ticket,
-				Action: SessionActionResume,
+				Ticket:  s.Ticket,
+				DirName: s.DirName,
+				Action:  SessionActionResume,
 			}
 			return m, tea.Quit
 		}
@@ -131,8 +136,9 @@ func (m SessionsModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		s := m.sessions[m.cursor]
 		if s.Status == "completed" || s.Status == "failed" {
 			m.result = &SessionResult{
-				Ticket: s.Ticket,
-				Action: SessionActionDelete,
+				Ticket:  s.Ticket,
+				DirName: s.DirName,
+				Action:  SessionActionDelete,
 			}
 			return m, tea.Quit
 		}

@@ -90,6 +90,39 @@ func TestCollectSessions_ReadsMeta(t *testing.T) {
 	}
 }
 
+func TestCollectSessions_DirNameDiffersFromTicket(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2025, 6, 15, 14, 0, 0, 0, time.UTC)
+
+	// Directory name is slugified, but meta.Ticket has the original key.
+	writeMeta(t, filepath.Join(dir, "proj-42-slugified"), &pipeline.PipelineMeta{
+		Ticket:    "PROJ-42",
+		Summary:   "Slugified dir test",
+		StartedAt: now.Add(-1 * time.Hour),
+		TotalCost: 2.50,
+		Phases: map[string]*pipeline.PhaseState{
+			"triage": {Status: pipeline.PhaseCompleted},
+		},
+	})
+
+	rows, err := collectSessions(dir, now)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(rows))
+	}
+	if rows[0].ticket != "PROJ-42" {
+		t.Errorf("ticket = %q, want %q", rows[0].ticket, "PROJ-42")
+	}
+	if rows[0].dirName != "proj-42-slugified" {
+		t.Errorf("dirName = %q, want %q", rows[0].dirName, "proj-42-slugified")
+	}
+	if rows[0].costRaw != 2.50 {
+		t.Errorf("costRaw = %f, want %f", rows[0].costRaw, 2.50)
+	}
+}
+
 func TestFilterSessionsByStatus(t *testing.T) {
 	rows := []sessionEntry{
 		{ticket: "A", status: "completed"},
@@ -123,9 +156,9 @@ func TestSortSessions(t *testing.T) {
 	now := time.Date(2025, 6, 15, 14, 0, 0, 0, time.UTC)
 
 	rows := []sessionEntry{
-		{ticket: "A", cost: "$1.00", startedAt: now.Add(-3 * time.Hour), elapsedDur: 10 * time.Minute},
-		{ticket: "B", cost: "$5.00", startedAt: now.Add(-1 * time.Hour), elapsedDur: 30 * time.Minute},
-		{ticket: "C", cost: "$0.50", startedAt: now.Add(-2 * time.Hour), elapsedDur: 2 * time.Minute},
+		{ticket: "A", cost: "$1.00", costRaw: 1.00, startedAt: now.Add(-3 * time.Hour), elapsedDur: 10 * time.Minute},
+		{ticket: "B", cost: "$5.00", costRaw: 5.00, startedAt: now.Add(-1 * time.Hour), elapsedDur: 30 * time.Minute},
+		{ticket: "C", cost: "$0.50", costRaw: 0.50, startedAt: now.Add(-2 * time.Hour), elapsedDur: 2 * time.Minute},
 	}
 
 	t.Run("sort by date (default)", func(t *testing.T) {
@@ -297,23 +330,6 @@ func TestComputeElapsed_RunningPhase(t *testing.T) {
 	}
 }
 
-func TestParseCost(t *testing.T) {
-	tests := []struct {
-		input string
-		want  float64
-	}{
-		{"$1.23", 1.23},
-		{"$0.00", 0.00},
-		{"$10.50", 10.50},
-	}
-	for _, tc := range tests {
-		got := parseCost(tc.input)
-		if got != tc.want {
-			t.Errorf("parseCost(%q) = %f, want %f", tc.input, got, tc.want)
-		}
-	}
-}
-
 func TestNewSessionsCmd_Flags(t *testing.T) {
 	cmd := newSessionsCmd()
 
@@ -354,8 +370,8 @@ func TestSessionsToTUI(t *testing.T) {
 	now := time.Date(2025, 6, 15, 14, 0, 0, 0, time.UTC)
 
 	rows := []sessionEntry{
-		{ticket: "A", summary: "First", status: "completed", cost: "$1.23", elapsed: "5m", startedAt: now.Add(-2 * time.Hour)},
-		{ticket: "B", summary: "Second", status: "failed", cost: "$5.58", elapsed: "12m", startedAt: now.Add(-30 * time.Minute)},
+		{ticket: "A", dirName: "dir-a", summary: "First", status: "completed", cost: "$1.23", costRaw: 1.23, elapsed: "5m", startedAt: now.Add(-2 * time.Hour)},
+		{ticket: "B", dirName: "dir-b", summary: "Second", status: "failed", cost: "$5.58", costRaw: 5.58, elapsed: "12m", startedAt: now.Add(-30 * time.Minute)},
 	}
 
 	sessions := sessionsToTUI(rows)
@@ -365,6 +381,9 @@ func TestSessionsToTUI(t *testing.T) {
 
 	if sessions[0].Ticket != "A" {
 		t.Errorf("session 0 ticket = %q, want %q", sessions[0].Ticket, "A")
+	}
+	if sessions[0].DirName != "dir-a" {
+		t.Errorf("session 0 dirName = %q, want %q", sessions[0].DirName, "dir-a")
 	}
 	if sessions[0].Summary != "First" {
 		t.Errorf("session 0 summary = %q, want %q", sessions[0].Summary, "First")
@@ -378,6 +397,9 @@ func TestSessionsToTUI(t *testing.T) {
 
 	if sessions[1].Ticket != "B" {
 		t.Errorf("session 1 ticket = %q, want %q", sessions[1].Ticket, "B")
+	}
+	if sessions[1].DirName != "dir-b" {
+		t.Errorf("session 1 dirName = %q, want %q", sessions[1].DirName, "dir-b")
 	}
 	if sessions[1].Cost != 5.58 {
 		t.Errorf("session 1 cost = %f, want %f", sessions[1].Cost, 5.58)

@@ -10,10 +10,10 @@ import (
 
 func testSessions() []SessionInfo {
 	return []SessionInfo{
-		{Ticket: "36", Summary: "Add version command to CLI", Status: "completed", Cost: 0.98, Elapsed: "5m49s", StartedAt: time.Now().Add(-2 * time.Hour)},
-		{Ticket: "58", Summary: "Show detailed pipeline outcome", Status: "completed", Cost: 5.58, Elapsed: "12m47s", StartedAt: time.Now().Add(-30 * time.Minute)},
-		{Ticket: "64", Summary: "Delete branch when cleaning", Status: "running", Cost: 0.45, Elapsed: "2m12s", StartedAt: time.Now()},
-		{Ticket: "50", Summary: "Resume gate check bug", Status: "failed", Cost: 1.23, Elapsed: "4m30s", StartedAt: time.Now().Add(-5 * time.Hour)},
+		{Ticket: "36", DirName: "36", Summary: "Add version command to CLI", Status: "completed", Cost: 0.98, Elapsed: "5m49s", StartedAt: time.Now().Add(-2 * time.Hour)},
+		{Ticket: "58", DirName: "58", Summary: "Show detailed pipeline outcome", Status: "completed", Cost: 5.58, Elapsed: "12m47s", StartedAt: time.Now().Add(-30 * time.Minute)},
+		{Ticket: "64", DirName: "64", Summary: "Delete branch when cleaning", Status: "running", Cost: 0.45, Elapsed: "2m12s", StartedAt: time.Now()},
+		{Ticket: "50", DirName: "50", Summary: "Resume gate check bug", Status: "failed", Cost: 1.23, Elapsed: "4m30s", StartedAt: time.Now().Add(-5 * time.Hour)},
 	}
 }
 
@@ -105,11 +105,34 @@ func TestSessionsModel_EnterViewsHistory(t *testing.T) {
 	if m.result.Ticket != "58" {
 		t.Errorf("expected ticket 58, got %q", m.result.Ticket)
 	}
+	if m.result.DirName != "58" {
+		t.Errorf("expected dirName 58, got %q", m.result.DirName)
+	}
 	if m.result.Action != SessionActionView {
 		t.Errorf("expected SessionActionView, got %d", m.result.Action)
 	}
 	if cmd == nil {
 		t.Error("expected quit command after Enter")
+	}
+}
+
+func TestSessionsModel_EnterPropagatesDirName(t *testing.T) {
+	sessions := []SessionInfo{
+		{Ticket: "PROJ-42", DirName: "proj-42-slugified", Summary: "Test", Status: "completed", Cost: 1.0},
+	}
+	model := NewSessionsModel(sessions)
+
+	model2, _ := model.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m := model2.(SessionsModel)
+
+	if m.result == nil {
+		t.Fatal("expected result after Enter")
+	}
+	if m.result.Ticket != "PROJ-42" {
+		t.Errorf("expected ticket PROJ-42, got %q", m.result.Ticket)
+	}
+	if m.result.DirName != "proj-42-slugified" {
+		t.Errorf("expected dirName proj-42-slugified, got %q", m.result.DirName)
 	}
 }
 
