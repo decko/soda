@@ -112,7 +112,7 @@ func (p *GitHubPRPoller) GetNewComments(ctx context.Context, prURL string, after
 	endpoint := fmt.Sprintf("repos/%s/%s/pulls/%s/comments", owner, repo, number)
 	out, err := exec.CommandContext(ctx, p.command,
 		"api", endpoint,
-		"--paginate",
+		"--paginate", "--slurp",
 	).Output()
 	if err != nil {
 		return nil, fmt.Errorf("monitor: get comments: %w: %s", err, ghStderr(err))
@@ -127,7 +127,7 @@ func (p *GitHubPRPoller) GetNewComments(ctx context.Context, prURL string, after
 	issueEndpoint := fmt.Sprintf("repos/%s/%s/issues/%s/comments", owner, repo, number)
 	issueOut, err := exec.CommandContext(ctx, p.command,
 		"api", issueEndpoint,
-		"--paginate",
+		"--paginate", "--slurp",
 	).Output()
 	if err != nil {
 		return nil, fmt.Errorf("monitor: get issue comments: %w: %s", err, ghStderr(err))
