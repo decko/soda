@@ -297,4 +297,46 @@ func TestNewSessionsCmd_Flags(t *testing.T) {
 	if allFlag.DefValue != "false" {
 		t.Errorf("--all default = %q, want %q", allFlag.DefValue, "false")
 	}
+
+	tuiFlag := cmd.Flags().Lookup("tui")
+	if tuiFlag == nil {
+		t.Fatal("--tui flag not found")
+	}
+	if tuiFlag.DefValue != "false" {
+		t.Errorf("--tui default = %q, want %q", tuiFlag.DefValue, "false")
+	}
+}
+
+func TestSessionsToTUI(t *testing.T) {
+	now := time.Date(2025, 6, 15, 14, 0, 0, 0, time.UTC)
+
+	rows := []sessionEntry{
+		{ticket: "A", summary: "First", status: "completed", cost: "$1.23", elapsed: "5m", startedAt: now.Add(-2 * time.Hour)},
+		{ticket: "B", summary: "Second", status: "failed", cost: "$5.58", elapsed: "12m", startedAt: now.Add(-30 * time.Minute)},
+	}
+
+	sessions := sessionsToTUI(rows)
+	if len(sessions) != 2 {
+		t.Fatalf("expected 2 sessions, got %d", len(sessions))
+	}
+
+	if sessions[0].Ticket != "A" {
+		t.Errorf("session 0 ticket = %q, want %q", sessions[0].Ticket, "A")
+	}
+	if sessions[0].Summary != "First" {
+		t.Errorf("session 0 summary = %q, want %q", sessions[0].Summary, "First")
+	}
+	if sessions[0].Status != "completed" {
+		t.Errorf("session 0 status = %q, want %q", sessions[0].Status, "completed")
+	}
+	if sessions[0].Cost != 1.23 {
+		t.Errorf("session 0 cost = %f, want %f", sessions[0].Cost, 1.23)
+	}
+
+	if sessions[1].Ticket != "B" {
+		t.Errorf("session 1 ticket = %q, want %q", sessions[1].Ticket, "B")
+	}
+	if sessions[1].Cost != 5.58 {
+		t.Errorf("session 1 cost = %f, want %f", sessions[1].Cost, 5.58)
+	}
 }

@@ -10,7 +10,9 @@ import (
 	"text/tabwriter"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/decko/soda/internal/pipeline"
+	"github.com/decko/soda/internal/tui"
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 )
@@ -38,9 +40,13 @@ func newSessionsCmd() *cobra.Command {
 			statusFilter, _ := cmd.Flags().GetString("status")
 			sortBy, _ := cmd.Flags().GetString("sort")
 			all, _ := cmd.Flags().GetBool("all")
+			interactive, _ := cmd.Flags().GetBool("tui")
 			limit := 20
 			if all {
 				limit = 0
+			}
+			if interactive {
+				return runSessionsTUI(cfg.StateDir, statusFilter, sortBy, limit, time.Now())
 			}
 			return runSessions(cfg.StateDir, statusFilter, sortBy, limit, time.Now())
 		},
@@ -49,6 +55,7 @@ func newSessionsCmd() *cobra.Command {
 	cmd.Flags().String("status", "", "filter by status (completed, failed, running, stale)")
 	cmd.Flags().String("sort", "date", "sort order: date, cost, elapsed")
 	cmd.Flags().Bool("all", false, "list all sessions (default: most recent 20)")
+	cmd.Flags().Bool("tui", false, "launch interactive session browser")
 
 	return cmd
 }
@@ -227,6 +234,66 @@ func truncate(s string, maxLen int) string {
 		return s[:maxLen]
 	}
 	return s[:maxLen-3] + "..."
+}
+
+// runSessionsTUI launches the interactive TUI session browser. When the user
+// selects a session, it drills into the history for that ticket.
+func runSessionsTUI(stateDir, statusFilter, sortBy string, limit int, now time.Time) error {
+	rows, err := collectSessions(stateDir, now)
+	if err != nil {
+		return err
+	}
+
+	if statusFilter != "" {
+		rows = filterSessionsByStatus(rows, statusFilter)
+	}
+	sortSessions(rows, sortBy)
+	if limit > 0 && len(rows) > limit {
+		rows = rows[:limit]
+	}
+
+	// Convert to TUI session infos.
+	sessions := sessionsToTUI(rows)
+
+	model := tui.NewSessionsModel(sessions)
+	program := tea.NewProgram(model, tea.WithAltScreen())
+	finalModel, err := program.Run()
+	if err != nil {
+		return fmt.Errorf("sessions tui: %w", err)
+	}
+
+	result := finalModel.(tui.SessionsModel).Result()
+	if result == nil {
+		return nil
+	}
+
+	switch result.Action {
+	case tui.SessionActionView:
+		// Drill into session history.
+		return runHistory(stateDir, result.Ticket, false, "")
+	case tui.SessionActionResume:
+		fmt.Printf("To resume: soda run %s --from last\n", result.Ticket)
+	case tui.SessionActionDelete:
+		fmt.Printf("To clean: soda clean %s\n", result.Ticket)
+	}
+
+	return nil
+}
+
+// sessionsToTUI converts sessionEntry rows to tui.SessionInfo for the TUI model.
+func sessionsToTUI(rows []sessionEntry) []tui.SessionInfo {
+	sessions := make([]tui.SessionInfo, len(rows))
+	for idx, row := range rows {
+		sessions[idx] = tui.SessionInfo{
+			Ticket:    row.ticket,
+			Summary:   row.summary,
+			Status:    row.status,
+			Cost:      parseCost(row.cost),
+			Elapsed:   row.elapsed,
+			StartedAt: row.startedAt,
+		}
+	}
+	return sessions
 }
 
 // sessionsSummaryLine returns a summary like "4 sessions (3 completed, 1 running)".
