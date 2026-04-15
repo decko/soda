@@ -1,6 +1,9 @@
 package ticket
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 // ArtifactExtractor extracts named artifacts from a ticket's comments.
 // Implementations scan comment bodies for delimited content and populate
@@ -70,6 +73,52 @@ func (e *DescriptionMarkerExtractor) Extract(t *Ticket) *Ticket {
 	}
 
 	return t
+}
+
+// FieldExtractor reads spec and/or plan content from named fields in the
+// ticket's RawFields map. This supports Jira custom fields (e.g.
+// "customfield_10050") that hold spec or plan text directly.
+// Field values are converted to string via fmt.Sprint; structured values
+// (maps, slices) are stringified but may not be useful without further
+// processing.
+type FieldExtractor struct {
+	SpecField string // RawFields key for spec content (e.g. "customfield_10050")
+	PlanField string // RawFields key for plan content (e.g. "customfield_10051")
+}
+
+// Extract reads the configured fields from RawFields and populates
+// ExistingSpec and ExistingPlan. Existing non-empty values are not
+// overwritten. Fields that are missing or empty are silently skipped.
+func (e *FieldExtractor) Extract(t *Ticket) *Ticket {
+	if t == nil || t.RawFields == nil {
+		return t
+	}
+
+	if e.SpecField != "" && t.ExistingSpec == "" {
+		if val := fieldToString(t.RawFields[e.SpecField]); val != "" {
+			t.ExistingSpec = val
+		}
+	}
+	if e.PlanField != "" && t.ExistingPlan == "" {
+		if val := fieldToString(t.RawFields[e.PlanField]); val != "" {
+			t.ExistingPlan = val
+		}
+	}
+
+	return t
+}
+
+// fieldToString converts a raw field value to a trimmed string.
+// Returns "" for nil values.
+func fieldToString(val any) string {
+	if val == nil {
+		return ""
+	}
+	str, ok := val.(string)
+	if !ok {
+		str = fmt.Sprint(val)
+	}
+	return strings.TrimSpace(str)
 }
 
 // extractBetweenMarkers returns the trimmed text between startMarker and

@@ -338,8 +338,183 @@ func TestDescriptionMarkerExtractor_EmptyMarkerConfig(t *testing.T) {
 	}
 }
 
+func TestFieldExtractor_HappyPath(t *testing.T) {
+	extractor := &FieldExtractor{
+		SpecField: "customfield_10050",
+		PlanField: "customfield_10051",
+	}
+
+	ticket := &Ticket{
+		Key: "PROJ-42",
+		RawFields: map[string]any{
+			"customfield_10050": "The custom spec content.",
+			"customfield_10051": "The custom plan content.",
+		},
+	}
+
+	result := extractor.Extract(ticket)
+
+	if result.ExistingSpec != "The custom spec content." {
+		t.Errorf("ExistingSpec = %q, want %q", result.ExistingSpec, "The custom spec content.")
+	}
+	if result.ExistingPlan != "The custom plan content." {
+		t.Errorf("ExistingPlan = %q, want %q", result.ExistingPlan, "The custom plan content.")
+	}
+}
+
+func TestFieldExtractor_DoesNotOverwrite(t *testing.T) {
+	extractor := &FieldExtractor{
+		SpecField: "customfield_10050",
+	}
+
+	ticket := &Ticket{
+		Key:          "PROJ-43",
+		ExistingSpec: "Already set spec.",
+		RawFields: map[string]any{
+			"customfield_10050": "New spec from field.",
+		},
+	}
+
+	result := extractor.Extract(ticket)
+
+	if result.ExistingSpec != "Already set spec." {
+		t.Errorf("ExistingSpec = %q, want %q (should not overwrite)", result.ExistingSpec, "Already set spec.")
+	}
+}
+
+func TestFieldExtractor_MissingField(t *testing.T) {
+	extractor := &FieldExtractor{
+		SpecField: "customfield_10050",
+		PlanField: "customfield_10051",
+	}
+
+	ticket := &Ticket{
+		Key: "PROJ-44",
+		RawFields: map[string]any{
+			"summary": "some issue",
+		},
+	}
+
+	result := extractor.Extract(ticket)
+
+	if result.ExistingSpec != "" {
+		t.Errorf("ExistingSpec = %q, want empty (field not present)", result.ExistingSpec)
+	}
+	if result.ExistingPlan != "" {
+		t.Errorf("ExistingPlan = %q, want empty (field not present)", result.ExistingPlan)
+	}
+}
+
+func TestFieldExtractor_NilValue(t *testing.T) {
+	extractor := &FieldExtractor{
+		SpecField: "customfield_10050",
+	}
+
+	ticket := &Ticket{
+		Key: "PROJ-45",
+		RawFields: map[string]any{
+			"customfield_10050": nil,
+		},
+	}
+
+	result := extractor.Extract(ticket)
+
+	if result.ExistingSpec != "" {
+		t.Errorf("ExistingSpec = %q, want empty (nil value)", result.ExistingSpec)
+	}
+}
+
+func TestFieldExtractor_NonStringValue(t *testing.T) {
+	extractor := &FieldExtractor{
+		SpecField: "customfield_10050",
+	}
+
+	ticket := &Ticket{
+		Key: "PROJ-46",
+		RawFields: map[string]any{
+			"customfield_10050": 42,
+		},
+	}
+
+	result := extractor.Extract(ticket)
+
+	if result.ExistingSpec != "42" {
+		t.Errorf("ExistingSpec = %q, want %q", result.ExistingSpec, "42")
+	}
+}
+
+func TestFieldExtractor_WhitespaceOnlyValue(t *testing.T) {
+	extractor := &FieldExtractor{
+		SpecField: "customfield_10050",
+	}
+
+	ticket := &Ticket{
+		Key: "PROJ-47",
+		RawFields: map[string]any{
+			"customfield_10050": "   \n  ",
+		},
+	}
+
+	result := extractor.Extract(ticket)
+
+	if result.ExistingSpec != "" {
+		t.Errorf("ExistingSpec = %q, want empty (whitespace-only)", result.ExistingSpec)
+	}
+}
+
+func TestFieldExtractor_NilTicket(t *testing.T) {
+	extractor := &FieldExtractor{
+		SpecField: "customfield_10050",
+	}
+
+	result := extractor.Extract(nil)
+	if result != nil {
+		t.Errorf("Extract(nil) = %v, want nil", result)
+	}
+}
+
+func TestFieldExtractor_NilRawFields(t *testing.T) {
+	extractor := &FieldExtractor{
+		SpecField: "customfield_10050",
+	}
+
+	ticket := &Ticket{
+		Key:       "PROJ-48",
+		RawFields: nil,
+	}
+
+	result := extractor.Extract(ticket)
+
+	if result.ExistingSpec != "" {
+		t.Errorf("ExistingSpec = %q, want empty (nil RawFields)", result.ExistingSpec)
+	}
+}
+
+func TestFieldExtractor_EmptyFieldConfig(t *testing.T) {
+	extractor := &FieldExtractor{}
+
+	ticket := &Ticket{
+		Key: "PROJ-49",
+		RawFields: map[string]any{
+			"customfield_10050": "Some content.",
+		},
+	}
+
+	result := extractor.Extract(ticket)
+
+	if result.ExistingSpec != "" {
+		t.Errorf("ExistingSpec = %q, want empty (no fields configured)", result.ExistingSpec)
+	}
+	if result.ExistingPlan != "" {
+		t.Errorf("ExistingPlan = %q, want empty (no fields configured)", result.ExistingPlan)
+	}
+}
+
 // Verify CommentMarkerExtractor satisfies ArtifactExtractor at compile time.
 var _ ArtifactExtractor = (*CommentMarkerExtractor)(nil)
 
 // Verify DescriptionMarkerExtractor satisfies ArtifactExtractor at compile time.
 var _ ArtifactExtractor = (*DescriptionMarkerExtractor)(nil)
+
+// Verify FieldExtractor satisfies ArtifactExtractor at compile time.
+var _ ArtifactExtractor = (*FieldExtractor)(nil)
