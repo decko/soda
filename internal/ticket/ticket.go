@@ -13,6 +13,8 @@ type Ticket struct {
 	Labels             []string       `json:"labels"`
 	AcceptanceCriteria []string       `json:"acceptance_criteria"`
 	Comments           []Comment      `json:"comments,omitempty"`
+	ExistingSpec       string         `json:"existing_spec,omitempty"`
+	ExistingPlan       string         `json:"existing_plan,omitempty"`
 	RawFields          map[string]any `json:"raw_fields,omitempty"`
 }
 
