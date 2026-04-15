@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# Pre-commit hook: runs gofmt and go vet on staged .go files.
+# Install via: ./scripts/setup-hooks.sh
+# Skip via:    git commit --no-verify   OR   SKIP_HOOKS=1 git commit
+
+set -euo pipefail
+
+# Allow skipping with an environment variable.
+if [ "${SKIP_HOOKS:-0}" = "1" ]; then
+    exit 0
+fi
+
+# Collect staged .go files (added, copied, modified only).
+# Uses a while-read loop instead of mapfile for Bash 3.2 compatibility (macOS).
+staged_files=()
+while IFS= read -r file; do
+    staged_files+=("$file")
+done < <(git diff --cached --name-only --diff-filter=ACM -- '*.go')
+
+if [ ${#staged_files[@]} -eq 0 ]; then
+    exit 0
+fi
+
+# Stash unstaged changes so checks run against exactly what is being
+# committed, not what happens to be on disk.  Without this, a developer
+# could stage an unformatted file, fix formatting in the working tree
+# (without re-staging), and the hook would incorrectly pass.
+stashed=false
+if ! git diff --quiet; then
+    git stash push --keep-index --quiet
+    stashed=true
+fi
+
+restore_stash() {
+    if [ "$stashed" = true ]; then
+        git stash pop --quiet
+    fi
+}
+trap restore_stash EXIT
+
+failed=0
+
+# --- gofmt ---
+unformatted=$(gofmt -l "${staged_files[@]}" 2>&1) || true
+if [ -n "$unformatted" ]; then
+    printf "pre-commit: gofmt found unformatted files:\n"
+    printf "  %s\n" $unformatted
+    printf "Run:  gofmt -w <file>  then re-stage.\n"
+    failed=1
+fi
+
+# --- go vet ---
+# Extract unique package directories from the staged files.
+# Uses sort -u instead of an associative array for Bash 3.2 compatibility (macOS).
+vet_args=()
+while IFS= read -r d; do
+    vet_args+=("./${d}/...")
+done < <(printf '%s\n' "${staged_files[@]}" | while IFS= read -r f; do dirname "$f"; done | sort -u)
+
+if ! go vet "${vet_args[@]}" 2>&1; then
+    printf "pre-commit: go vet failed.\n"
+    failed=1
+fi
+
+if [ "$failed" -ne 0 ]; then
+    printf "\nCommit aborted. Fix the issues above or skip with --no-verify.\n"
+    exit 1
+fi
