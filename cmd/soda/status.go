@@ -262,7 +262,7 @@ func formatSubmitted(startedAt, now time.Time) string {
 	sy, sm, sd := startedAt.Date()
 	ny, nm, nd := now.Date()
 	if sy == ny && sm == nm && sd == nd {
-		return startedAt.Format("15:04")
+		return fmt.Sprintf("%12s", startedAt.Format("15:04"))
 	}
 	return startedAt.Format("Jan 02 15:04")
 }
