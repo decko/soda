@@ -24,7 +24,11 @@ func RepoRoot(dir string) (string, error) {
 	if !filepath.IsAbs(gitDir) {
 		gitDir = filepath.Join(dir, gitDir)
 	}
-	return filepath.Dir(gitDir), nil
+	absPath, err := filepath.Abs(filepath.Dir(gitDir))
+	if err != nil {
+		return "", fmt.Errorf("git: resolve absolute path: %w", err)
+	}
+	return absPath, nil
 }
 
 // CreateWorktree creates a git worktree for a new branch based on baseBranch.
