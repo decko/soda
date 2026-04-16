@@ -42,6 +42,9 @@ type PRPoller interface {
 	GetNewComments(ctx context.Context, prURL string, afterID string) ([]PRComment, error)
 	// GetCIStatus returns the current CI check status for the PR's head commit.
 	GetCIStatus(ctx context.Context, prURL string) (*CIStatus, error)
+	// PostComment posts a comment to the pull request. Used for canned
+	// acknowledgments and reply summaries.
+	PostComment(ctx context.Context, prURL string, body string) error
 }
 
 // PRStatus holds the current state of a pull request.

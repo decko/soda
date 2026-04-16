@@ -28,6 +28,10 @@ type mockPRPoller struct {
 	// ciResponses are returned in order for GetCIStatus calls.
 	ciResponses []mockCIResponse
 	ciCallCount int
+
+	// postedComments records bodies passed to PostComment.
+	postedComments []string
+	postCommentErr error
 }
 
 type mockPRStatusResponse struct {
@@ -80,6 +84,13 @@ func (m *mockPRPoller) GetCIStatus(ctx context.Context, prURL string) (*CIStatus
 	}
 	resp := m.ciResponses[idx]
 	return resp.status, resp.err
+}
+
+func (m *mockPRPoller) PostComment(ctx context.Context, prURL string, body string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.postedComments = append(m.postedComments, body)
+	return m.postCommentErr
 }
 
 // monitorEngineSetup holds the options for setupMonitorEngine.

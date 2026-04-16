@@ -174,3 +174,22 @@ func DeleteBranch(repoDir, branch string) error {
 	}
 	return nil
 }
+
+// Diff returns the output of "git diff <base>...HEAD" for the given
+// repoDir. The three-dot syntax shows changes introduced on the current
+// branch since it diverged from base. Returns an empty string and nil
+// error when there are no differences. maxBytes limits the output size;
+// use 0 for no limit.
+func Diff(ctx context.Context, repoDir, base string, maxBytes int) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "diff", base+"...HEAD")
+	cmd.Dir = repoDir
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git: diff %s...HEAD: %w", base, err)
+	}
+	s := string(out)
+	if maxBytes > 0 && len(s) > maxBytes {
+		s = s[:maxBytes] + "\n... (diff truncated)"
+	}
+	return s, nil
+}

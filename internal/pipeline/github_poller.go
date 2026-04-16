@@ -248,6 +248,27 @@ func (p *GitHubPRPoller) GetCIStatus(ctx context.Context, prURL string) (*CIStat
 	return status, nil
 }
 
+// PostComment posts a top-level comment to the PR using gh pr comment.
+func (p *GitHubPRPoller) PostComment(ctx context.Context, prURL string, body string) error {
+	owner, repo, number, err := parsePRRef(prURL)
+	if err != nil {
+		return err
+	}
+
+	nwoRef := owner + "/" + repo
+
+	cmd := exec.CommandContext(ctx, p.command,
+		"pr", "comment", number,
+		"--repo", nwoRef,
+		"--body", body,
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("monitor: post comment: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
 // ghStderr extracts stderr from an exec.ExitError for error messages.
 func ghStderr(err error) string {
 	var exitErr *exec.ExitError
