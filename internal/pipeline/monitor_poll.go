@@ -189,6 +189,9 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 		// 2. Check for new comments.
 		classified := e.checkNewComments(ctx, phase.Name, monState)
 
+		// Apply profile behavior filters to classified comments.
+		classified = applyProfileFilters(classified, profile)
+
 		// 2a. Post canned acknowledgment for non-authoritative comments.
 		e.postAcknowledgments(ctx, phase.Name, classified, monState)
 
@@ -885,4 +888,42 @@ func hasCodeChanges(classified []ClassifiedComment) bool {
 		}
 	}
 	return false
+}
+
+// applyProfileFilters adjusts classified comments based on the monitor
+// profile's behavior flags. When profile is nil, comments pass through
+// unchanged.
+//
+//   - ShouldApplyNit() == false: nit comments with ActionApplyFix are
+//     downgraded to ActionAcknowledge and marked non-actionable.
+//   - ShouldRespondToNonAuth() == false: non-authoritative acknowledge
+//     comments are downgraded to ActionSkip so no acknowledgment is posted.
+func applyProfileFilters(classified []ClassifiedComment, profile *MonitorProfile) []ClassifiedComment {
+	if profile == nil {
+		return classified
+	}
+
+	result := make([]ClassifiedComment, len(classified))
+	copy(result, classified)
+
+	for i := range result {
+		cc := &result[i]
+
+		// Downgrade nits to acknowledge when profile disallows auto-fixing.
+		if !profile.ShouldApplyNit() && cc.Type == CommentNit && cc.Action == ActionApplyFix {
+			cc.Action = ActionAcknowledge
+			cc.Actionable = false
+			cc.Reason = "nit downgraded by profile (auto_fix_nits=false)"
+		}
+
+		// Skip acknowledgment for non-authoritative comments when profile
+		// disallows responding to them.
+		if !profile.ShouldRespondToNonAuth() && cc.NonAuthoritative && cc.Action == ActionAcknowledge {
+			cc.Action = ActionSkip
+			cc.Actionable = false
+			cc.Reason = "non-authoritative comment skipped by profile (respond_to_non_auth=false)"
+		}
+	}
+
+	return result
 }

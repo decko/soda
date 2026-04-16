@@ -1831,6 +1831,158 @@ func TestMonitor_GetCIStatusErrorEmitsWarning(t *testing.T) {
 	}
 }
 
+func TestApplyProfileFilters_NilProfile(t *testing.T) {
+	classified := []ClassifiedComment{
+		{Type: CommentNit, Action: ActionApplyFix, Actionable: true},
+	}
+	result := applyProfileFilters(classified, nil)
+	if len(result) != 1 || result[0].Action != ActionApplyFix {
+		t.Error("nil profile should pass through unchanged")
+	}
+}
+
+func TestApplyProfileFilters_DowngradeNits(t *testing.T) {
+	profile := &MonitorProfile{
+		Name:        ProfileConservative,
+		AutoFixNits: false,
+	}
+	classified := []ClassifiedComment{
+		{Type: CommentNit, Action: ActionApplyFix, Actionable: true, Reason: "nit"},
+		{Type: CommentCodeChange, Action: ActionApplyFix, Actionable: true, Reason: "code change"},
+	}
+	result := applyProfileFilters(classified, profile)
+	// Nit should be downgraded.
+	if result[0].Action != ActionAcknowledge || result[0].Actionable {
+		t.Errorf("nit should be downgraded: action=%s actionable=%v", result[0].Action, result[0].Actionable)
+	}
+	// Code change should remain unchanged.
+	if result[1].Action != ActionApplyFix || !result[1].Actionable {
+		t.Error("code change should remain unchanged")
+	}
+}
+
+func TestApplyProfileFilters_SkipNonAuth(t *testing.T) {
+	profile := &MonitorProfile{
+		Name:             ProfileConservative,
+		AutoFixNits:      true, // allow nits
+		RespondToNonAuth: false,
+	}
+	classified := []ClassifiedComment{
+		{
+			Type: CommentCodeChange, Action: ActionAcknowledge,
+			Actionable: false, NonAuthoritative: true, Reason: "non-auth",
+		},
+		{
+			Type: CommentCodeChange, Action: ActionApplyFix,
+			Actionable: true, NonAuthoritative: false, Reason: "authoritative",
+		},
+	}
+	result := applyProfileFilters(classified, profile)
+	// Non-auth acknowledge should be skipped.
+	if result[0].Action != ActionSkip {
+		t.Errorf("non-auth acknowledge should be skipped: action=%s", result[0].Action)
+	}
+	// Authoritative comment should remain unchanged.
+	if result[1].Action != ActionApplyFix {
+		t.Error("authoritative comment should remain unchanged")
+	}
+}
+
+func TestApplyProfileFilters_AggressiveAllowsAll(t *testing.T) {
+	profile := &MonitorProfile{
+		Name:             ProfileAggressive,
+		AutoFixNits:      true,
+		RespondToNonAuth: true,
+	}
+	classified := []ClassifiedComment{
+		{Type: CommentNit, Action: ActionApplyFix, Actionable: true},
+		{
+			Type: CommentCodeChange, Action: ActionAcknowledge,
+			Actionable: false, NonAuthoritative: true,
+		},
+	}
+	result := applyProfileFilters(classified, profile)
+	if result[0].Action != ActionApplyFix || !result[0].Actionable {
+		t.Error("aggressive profile should keep nit as apply_fix")
+	}
+	if result[1].Action != ActionAcknowledge {
+		t.Error("aggressive profile should keep non-auth as acknowledge")
+	}
+}
+
+func TestMonitor_ConservativeProfileDowngradesNits(t *testing.T) {
+	profile, _ := GetMonitorProfile(ProfileConservative)
+
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "open", Approved: false}},
+			{status: &PRStatus{State: "open", Approved: true}},
+		},
+		commentResponses: []mockCommentResponse{
+			{comments: []PRComment{
+				{ID: "IC_1", Author: "reviewer", Body: "nit: rename this variable"},
+			}},
+		},
+	}
+
+	engine, state, _ := setupMonitorEngine(t, poller, nil, func(cfg *EngineConfig) {
+		cfg.MonitorProfile = profile
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	monState, err := state.ReadMonitorState()
+	if err != nil {
+		t.Fatalf("ReadMonitorState: %v", err)
+	}
+
+	// Conservative profile should NOT treat nits as actionable.
+	if monState.ResponseRounds != 0 {
+		t.Errorf("ResponseRounds = %d, want 0 (nits downgraded by conservative profile)", monState.ResponseRounds)
+	}
+}
+
+func TestMonitor_ConservativeProfileSkipsNonAuthAcknowledgments(t *testing.T) {
+	profile, _ := GetMonitorProfile(ProfileConservative)
+
+	auth := NewCODEOWNERSAuthority([]CODEOWNERSRule{
+		{Pattern: "*.go", Owners: []string{"go-owner"}},
+	})
+
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "open", Approved: false}},
+			{status: &PRStatus{State: "open", Approved: true}},
+		},
+		commentResponses: []mockCommentResponse{
+			{comments: []PRComment{
+				{ID: "IC_1", Author: "random-user", Body: "Fix this please.", Path: "main.go"},
+			}},
+		},
+	}
+
+	engine, _, _ := setupMonitorEngine(t, poller, nil, func(cfg *EngineConfig) {
+		cfg.MonitorProfile = profile
+		cfg.SelfUser = "soda-bot"
+		cfg.AuthorityResolver = auth
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Conservative profile with respond_to_non_auth=false should NOT post
+	// an acknowledgment for non-authoritative comments.
+	poller.mu.Lock()
+	posted := poller.postedComments
+	poller.mu.Unlock()
+	if len(posted) != 0 {
+		t.Errorf("posted comments = %d, want 0 (non-auth skipped by profile)", len(posted))
+	}
+}
+
 func TestMonitor_CorruptStateReturnsError(t *testing.T) {
 	poller := &mockPRPoller{
 		statusResponses: []mockPRStatusResponse{
