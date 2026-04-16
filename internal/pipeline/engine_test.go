@@ -5523,3 +5523,229 @@ func TestEngine_OutputChunkNotLoggedToFile(t *testing.T) {
 		}
 	}
 }
+
+func TestEngine_CheckpointWithPauseSignal(t *testing.T) {
+	// Verify that sending false on PauseSignal after EventCheckpointPause
+	// unblocks the engine. Without the inCheckpoint fix, this test deadlocks.
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "plan",
+			Prompt:    "plan.md",
+			DependsOn: []string{"triage"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage done",
+					CostUSD: 0.10,
+				},
+			}},
+			"plan": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tasks":["task1"]}`),
+					RawText: "Plan done",
+					CostUSD: 0.20,
+				},
+			}},
+		},
+	}
+
+	pauseCh := make(chan bool, 8)
+	var events []Event
+	var mu sync.Mutex
+
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.Mode = Checkpoint
+		cfg.PauseSignal = pauseCh
+		cfg.OnEvent = func(e Event) {
+			mu.Lock()
+			events = append(events, e)
+			mu.Unlock()
+
+			// When the TUI receives a checkpoint pause, it sets paused=true
+			// and waits for Enter. When Enter is pressed, it sends false on
+			// the pause channel. Simulate this behavior.
+			if e.Kind == EventCheckpointPause {
+				go func() {
+					// Small delay to simulate user pressing Enter.
+					time.Sleep(50 * time.Millisecond)
+					pauseCh <- false
+				}()
+			}
+		}
+	})
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- engine.Run(context.Background())
+	}()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("engine deadlocked — Checkpoint + PauseSignal interaction is broken")
+	}
+
+	if !state.IsCompleted("triage") {
+		t.Error("triage should be completed")
+	}
+	if !state.IsCompleted("plan") {
+		t.Error("plan should be completed")
+	}
+
+	// Verify that checkpoint pause events were emitted.
+	mu.Lock()
+	defer mu.Unlock()
+	checkpointCount := 0
+	for _, ev := range events {
+		if ev.Kind == EventCheckpointPause {
+			checkpointCount++
+		}
+	}
+	if checkpointCount != 2 {
+		t.Errorf("expected 2 checkpoint pause events, got %d", checkpointCount)
+	}
+}
+
+func TestEngine_CheckpointWithPauseSignal_ChannelClose(t *testing.T) {
+	// Verify that closing the pause channel while the engine is blocked on a
+	// checkpoint unblocks it (TUI exit scenario).
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage done",
+					CostUSD: 0.10,
+				},
+			}},
+		},
+	}
+
+	pauseCh := make(chan bool, 8)
+
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.Mode = Checkpoint
+		cfg.PauseSignal = pauseCh
+		cfg.OnEvent = func(e Event) {
+			// Close channel on checkpoint to simulate TUI exit.
+			if e.Kind == EventCheckpointPause {
+				go func() {
+					time.Sleep(50 * time.Millisecond)
+					close(pauseCh)
+				}()
+			}
+		}
+	})
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- engine.Run(context.Background())
+	}()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("engine deadlocked — channel close did not unblock checkpoint")
+	}
+
+	if !state.IsCompleted("triage") {
+		t.Error("triage should be completed")
+	}
+}
+
+func TestEngine_CheckpointWithPauseSignal_PauseResumeBeforeCheckpoint(t *testing.T) {
+	// Verify that a regular p→p pause/resume cycle does not interfere with
+	// subsequent checkpoint pauses. The inCheckpoint flag should only be set
+	// when actually in a checkpoint wait.
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	pauseCh := make(chan bool, 8)
+	checkpointReached := make(chan struct{}, 1)
+
+	mock := &funcRunner{
+		fn: func(ctx context.Context, opts runner.RunOpts) (*runner.RunResult, error) {
+			// Simulate a p→p pause/resume cycle during the phase.
+			pauseCh <- true
+			time.Sleep(20 * time.Millisecond)
+			pauseCh <- false
+			time.Sleep(20 * time.Millisecond)
+			return &runner.RunResult{
+				Output:  json.RawMessage(`{"automatable":true}`),
+				RawText: "Triage done",
+				CostUSD: 0.10,
+			}, nil
+		},
+	}
+
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.Mode = Checkpoint
+		cfg.PauseSignal = pauseCh
+		cfg.OnEvent = func(e Event) {
+			if e.Kind == EventCheckpointPause {
+				checkpointReached <- struct{}{}
+				go func() {
+					time.Sleep(50 * time.Millisecond)
+					// Simulate TUI Enter: resume from checkpoint via pause signal.
+					pauseCh <- false
+				}()
+			}
+		}
+	})
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- engine.Run(context.Background())
+	}()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("engine deadlocked")
+	}
+
+	if !state.IsCompleted("triage") {
+		t.Error("triage should be completed")
+	}
+
+	// Verify checkpoint was actually reached.
+	select {
+	case <-checkpointReached:
+		// OK
+	default:
+		t.Error("checkpoint was never reached")
+	}
+}
