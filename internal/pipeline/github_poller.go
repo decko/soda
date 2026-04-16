@@ -114,7 +114,8 @@ func (p *GitHubPRPoller) GetNewComments(ctx context.Context, prURL string, after
 	// Get review comments (inline code review comments).
 	// --paginate --slurp produces [[page1...],[page2...]], so we use --jq 'flatten'
 	// to merge pages into a single flat array.
-	endpoint := fmt.Sprintf("repos/%s/%s/pulls/%s/comments", owner, repo, number)
+	// Sort by created ascending so newest comments are last (consistent with afterID filtering).
+	endpoint := fmt.Sprintf("repos/%s/%s/pulls/%s/comments?sort=created&direction=asc", owner, repo, number)
 	out, err := exec.CommandContext(ctx, p.command,
 		"api", endpoint,
 		"--paginate", "--slurp", "--jq", "flatten",
@@ -129,7 +130,8 @@ func (p *GitHubPRPoller) GetNewComments(ctx context.Context, prURL string, after
 	}
 
 	// Also get issue comments (top-level PR conversation comments).
-	issueEndpoint := fmt.Sprintf("repos/%s/%s/issues/%s/comments", owner, repo, number)
+	// Sort ascending so newest are last, consistent with afterID filtering.
+	issueEndpoint := fmt.Sprintf("repos/%s/%s/issues/%s/comments?sort=created&direction=asc", owner, repo, number)
 	issueOut, err := exec.CommandContext(ctx, p.command,
 		"api", issueEndpoint,
 		"--paginate", "--slurp", "--jq", "flatten",
@@ -293,10 +295,11 @@ func filterCommentsAfterID(comments []PRComment, afterID string) []PRComment {
 		result = append(result, c)
 	}
 
-	// If afterID was not found (e.g., deleted comment), treat as stale
-	// and return all comments to avoid silent data loss.
+	// If afterID was not found (e.g., deleted comment), return empty
+	// to avoid re-processing all comments. The next poll with an updated
+	// afterID will pick up new comments.
 	if !pastAfter {
-		return comments
+		return nil
 	}
 
 	return result

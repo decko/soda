@@ -915,7 +915,7 @@ func TestMonitor_ResponseExecution(t *testing.T) {
 
 	mock := &flexMockRunner{
 		responses: map[string][]flexResponse{
-			"monitor/response_1": {{
+			"monitor/response_0": {{
 				result: &runner.RunResult{
 					Output:  monitorOutput,
 					CostUSD: 0.15,
@@ -953,8 +953,8 @@ func TestMonitor_ResponseExecution(t *testing.T) {
 	mock.mu.Lock()
 	call := mock.calls[0]
 	mock.mu.Unlock()
-	if call.Phase != "monitor/response_1" {
-		t.Errorf("runner phase = %q, want %q", call.Phase, "monitor/response_1")
+	if call.Phase != "monitor/response_0" {
+		t.Errorf("runner phase = %q, want %q", call.Phase, "monitor/response_0")
 	}
 	if !strings.Contains(call.SystemPrompt, "IC_1") {
 		t.Error("system prompt should contain the comment ID")
@@ -977,8 +977,8 @@ func TestMonitor_ResponseExecution(t *testing.T) {
 	for _, evt := range *events {
 		if evt.Kind == EventMonitorResponseStarted {
 			hasStarted = true
-			if round, _ := evt.Data["response_round"].(int); round != 1 {
-				t.Errorf("response_started round = %d, want 1", round)
+			if round, _ := evt.Data["response_round"].(int); round != 0 {
+				t.Errorf("response_started round = %d, want 0", round)
 			}
 		}
 		if evt.Kind == EventMonitorResponseCompleted {
@@ -1029,7 +1029,7 @@ func TestMonitor_ResponseExecutionFailure(t *testing.T) {
 
 	mock := &flexMockRunner{
 		responses: map[string][]flexResponse{
-			"monitor/response_1": {{
+			"monitor/response_0": {{
 				err: fmt.Errorf("runner failed: API timeout"),
 			}},
 		},
@@ -1050,9 +1050,10 @@ func TestMonitor_ResponseExecutionFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadMonitorState: %v", err)
 	}
-	// Response rounds should still be incremented even on failure.
-	if monState.ResponseRounds != 1 {
-		t.Errorf("ResponseRounds = %d, want 1", monState.ResponseRounds)
+	// Response rounds should NOT be incremented on failure — transient failures
+	// should not consume the response budget.
+	if monState.ResponseRounds != 0 {
+		t.Errorf("ResponseRounds = %d, want 0 (not incremented on failure)", monState.ResponseRounds)
 	}
 
 	// Should have response_failed event.
@@ -1093,7 +1094,7 @@ func TestMonitor_ResponseRetriesTransientErrors(t *testing.T) {
 	// First call fails with transient error, second succeeds.
 	mock := &flexMockRunner{
 		responses: map[string][]flexResponse{
-			"monitor/response_1": {
+			"monitor/response_0": {
 				{err: &runner.TransientError{Err: fmt.Errorf("API rate limit")}},
 				{result: &runner.RunResult{Output: monitorOutput, CostUSD: 0.10}},
 			},
@@ -1236,13 +1237,13 @@ func TestMonitor_MultipleResponseRounds(t *testing.T) {
 
 	mock := &flexMockRunner{
 		responses: map[string][]flexResponse{
-			"monitor/response_1": {{
+			"monitor/response_0": {{
 				result: &runner.RunResult{
 					Output:  json.RawMessage(`{"ticket_key":"TEST-MON","pr_url":"https://github.com/decko/soda/pull/49","comments_handled":[{"comment_id":"IC_1","author":"reviewer","content":"Fix this.","action":"fixed","response":"Done.","classification":"code_change","authoritative":true}],"tests_passed":true}`),
 					CostUSD: 0.10,
 				},
 			}},
-			"monitor/response_2": {{
+			"monitor/response_1": {{
 				result: &runner.RunResult{
 					Output:  json.RawMessage(`{"ticket_key":"TEST-MON","pr_url":"https://github.com/decko/soda/pull/49","comments_handled":[{"comment_id":"IC_2","author":"reviewer","content":"Fix that too.","action":"fixed","response":"Done.","classification":"code_change","authoritative":true}],"tests_passed":true}`),
 					CostUSD: 0.12,
@@ -1314,7 +1315,7 @@ func TestMonitor_VerifyGatePassesWhenTestsPass(t *testing.T) {
 
 	mock := &flexMockRunner{
 		responses: map[string][]flexResponse{
-			"monitor/response_1": {{
+			"monitor/response_0": {{
 				result: &runner.RunResult{Output: monitorOutput, CostUSD: 0.10},
 			}},
 		},
@@ -1361,7 +1362,7 @@ func TestMonitor_VerifyGateFailsWhenTestsFail(t *testing.T) {
 
 	mock := &flexMockRunner{
 		responses: map[string][]flexResponse{
-			"monitor/response_1": {{
+			"monitor/response_0": {{
 				result: &runner.RunResult{Output: monitorOutput, CostUSD: 0.10},
 			}},
 		},
@@ -1420,7 +1421,7 @@ func TestMonitor_VerifyGateSkippedForReplyOnly(t *testing.T) {
 
 	mock := &flexMockRunner{
 		responses: map[string][]flexResponse{
-			"monitor/response_1": {{
+			"monitor/response_0": {{
 				result: &runner.RunResult{Output: monitorOutput, CostUSD: 0.05},
 			}},
 		},
@@ -1516,7 +1517,7 @@ func TestMonitor_ResponseSummaryPostedToPR(t *testing.T) {
 
 	mock := &flexMockRunner{
 		responses: map[string][]flexResponse{
-			"monitor/response_1": {{
+			"monitor/response_0": {{
 				result: &runner.RunResult{Output: monitorOutput, CostUSD: 0.10},
 			}},
 		},
@@ -1692,12 +1693,13 @@ func TestReplyOnlyTools(t *testing.T) {
 	tools := []string{"Read", "Write", "Edit", "Glob", "Grep", "Bash"}
 	got := replyOnlyTools(tools)
 	for _, tool := range got {
-		if tool == "Write" || tool == "Edit" {
+		if tool == "Write" || tool == "Edit" || tool == "Bash" {
 			t.Errorf("replyOnlyTools should exclude %q", tool)
 		}
 	}
-	if len(got) != 4 {
-		t.Errorf("replyOnlyTools returned %d tools, want 4", len(got))
+	// Should have: Read, Glob, Grep + Bash(git:*), Bash(go test:*), Bash(ls:*)
+	if len(got) != 6 {
+		t.Errorf("replyOnlyTools returned %d tools, want 6: %v", len(got), got)
 	}
 }
 
@@ -1740,7 +1742,7 @@ func TestMonitor_ReplyOnlyToolRestriction(t *testing.T) {
 
 	mock := &flexMockRunner{
 		responses: map[string][]flexResponse{
-			"monitor/response_1": {{
+			"monitor/response_0": {{
 				result: &runner.RunResult{
 					Output:  monitorOutput,
 					CostUSD: 0.10,

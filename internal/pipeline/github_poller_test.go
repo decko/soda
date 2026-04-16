@@ -112,14 +112,14 @@ func TestFilterCommentsAfterID(t *testing.T) {
 			wantIDs: nil,
 		},
 		{
-			name:    "not_found_returns_all",
+			name:    "not_found_returns_empty",
 			afterID: "IC_999",
-			wantIDs: []string{"RC_1", "IC_2", "RC_3"},
+			wantIDs: nil,
 		},
 		{
-			name:    "deleted_comment_returns_all",
+			name:    "deleted_comment_returns_empty",
 			afterID: "RC_deleted",
-			wantIDs: []string{"RC_1", "IC_2", "RC_3"},
+			wantIDs: nil,
 		},
 	}
 

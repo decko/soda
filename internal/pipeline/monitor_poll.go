@@ -217,13 +217,10 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 					},
 				})
 			} else {
-				// Increment only for fix attempts, not reply-only sessions.
-				if !isReplyOnly(classified) {
-					monState.ResponseRounds++
-				}
 				output, err := e.respondToComments(ctx, phase, classified, monState)
 				if err != nil {
-					// Non-fatal: log and continue polling.
+					// Non-fatal: log and continue polling. Do not increment
+					// ResponseRounds so transient failures don't consume the budget.
 					e.emit(Event{
 						Phase: phase.Name,
 						Kind:  EventMonitorResponseFailed,
@@ -233,6 +230,12 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 						},
 					})
 				} else if output != nil {
+					// Increment the appropriate counter after a successful response.
+					if isReplyOnly(classified) {
+						monState.ReplyRounds++
+					} else {
+						monState.ResponseRounds++
+					}
 					// Programmatic verify gate: when files were changed,
 					// check tests_passed to decide whether to allow push.
 					e.gateMonitorResponse(ctx, phase, output, monState)
@@ -281,9 +284,11 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 			return fmt.Errorf("engine: write monitor state: %w", err)
 		}
 
-		// Sleep until next poll.
+		// Sleep until next poll, respecting context cancellation.
 		interval := e.pollInterval(polling, now.Sub(startTime))
-		e.config.SleepFunc(interval)
+		if err := contextSleep(ctx, interval, e.config.SleepFunc); err != nil {
+			return ctx.Err()
+		}
 	}
 }
 
@@ -610,7 +615,15 @@ func (e *Engine) respondToComments(ctx context.Context, phase PhaseConfig, class
 		return nil, fmt.Errorf("engine: render monitor prompt: %w", err)
 	}
 
-	_ = e.state.WriteLog(phase.Name, fmt.Sprintf("response_%d_prompt", monState.ResponseRounds), []byte(rendered))
+	// Use separate naming for reply-only vs fix sessions to avoid collisions.
+	var sessionLabel string
+	if replyOnly {
+		sessionLabel = fmt.Sprintf("reply_%d", monState.ReplyRounds)
+	} else {
+		sessionLabel = fmt.Sprintf("response_%d", monState.ResponseRounds)
+	}
+
+	_ = e.state.WriteLog(phase.Name, sessionLabel+"_prompt", []byte(rendered))
 
 	// Build runner opts with remaining budget.
 	remaining := 0.0
@@ -625,7 +638,7 @@ func (e *Engine) respondToComments(ctx context.Context, phase PhaseConfig, class
 	}
 
 	opts := runner.RunOpts{
-		Phase:        fmt.Sprintf("%s/response_%d", phase.Name, monState.ResponseRounds),
+		Phase:        fmt.Sprintf("%s/%s", phase.Name, sessionLabel),
 		SystemPrompt: rendered,
 		UserPrompt:   "Address the review comments described in the system prompt.",
 		OutputSchema: phase.Schema,
@@ -885,16 +898,21 @@ func isReplyOnly(classified []ClassifiedComment) bool {
 	return hasActionable
 }
 
-// replyOnlyTools returns a restricted tool set that excludes Write and Edit,
-// suitable for reply-only sessions that should not modify code.
+// replyOnlyTools returns a restricted tool set suitable for reply-only sessions
+// that should not modify code. Excludes Write, Edit, and unrestricted Bash
+// (which could modify files via shell commands). Restricted Bash patterns
+// like Bash(git:*) are kept.
 func replyOnlyTools(tools []string) []string {
 	var filtered []string
 	for _, t := range tools {
-		if t == "Write" || t == "Edit" {
+		switch t {
+		case "Write", "Edit", "Bash":
 			continue
 		}
 		filtered = append(filtered, t)
 	}
+	// Add read-only Bash patterns for common inspection commands.
+	filtered = append(filtered, "Bash(git:*)", "Bash(go test:*)", "Bash(ls:*)")
 	return filtered
 }
 
@@ -907,6 +925,25 @@ func hasCodeChanges(classified []ClassifiedComment) bool {
 		}
 	}
 	return false
+}
+
+// contextSleep sleeps for the given duration but returns early if the context
+// is cancelled. Returns ctx.Err() on cancellation, nil on normal completion.
+func contextSleep(ctx context.Context, d time.Duration, sleepFn func(time.Duration)) error {
+	if sleepFn == nil {
+		sleepFn = time.Sleep
+	}
+	done := make(chan struct{})
+	go func() {
+		sleepFn(d)
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // applyProfileFilters adjusts classified comments based on the monitor

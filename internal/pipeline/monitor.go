@@ -25,6 +25,7 @@ type MonitorState struct {
 	PRURL             string        `json:"pr_url"`
 	PollCount         int           `json:"poll_count"`
 	ResponseRounds    int           `json:"response_rounds"`
+	ReplyRounds       int           `json:"reply_rounds"`
 	MaxResponseRounds int           `json:"max_response_rounds"`
 	LastCommentID     string        `json:"last_comment_id,omitempty"`
 	LastCIStatus      string        `json:"last_ci_status,omitempty"`
