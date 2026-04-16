@@ -2,10 +2,14 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/decko/soda/internal/git"
+	"github.com/decko/soda/internal/runner"
+	"github.com/decko/soda/schemas"
 )
 
 // runMonitor handles polling phases: polls the PR for changes, detects new
@@ -174,7 +178,40 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 		}
 
 		// 2. Check for new comments.
-		e.checkNewComments(ctx, phase.Name, monState)
+		classified := e.checkNewComments(ctx, phase.Name, monState)
+
+		// 2b. Response execution: run a Claude session for actionable comments.
+		if HasActionable(classified) {
+			monState.ResponseRounds++
+			if e.runner != nil {
+				// Check budget before each response round.
+				if e.config.MaxCostUSD > 0 && e.state.Meta().TotalCost >= e.config.MaxCostUSD {
+					e.emit(Event{
+						Phase: phase.Name,
+						Kind:  EventBudgetWarning,
+						Data: map[string]any{
+							"total_cost":     e.state.Meta().TotalCost,
+							"limit":          e.config.MaxCostUSD,
+							"skipping":       "monitor_response",
+							"response_round": monState.ResponseRounds,
+						},
+					})
+				} else {
+					_, err := e.respondToComments(ctx, phase, classified, monState)
+					if err != nil {
+						// Non-fatal: log and continue polling.
+						e.emit(Event{
+							Phase: phase.Name,
+							Kind:  EventMonitorResponseFailed,
+							Data: map[string]any{
+								"response_round": monState.ResponseRounds,
+								"error":          err.Error(),
+							},
+						})
+					}
+				}
+			}
+		}
 
 		// 3. Check CI status changes.
 		e.checkCIStatus(ctx, phase.Name, monState)
@@ -261,17 +298,19 @@ func (e *Engine) checkPRStatus(ctx context.Context, phaseName string, monState *
 	return false, nil
 }
 
-// checkNewComments polls for new review comments, classifies them,
-// and only increments response rounds for actionable comments.
-func (e *Engine) checkNewComments(ctx context.Context, phaseName string, monState *MonitorState) {
+// checkNewComments polls for new review comments and classifies them.
+// Returns the classified comments so the caller can trigger response execution.
+// ResponseRounds is NOT incremented here — the caller handles that after
+// response execution.
+func (e *Engine) checkNewComments(ctx context.Context, phaseName string, monState *MonitorState) []ClassifiedComment {
 	comments, err := e.config.PRPoller.GetNewComments(ctx, monState.PRURL, monState.LastCommentID)
 	if err != nil {
 		// Non-fatal: log and continue.
-		return
+		return nil
 	}
 
 	if len(comments) == 0 {
-		return
+		return nil
 	}
 
 	// Update last comment ID to the latest one.
@@ -315,11 +354,7 @@ func (e *Engine) checkNewComments(ctx context.Context, phaseName string, monStat
 		}
 	}
 
-	// Only increment response rounds if there are actionable comments.
 	actionable := HasActionable(classified)
-	if actionable {
-		monState.ResponseRounds++
-	}
 
 	commentSummaries := make([]map[string]any, 0, len(classified))
 	for _, cc := range classified {
@@ -343,6 +378,8 @@ func (e *Engine) checkNewComments(ctx context.Context, phaseName string, monStat
 			"comments":        commentSummaries,
 		},
 	})
+
+	return classified
 }
 
 // checkCIStatus polls CI status and emits events on status changes.
@@ -464,4 +501,146 @@ func (e *Engine) pollInterval(polling *PollingConfig, elapsed time.Duration) tim
 		return polling.MaxInterval.Duration
 	}
 	return polling.InitialInterval.Duration
+}
+
+// respondToComments runs a Claude session to address actionable review comments.
+// It renders the monitor prompt with the classified comments, invokes the runner,
+// and records the result. Returns the parsed MonitorOutput and any error.
+func (e *Engine) respondToComments(ctx context.Context, phase PhaseConfig, classified []ClassifiedComment, monState *MonitorState) (*schemas.MonitorOutput, error) {
+	actionableCount := countActionable(classified)
+	e.emit(Event{
+		Phase: phase.Name,
+		Kind:  EventMonitorResponseStarted,
+		Data: map[string]any{
+			"response_round":   monState.ResponseRounds,
+			"comment_count":    len(classified),
+			"actionable_count": actionableCount,
+		},
+	})
+
+	// Build prompt data from phase dependencies.
+	promptData, err := e.buildPromptData(phase)
+	if err != nil {
+		return nil, fmt.Errorf("engine: build prompt data for monitor response: %w", err)
+	}
+
+	// Inject classified review comments into the prompt.
+	promptData.ReviewComments = formatCommentsForPrompt(classified)
+
+	// Load and render the monitor prompt template.
+	loadResult, err := e.config.Loader.LoadWithSource(phase.Prompt)
+	if err != nil {
+		return nil, fmt.Errorf("engine: load monitor prompt: %w", err)
+	}
+
+	rendered, err := RenderPrompt(loadResult.Content, promptData)
+	if err != nil {
+		return nil, fmt.Errorf("engine: render monitor prompt: %w", err)
+	}
+
+	_ = e.state.WriteLog(phase.Name, fmt.Sprintf("response_%d_prompt", monState.ResponseRounds), []byte(rendered))
+
+	// Build runner opts with remaining budget.
+	remaining := 0.0
+	if e.config.MaxCostUSD > 0 {
+		remaining = e.config.MaxCostUSD - e.state.Meta().TotalCost
+	}
+
+	opts := runner.RunOpts{
+		Phase:        fmt.Sprintf("%s/response_%d", phase.Name, monState.ResponseRounds),
+		SystemPrompt: rendered,
+		UserPrompt:   "Address the review comments described in the system prompt.",
+		OutputSchema: phase.Schema,
+		AllowedTools: phase.Tools,
+		MaxBudgetUSD: remaining,
+		WorkDir:      e.workDir(phase),
+		Model:        e.config.Model,
+		Timeout:      phase.Timeout.Duration,
+	}
+
+	result, err := e.runner.Run(ctx, opts)
+	if err != nil {
+		return nil, fmt.Errorf("engine: monitor response round %d: %w", monState.ResponseRounds, err)
+	}
+
+	// Record cost.
+	if err := e.state.AccumulateCost(phase.Name, result.CostUSD); err != nil {
+		return nil, fmt.Errorf("engine: accumulate monitor response cost: %w", err)
+	}
+
+	// Parse output.
+	var output schemas.MonitorOutput
+	if result.Output != nil {
+		if parseErr := json.Unmarshal(result.Output, &output); parseErr != nil {
+			e.emit(Event{
+				Phase: phase.Name,
+				Kind:  EventMonitorWarning,
+				Data: map[string]any{
+					"warning": fmt.Sprintf("parse monitor response output: %v", parseErr),
+				},
+			})
+		}
+	}
+
+	// Write response output as a log for debugging.
+	if result.Output != nil {
+		_ = e.state.WriteLog(phase.Name, fmt.Sprintf("response_%d_output", monState.ResponseRounds), result.Output)
+	}
+
+	// Write the result so PhaseSummary and other consumers can read it.
+	// Each response round overwrites the previous result; the final round
+	// represents the latest state.
+	if result.Output != nil {
+		_ = e.state.WriteResult(phase.Name, result.Output)
+	}
+
+	e.emit(Event{
+		Phase: phase.Name,
+		Kind:  EventMonitorResponseCompleted,
+		Data: map[string]any{
+			"response_round":   monState.ResponseRounds,
+			"comments_handled": len(output.CommentsHandled),
+			"files_changed":    len(output.FilesChanged),
+			"commits":          len(output.Commits),
+			"cost":             result.CostUSD,
+		},
+	})
+
+	return &output, nil
+}
+
+// formatCommentsForPrompt converts classified comments into a human-readable
+// format suitable for injection into the monitor prompt template's
+// ReviewComments field.
+func formatCommentsForPrompt(classified []ClassifiedComment) string {
+	var sb strings.Builder
+	for idx, cc := range classified {
+		if idx > 0 {
+			sb.WriteString("\n")
+		}
+		sb.WriteString(fmt.Sprintf("### Comment %s by %s\n", cc.Comment.ID, cc.Comment.Author))
+		sb.WriteString(fmt.Sprintf("Classification: %s | Action: %s\n", cc.Type, cc.Action))
+		if cc.Comment.Path != "" {
+			if cc.Comment.Line > 0 {
+				sb.WriteString(fmt.Sprintf("File: %s:%d\n", cc.Comment.Path, cc.Comment.Line))
+			} else {
+				sb.WriteString(fmt.Sprintf("File: %s\n", cc.Comment.Path))
+			}
+		}
+		sb.WriteString("\n")
+		sb.WriteString(cc.Comment.Body)
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
+// countActionable returns the number of actionable comments in a classified slice.
+func countActionable(classified []ClassifiedComment) int {
+	count := 0
+	for _, cc := range classified {
+		if cc.Actionable {
+			count++
+		}
+	}
+	return count
 }
