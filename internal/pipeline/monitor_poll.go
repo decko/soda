@@ -617,7 +617,7 @@ func (e *Engine) respondToComments(ctx context.Context, phase PhaseConfig, class
 		Timeout:      phase.Timeout.Duration,
 	}
 
-	result, err := e.runner.Run(ctx, opts)
+	result, err := e.runWithRetry(ctx, phase, opts)
 	if err != nil {
 		return nil, fmt.Errorf("engine: monitor response round %d: %w", monState.ResponseRounds, err)
 	}

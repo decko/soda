@@ -1070,6 +1070,66 @@ func TestMonitor_ResponseExecutionFailure(t *testing.T) {
 	}
 }
 
+func TestMonitor_ResponseRetriesTransientErrors(t *testing.T) {
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "open", Approved: false}},
+			{status: &PRStatus{State: "open", Approved: true}},
+		},
+		commentResponses: []mockCommentResponse{
+			{comments: []PRComment{
+				{ID: "IC_1", Author: "reviewer", Body: "Fix this."},
+			}},
+		},
+	}
+
+	monitorOutput := json.RawMessage(`{
+		"ticket_key":"TEST-MON",
+		"pr_url":"https://github.com/decko/soda/pull/49",
+		"comments_handled":[{"comment_id":"IC_1","author":"reviewer","content":"Fix this.","action":"fixed","response":"Done.","classification":"code_change","authoritative":true}],
+		"tests_passed":true
+	}`)
+
+	// First call fails with transient error, second succeeds.
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"monitor/response_1": {
+				{err: &runner.TransientError{Err: fmt.Errorf("API rate limit")}},
+				{result: &runner.RunResult{Output: monitorOutput, CostUSD: 0.10}},
+			},
+		},
+	}
+
+	engine, state, events := setupMonitorEngineWithRunner(t, mock, poller, nil)
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !state.IsCompleted("monitor") {
+		t.Error("monitor should be completed after successful retry")
+	}
+
+	// Verify runner was called twice (initial + retry).
+	mock.mu.Lock()
+	callCount := len(mock.calls)
+	mock.mu.Unlock()
+	if callCount != 2 {
+		t.Errorf("runner call count = %d, want 2 (initial + retry)", callCount)
+	}
+
+	// Should have retry event.
+	hasRetry := false
+	for _, evt := range *events {
+		if evt.Kind == EventPhaseRetrying {
+			hasRetry = true
+		}
+	}
+	if hasRetry == false {
+		t.Error("phase_retrying event not emitted for transient error retry")
+	}
+}
+
 func TestMonitor_NilRunnerSkipsResponse(t *testing.T) {
 	poller := &mockPRPoller{
 		statusResponses: []mockPRStatusResponse{
