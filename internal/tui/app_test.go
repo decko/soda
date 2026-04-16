@@ -48,7 +48,7 @@ func TestPhaseCompletedSetsDone(t *testing.T) {
 		Phase: "triage",
 		Data: map[string]any{
 			"summary":    "small, my-service",
-			"duration_s": 8.0,
+			"duration_ms": float64(8000),
 			"cost":       0.12,
 			"tokens_in":  3200.0,
 			"tokens_out": 850.0,
@@ -261,7 +261,7 @@ func TestPipelineViewPhaseIcons(t *testing.T) {
 	m.handleEvent(pipeline.Event{
 		Kind:  pipeline.EventPhaseCompleted,
 		Phase: "triage",
-		Data:  map[string]any{"summary": "small, my-service", "duration_s": 8.0},
+		Data:  map[string]any{"summary": "small, my-service", "duration_ms": float64(8000)},
 	})
 	v = m.pipeline.View()
 	if !strings.Contains(v, "✓") {
@@ -438,5 +438,111 @@ func TestCheckpointPause(t *testing.T) {
 	mm := m2.(Model)
 	if mm.paused {
 		t.Error("expected unpaused after Enter")
+	}
+}
+
+func TestPauseSignalSent(t *testing.T) {
+	tk := ticket.Ticket{
+		Key:     "TEST-1",
+		Summary: "Test ticket",
+		Type:    "Task",
+	}
+	phases := []string{"triage", "plan"}
+	events := make(chan pipeline.Event, 10)
+	pauseSignal := make(chan bool, 10)
+	m := New(tk, phases, events, pauseSignal)
+
+	m.handleEvent(pipeline.Event{Kind: pipeline.EventPhaseStarted, Phase: "triage"})
+
+	// Press p to pause
+	m2, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	mm := m2.(Model)
+	if !mm.paused {
+		t.Error("expected paused")
+	}
+
+	// Verify pause signal was sent
+	select {
+	case paused := <-pauseSignal:
+		if !paused {
+			t.Error("expected true on pause signal")
+		}
+	default:
+		t.Error("no pause signal received")
+	}
+
+	// Press p to resume
+	m3, _ := mm.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	mm3 := m3.(Model)
+	if mm3.paused {
+		t.Error("expected unpaused")
+	}
+
+	// Verify resume signal was sent
+	select {
+	case paused := <-pauseSignal:
+		if paused {
+			t.Error("expected false on resume signal")
+		}
+	default:
+		t.Error("no resume signal received")
+	}
+}
+
+func TestSendPauseSignalNonBlocking(t *testing.T) {
+	// Verify that sendPauseSignal does not block when the channel is full.
+	ch := make(chan bool) // unbuffered channel with no receiver
+	m := &Model{
+		pauseSignal: ch,
+		pauseG:      &pauseGuard{},
+	}
+
+	done := make(chan struct{})
+	go func() {
+		m.sendPauseSignal(true) // should not block
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// OK — did not block
+	case <-time.After(2 * time.Second):
+		t.Fatal("sendPauseSignal blocked on full channel")
+	}
+}
+
+func TestEnterResumeSignalSent(t *testing.T) {
+	tk := ticket.Ticket{
+		Key:     "TEST-1",
+		Summary: "Test ticket",
+		Type:    "Task",
+	}
+	phases := []string{"triage"}
+	events := make(chan pipeline.Event, 10)
+	pauseSignal := make(chan bool, 10)
+	m := New(tk, phases, events, pauseSignal)
+
+	// Simulate checkpoint pause
+	m.handleEvent(pipeline.Event{Kind: pipeline.EventCheckpointPause})
+	if !m.paused {
+		t.Error("expected paused after checkpoint")
+	}
+
+	// Drain the channel (checkpoint doesn't send pause signal itself)
+	// Press Enter to resume
+	m2, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	mm := m2.(Model)
+	if mm.paused {
+		t.Error("expected unpaused after Enter")
+	}
+
+	// Verify resume signal was sent
+	select {
+	case paused := <-pauseSignal:
+		if paused {
+			t.Error("expected false (resume) signal on Enter")
+		}
+	default:
+		t.Error("no resume signal received on Enter")
 	}
 }

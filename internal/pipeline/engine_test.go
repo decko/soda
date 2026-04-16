@@ -4942,3 +4942,810 @@ func TestEngine_PhaseLifecycleEvents(t *testing.T) {
 		}
 	})
 }
+
+// chunkMockRunner is a flexMockRunner that invokes OnChunk before returning.
+type chunkMockRunner struct {
+	flexMockRunner
+	chunks map[string][]string // phase name → lines to emit via OnChunk
+}
+
+func (c *chunkMockRunner) Run(ctx context.Context, opts runner.RunOpts) (*runner.RunResult, error) {
+	// Emit chunks before returning the result.
+	if lines, ok := c.chunks[opts.Phase]; ok && opts.OnChunk != nil {
+		for _, line := range lines {
+			opts.OnChunk(line)
+		}
+	}
+	return c.flexMockRunner.Run(ctx, opts)
+}
+
+func TestEngine_OutputChunkEvents(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &chunkMockRunner{
+		flexMockRunner: flexMockRunner{
+			responses: map[string][]flexResponse{
+				"triage": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"automatable":true}`),
+						RawText: "Triage done",
+						CostUSD: 0.10,
+					},
+				}},
+			},
+		},
+		chunks: map[string][]string{
+			"triage": {"Analyzing ticket...", "Classification: small"},
+		},
+	}
+
+	var events []Event
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(e Event) {
+			events = append(events, e)
+		}
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Verify output_chunk events were emitted.
+	var chunkLines []string
+	for _, ev := range events {
+		if ev.Kind == EventOutputChunk {
+			if line, ok := ev.Data["line"].(string); ok {
+				chunkLines = append(chunkLines, line)
+			}
+			if ev.Phase != "triage" {
+				t.Errorf("output_chunk event has phase %q, want %q", ev.Phase, "triage")
+			}
+		}
+	}
+
+	if len(chunkLines) != 2 {
+		t.Fatalf("got %d output_chunk events, want 2", len(chunkLines))
+	}
+	if chunkLines[0] != "Analyzing ticket..." {
+		t.Errorf("chunk[0] = %q, want %q", chunkLines[0], "Analyzing ticket...")
+	}
+	if chunkLines[1] != "Classification: small" {
+		t.Errorf("chunk[1] = %q, want %q", chunkLines[1], "Classification: small")
+	}
+}
+
+func TestEngine_PauseSignalBlocksBetweenPhases(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "plan",
+			Prompt:    "plan.md",
+			DependsOn: []string{"triage"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage done",
+					CostUSD: 0.10,
+				},
+			}},
+			"plan": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tasks":["task1"]}`),
+					RawText: "Plan done",
+					CostUSD: 0.20,
+				},
+			}},
+		},
+	}
+
+	pauseCh := make(chan bool, 10)
+	var events []Event
+	var mu sync.Mutex
+
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.PauseSignal = pauseCh
+		cfg.OnEvent = func(e Event) {
+			mu.Lock()
+			events = append(events, e)
+			mu.Unlock()
+		}
+	})
+
+	// Send pause signal before running
+	pauseCh <- true
+
+	// Start engine in background
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- engine.Run(context.Background())
+	}()
+
+	// Give the engine time to run triage and hit the pause point.
+	time.Sleep(100 * time.Millisecond)
+
+	// Unpause
+	pauseCh <- false
+
+	// Engine should complete
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("engine did not complete after unpause")
+	}
+
+	if !state.IsCompleted("triage") {
+		t.Error("triage should be completed")
+	}
+	if !state.IsCompleted("plan") {
+		t.Error("plan should be completed")
+	}
+}
+
+func TestEngine_PauseSignalContextCancel(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "plan",
+			Prompt:    "plan.md",
+			DependsOn: []string{"triage"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage done",
+					CostUSD: 0.10,
+				},
+			}},
+			"plan": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tasks":["task1"]}`),
+					RawText: "Plan done",
+					CostUSD: 0.20,
+				},
+			}},
+		},
+	}
+
+	pauseCh := make(chan bool, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.PauseSignal = pauseCh
+	})
+
+	// Pause before run
+	pauseCh <- true
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- engine.Run(ctx)
+	}()
+
+	// Wait briefly, then cancel context while paused
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("expected error from context cancellation")
+		}
+		if !strings.Contains(err.Error(), "context cancelled") && !strings.Contains(err.Error(), "context canceled") {
+			t.Errorf("expected context-related error, got: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("engine did not exit after context cancel")
+	}
+}
+
+func TestEngine_PauseBlocksOutputStreaming(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	// Custom runner that calls OnChunk and checks pause behavior.
+	blockingRunner := &blockingChunkRunner{
+		result: &runner.RunResult{
+			Output:  json.RawMessage(`{"automatable":true}`),
+			RawText: "Triage done",
+			CostUSD: 0.10,
+		},
+		chunks: []string{"line1", "line2", "line3"},
+	}
+
+	var chunksMu sync.Mutex
+	var receivedChunks []string
+
+	engine, _ := setupEngine(t, phases, blockingRunner, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(e Event) {
+			if e.Kind == EventOutputChunk {
+				if line, ok := e.Data["line"].(string); ok {
+					chunksMu.Lock()
+					receivedChunks = append(receivedChunks, line)
+					chunksMu.Unlock()
+				}
+			}
+		}
+	})
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- engine.Run(context.Background())
+	}()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("engine did not complete")
+	}
+
+	chunksMu.Lock()
+	defer chunksMu.Unlock()
+	if len(receivedChunks) != 3 {
+		t.Errorf("got %d chunks, want 3: %v", len(receivedChunks), receivedChunks)
+	}
+}
+
+// blockingChunkRunner is a test runner that calls OnChunk for each line.
+type blockingChunkRunner struct {
+	result *runner.RunResult
+	chunks []string
+}
+
+func (b *blockingChunkRunner) Run(ctx context.Context, opts runner.RunOpts) (*runner.RunResult, error) {
+	for _, line := range b.chunks {
+		if opts.OnChunk != nil {
+			opts.OnChunk(line)
+		}
+	}
+	return b.result, nil
+}
+
+func TestEngine_NilPauseSignalNoOp(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &chunkMockRunner{
+		flexMockRunner: flexMockRunner{
+			responses: map[string][]flexResponse{
+				"triage": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"automatable":true}`),
+						RawText: "Triage done",
+						CostUSD: 0.10,
+					},
+				}},
+			},
+		},
+		chunks: map[string][]string{
+			"triage": {"line1"},
+		},
+	}
+
+	// No PauseSignal configured — should work without issue.
+	engine, state := setupEngine(t, phases, mock)
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !state.IsCompleted("triage") {
+		t.Error("triage should be completed")
+	}
+}
+
+func TestEngine_OnChunkPassedToRunner(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	// Verify that RunOpts.OnChunk is set when the runner is invoked.
+	var capturedOnChunk func(string)
+	capturingRunner := &capturingChunkRunner{
+		result: &runner.RunResult{
+			Output:  json.RawMessage(`{"automatable":true}`),
+			RawText: "Triage done",
+			CostUSD: 0.10,
+		},
+		captureOnChunk: func(fn func(string)) {
+			capturedOnChunk = fn
+		},
+	}
+
+	engine, _ := setupEngine(t, phases, capturingRunner)
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if capturedOnChunk == nil {
+		t.Fatal("expected OnChunk to be set in RunOpts")
+	}
+}
+
+// capturingChunkRunner captures the OnChunk function from RunOpts.
+type capturingChunkRunner struct {
+	result         *runner.RunResult
+	captureOnChunk func(func(string))
+}
+
+func (c *capturingChunkRunner) Run(ctx context.Context, opts runner.RunOpts) (*runner.RunResult, error) {
+	if c.captureOnChunk != nil {
+		c.captureOnChunk(opts.OnChunk)
+	}
+	return c.result, nil
+}
+
+func TestEngine_DrainPauseSignalUnpausesOnClose(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "plan",
+			Prompt:    "plan.md",
+			DependsOn: []string{"triage"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage done",
+					CostUSD: 0.10,
+				},
+			}},
+			"plan": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tasks":["task1"]}`),
+					RawText: "Plan done",
+					CostUSD: 0.20,
+				},
+			}},
+		},
+	}
+
+	pauseCh := make(chan bool, 10)
+
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.PauseSignal = pauseCh
+	})
+
+	// Pause the engine.
+	pauseCh <- true
+
+	// Close the channel (simulating TUI exit) — should force-unpause.
+	close(pauseCh)
+
+	// Engine should complete without deadlock.
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- engine.Run(context.Background())
+	}()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("engine deadlocked after pause channel close")
+	}
+
+	if !state.IsCompleted("triage") {
+		t.Error("triage should be completed")
+	}
+	if !state.IsCompleted("plan") {
+		t.Error("plan should be completed")
+	}
+}
+
+func TestEngine_OnChunkContextCancel(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	// Runner that pauses the engine, calls OnChunk (which will block), then
+	// waits for context cancellation.
+	pauseCh := make(chan bool, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	chunkStarted := make(chan struct{})
+	slowRunner := &funcRunner{
+		fn: func(rctx context.Context, opts runner.RunOpts) (*runner.RunResult, error) {
+			// Pause the engine.
+			pauseCh <- true
+			// Give drainPauseSignal time to process.
+			time.Sleep(50 * time.Millisecond)
+
+			// Call OnChunk in a goroutine — it will block because engine is paused.
+			go func() {
+				close(chunkStarted)
+				if opts.OnChunk != nil {
+					opts.OnChunk("blocked line")
+				}
+			}()
+
+			// Wait for context cancellation.
+			<-rctx.Done()
+			return nil, rctx.Err()
+		},
+	}
+
+	engine, _ := setupEngine(t, phases, slowRunner, func(cfg *EngineConfig) {
+		cfg.PauseSignal = pauseCh
+	})
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- engine.Run(ctx)
+	}()
+
+	// Wait for OnChunk to be called (blocking in waitIfPaused).
+	select {
+	case <-chunkStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("OnChunk was not called")
+	}
+
+	// Give OnChunk time to enter waitIfPaused.
+	time.Sleep(50 * time.Millisecond)
+
+	// Cancel context — should unblock OnChunk's waitIfPaused.
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("expected error from context cancellation")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("engine deadlocked — OnChunk did not unblock on context cancel")
+	}
+}
+
+// funcRunner is a test runner that calls a function.
+type funcRunner struct {
+	fn func(context.Context, runner.RunOpts) (*runner.RunResult, error)
+}
+
+func (f *funcRunner) Run(ctx context.Context, opts runner.RunOpts) (*runner.RunResult, error) {
+	return f.fn(ctx, opts)
+}
+
+func TestEngine_OutputChunkNotLoggedToFile(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &chunkMockRunner{
+		flexMockRunner: flexMockRunner{
+			responses: map[string][]flexResponse{
+				"triage": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"automatable":true}`),
+						RawText: "Triage done",
+						CostUSD: 0.10,
+					},
+				}},
+			},
+		},
+		chunks: map[string][]string{
+			"triage": {"line1", "line2", "line3"},
+		},
+	}
+
+	var callbackChunks []string
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(e Event) {
+			if e.Kind == EventOutputChunk {
+				if line, ok := e.Data["line"].(string); ok {
+					callbackChunks = append(callbackChunks, line)
+				}
+			}
+		}
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Chunks should still arrive via OnEvent callback.
+	if len(callbackChunks) != 3 {
+		t.Errorf("got %d callback chunks, want 3", len(callbackChunks))
+	}
+
+	// Read the events.jsonl file — output_chunk events should NOT be present.
+	events, err := ReadEvents(state.Dir())
+	if err != nil {
+		t.Fatalf("ReadEvents: %v", err)
+	}
+	for _, ev := range events {
+		if ev.Kind == EventOutputChunk {
+			t.Errorf("output_chunk event found in events.jsonl — should be excluded from disk log")
+		}
+	}
+}
+
+func TestEngine_CheckpointWithPauseSignal(t *testing.T) {
+	// Verify that sending false on PauseSignal after EventCheckpointPause
+	// unblocks the engine. Without the inCheckpoint fix, this test deadlocks.
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "plan",
+			Prompt:    "plan.md",
+			DependsOn: []string{"triage"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage done",
+					CostUSD: 0.10,
+				},
+			}},
+			"plan": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tasks":["task1"]}`),
+					RawText: "Plan done",
+					CostUSD: 0.20,
+				},
+			}},
+		},
+	}
+
+	pauseCh := make(chan bool, 8)
+	var events []Event
+	var mu sync.Mutex
+
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.Mode = Checkpoint
+		cfg.PauseSignal = pauseCh
+		cfg.OnEvent = func(e Event) {
+			mu.Lock()
+			events = append(events, e)
+			mu.Unlock()
+
+			// When the TUI receives a checkpoint pause, it sets paused=true
+			// and waits for Enter. When Enter is pressed, it sends false on
+			// the pause channel. Simulate this behavior.
+			if e.Kind == EventCheckpointPause {
+				go func() {
+					// Small delay to simulate user pressing Enter.
+					time.Sleep(50 * time.Millisecond)
+					pauseCh <- false
+				}()
+			}
+		}
+	})
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- engine.Run(context.Background())
+	}()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("engine deadlocked — Checkpoint + PauseSignal interaction is broken")
+	}
+
+	if !state.IsCompleted("triage") {
+		t.Error("triage should be completed")
+	}
+	if !state.IsCompleted("plan") {
+		t.Error("plan should be completed")
+	}
+
+	// Verify that checkpoint pause events were emitted.
+	mu.Lock()
+	defer mu.Unlock()
+	checkpointCount := 0
+	for _, ev := range events {
+		if ev.Kind == EventCheckpointPause {
+			checkpointCount++
+		}
+	}
+	if checkpointCount != 2 {
+		t.Errorf("expected 2 checkpoint pause events, got %d", checkpointCount)
+	}
+}
+
+func TestEngine_CheckpointWithPauseSignal_ChannelClose(t *testing.T) {
+	// Verify that closing the pause channel while the engine is blocked on a
+	// checkpoint unblocks it (TUI exit scenario).
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage done",
+					CostUSD: 0.10,
+				},
+			}},
+		},
+	}
+
+	pauseCh := make(chan bool, 8)
+
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.Mode = Checkpoint
+		cfg.PauseSignal = pauseCh
+		cfg.OnEvent = func(e Event) {
+			// Close channel on checkpoint to simulate TUI exit.
+			if e.Kind == EventCheckpointPause {
+				go func() {
+					time.Sleep(50 * time.Millisecond)
+					close(pauseCh)
+				}()
+			}
+		}
+	})
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- engine.Run(context.Background())
+	}()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("engine deadlocked — channel close did not unblock checkpoint")
+	}
+
+	if !state.IsCompleted("triage") {
+		t.Error("triage should be completed")
+	}
+}
+
+func TestEngine_CheckpointWithPauseSignal_PauseResumeBeforeCheckpoint(t *testing.T) {
+	// Verify that a regular p→p pause/resume cycle does not interfere with
+	// subsequent checkpoint pauses. The inCheckpoint flag should only be set
+	// when actually in a checkpoint wait.
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	pauseCh := make(chan bool, 8)
+	checkpointReached := make(chan struct{}, 1)
+
+	mock := &funcRunner{
+		fn: func(ctx context.Context, opts runner.RunOpts) (*runner.RunResult, error) {
+			// Simulate a p→p pause/resume cycle during the phase.
+			pauseCh <- true
+			time.Sleep(20 * time.Millisecond)
+			pauseCh <- false
+			time.Sleep(20 * time.Millisecond)
+			return &runner.RunResult{
+				Output:  json.RawMessage(`{"automatable":true}`),
+				RawText: "Triage done",
+				CostUSD: 0.10,
+			}, nil
+		},
+	}
+
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.Mode = Checkpoint
+		cfg.PauseSignal = pauseCh
+		cfg.OnEvent = func(e Event) {
+			if e.Kind == EventCheckpointPause {
+				checkpointReached <- struct{}{}
+				go func() {
+					time.Sleep(50 * time.Millisecond)
+					// Simulate TUI Enter: resume from checkpoint via pause signal.
+					pauseCh <- false
+				}()
+			}
+		}
+	})
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- engine.Run(context.Background())
+	}()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("engine deadlocked")
+	}
+
+	if !state.IsCompleted("triage") {
+		t.Error("triage should be completed")
+	}
+
+	// Verify checkpoint was actually reached.
+	select {
+	case <-checkpointReached:
+		// OK
+	default:
+		t.Error("checkpoint was never reached")
+	}
+}

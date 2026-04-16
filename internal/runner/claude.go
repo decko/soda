@@ -49,7 +49,7 @@ func (r *ClaudeRunner) Run(ctx context.Context, opts RunOpts) (*RunResult, error
 		claudeOpts.SystemPromptPath = tmpPath
 	}
 
-	result, err := r.inner.Stream(ctx, claudeOpts, nil)
+	result, err := r.inner.Stream(ctx, claudeOpts, opts.OnChunk)
 	if err != nil {
 		return nil, mapClaudeError(err)
 	}

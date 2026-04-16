@@ -14,12 +14,15 @@ import (
 	"text/tabwriter"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/decko/soda/internal/claude"
 	"github.com/decko/soda/internal/config"
 	"github.com/decko/soda/internal/git"
 	"github.com/decko/soda/internal/pipeline"
 	"github.com/decko/soda/internal/progress"
 	"github.com/decko/soda/internal/runner"
+	"github.com/decko/soda/internal/ticket"
+	"github.com/decko/soda/internal/tui"
 	"github.com/decko/soda/schemas"
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
@@ -43,6 +46,7 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().String("from", "", "resume from phase (or 'last')")
 	cmd.Flags().Bool("dry-run", false, "render prompts without executing")
 	cmd.Flags().Bool("mock", false, "use mock runner for testing")
+	cmd.Flags().Bool("tui", false, "use interactive TUI display")
 
 	return cmd
 }
@@ -169,7 +173,10 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 	// Load project context files
 	promptContext := buildPromptContext(cfg)
 
-	// Set up progress display
+	// Check if TUI mode is requested.
+	useTUI, _ := cmd.Flags().GetBool("tui")
+
+	// Set up progress display (used in non-TUI mode).
 	isTTY := isatty.IsTerminal(os.Stdout.Fd()) || isatty.IsCygwinTerminal(os.Stdout.Fd())
 	prog := progress.New(os.Stdout, isTTY)
 
@@ -179,6 +186,17 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 
 	// Set up PR poller for monitor phase.
 	prPoller := pipeline.NewGitHubPRPoller("")
+
+	// When TUI mode is active, create a bidirectional pause channel and an
+	// event channel. The send end of the pause channel goes to the TUI, the
+	// receive end to the engine. The event channel bridges engine events to
+	// the TUI's bubbletea event loop.
+	var pauseSignal chan bool
+	var tuiEventCh chan pipeline.Event
+	if useTUI {
+		pauseSignal = make(chan bool, 8)
+		tuiEventCh = make(chan pipeline.Event, 64)
+	}
 
 	engineCfg := pipeline.EngineConfig{
 		Pipeline:      pl,
@@ -197,8 +215,21 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 			if event.Kind == pipeline.EventPhaseSkipped || event.Kind == pipeline.EventMonitorSkipped {
 				skippedPhases[event.Phase] = true
 			}
-			handleEvent(ctx, cancel, engine, state, prog, event)
+			if useTUI {
+				// Forward events to the TUI via channel.
+				select {
+				case tuiEventCh <- event:
+				default:
+					// Drop if buffer is full; TUI will still see subsequent events.
+				}
+			} else {
+				handleEvent(ctx, cancel, engine, state, prog, event)
+			}
 		},
+	}
+
+	if useTUI {
+		engineCfg.PauseSignal = pauseSignal
 	}
 
 	engine = pipeline.NewEngine(r, state, engineCfg)
@@ -206,6 +237,10 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 	// Run or resume
 	fromPhase, _ := cmd.Flags().GetString("from")
 	startTime := time.Now()
+
+	if useTUI {
+		return runWithTUI(ctx, engine, state, pl, t, fromPhase, pauseSignal, tuiEventCh, startTime, skippedPhases)
+	}
 
 	var runErr error
 	if fromPhase != "" {
@@ -222,6 +257,79 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 	}
 
 	// Print summary
+	printSummary(state, pl.Phases, t.Summary, time.Since(startTime), runErr, skippedPhases)
+
+	return runErr
+}
+
+// runWithTUI launches the pipeline engine in a background goroutine and
+// drives the bubbletea TUI in the foreground. The pause channel connects
+// the TUI's pause/resume keys to the engine's PauseSignal. The event
+// channel bridges engine events into the TUI's bubbletea event loop.
+func runWithTUI(ctx context.Context, engine *pipeline.Engine, state *pipeline.State, pl *pipeline.PhasePipeline, t *ticket.Ticket, fromPhase string, pauseSignal chan bool, tuiEventCh chan pipeline.Event, startTime time.Time, skippedPhases map[string]bool) error {
+	// Extract phase names for the TUI.
+	phaseNames := make([]string, len(pl.Phases))
+	for i, p := range pl.Phases {
+		phaseNames[i] = p.Name
+	}
+
+	// Build ticket for TUI.
+	tuiTicket := ticket.Ticket{
+		Key:                t.Key,
+		Summary:            t.Summary,
+		Description:        t.Description,
+		Type:               t.Type,
+		Priority:           t.Priority,
+		Status:             t.Status,
+		Labels:             t.Labels,
+		AcceptanceCriteria: t.AcceptanceCriteria,
+	}
+
+	model := tui.New(tuiTicket, phaseNames, tuiEventCh, pauseSignal)
+
+	// Create a cancellable context so TUI exit stops the engine.
+	engineCtx, engineCancel := context.WithCancel(ctx)
+	defer engineCancel()
+
+	// Run engine in background.
+	engineDone := make(chan error, 1)
+	go func() {
+		defer close(tuiEventCh)
+		defer func() {
+			model.MarkPauseClosed()
+			close(pauseSignal)
+		}()
+		var runErr error
+		if fromPhase != "" {
+			if fromPhase == "last" {
+				resolved, err := resolveLastPhase(state.Meta(), pl.Phases)
+				if err != nil {
+					engineDone <- fmt.Errorf("run: %w", err)
+					return
+				}
+				fromPhase = resolved
+			}
+			runErr = engine.Resume(engineCtx, fromPhase)
+		} else {
+			runErr = engine.Run(engineCtx)
+		}
+		engineDone <- runErr
+	}()
+
+	// Run TUI in foreground.
+	p := tea.NewProgram(model, tea.WithAltScreen())
+	if _, err := p.Run(); err != nil {
+		engineCancel()
+		return fmt.Errorf("run: TUI error: %w", err)
+	}
+
+	// Cancel engine if TUI exited before engine finished.
+	engineCancel()
+
+	// Wait for engine to finish.
+	runErr := <-engineDone
+
+	// Print summary after TUI exits.
 	printSummary(state, pl.Phases, t.Summary, time.Since(startTime), runErr, skippedPhases)
 
 	return runErr

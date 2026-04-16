@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -222,7 +223,14 @@ func (r *Runner) Stream(ctx context.Context, opts RunOpts, onChunk func(string))
 			outputBuf.Write([]byte("\n"))
 			if onChunk != nil {
 				func() {
-					defer func() { recover() }()
+					defer func() {
+						if r := recover(); r != nil {
+							// Log the panic rather than silently swallowing it.
+							// onChunk may do non-trivial work (e.g., waitIfPaused)
+							// and a panic here could indicate corrupted state.
+							fmt.Fprintf(os.Stderr, "claude: onChunk panic: %v\n", r)
+						}
+					}()
 					onChunk(line)
 				}()
 			}
