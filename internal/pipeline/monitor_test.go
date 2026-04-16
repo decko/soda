@@ -33,7 +33,7 @@ func TestWriteMonitorState(t *testing.T) {
 	}
 
 	// Verify file exists and contains valid JSON.
-	data, err := os.ReadFile(filepath.Join(stateDir, "MON-1", "monitor.json"))
+	data, err := os.ReadFile(filepath.Join(stateDir, "MON-1", "monitor_state.json"))
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestReadMonitorState(t *testing.T) {
 
 		_, err = state.ReadMonitorState()
 		if err == nil {
-			t.Fatal("expected error for missing monitor.json")
+			t.Fatal("expected error for missing monitor_state.json")
 		}
 		if !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("expected os.ErrNotExist, got: %v", err)

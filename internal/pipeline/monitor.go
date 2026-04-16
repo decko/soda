@@ -74,24 +74,26 @@ type CIJobInfo struct {
 	ExitCode   int    // non-zero on failure (if available)
 }
 
-// WriteMonitorState persists the monitor state to monitor.json atomically.
+// WriteMonitorState persists the monitor state to monitor_state.json atomically.
+// Named monitor_state.json (not monitor.json) to avoid collision with the
+// phase result file written by WriteResult.
 func (s *State) WriteMonitorState(ms *MonitorState) error {
 	data, err := json.MarshalIndent(ms, "", "  ")
 	if err != nil {
 		return fmt.Errorf("pipeline: marshal monitor state: %w", err)
 	}
 	data = append(data, '\n')
-	path := filepath.Join(s.dir, "monitor.json")
+	path := filepath.Join(s.dir, "monitor_state.json")
 	if err := atomicWrite(path, data); err != nil {
 		return fmt.Errorf("pipeline: write monitor state: %w", err)
 	}
 	return nil
 }
 
-// ReadMonitorState reads the monitor state from monitor.json.
+// ReadMonitorState reads the monitor state from monitor_state.json.
 // Returns nil and os.ErrNotExist if the file does not exist.
 func (s *State) ReadMonitorState() (*MonitorState, error) {
-	path := filepath.Join(s.dir, "monitor.json")
+	path := filepath.Join(s.dir, "monitor_state.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err

@@ -2,11 +2,15 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/decko/soda/internal/runner"
 )
 
 // mockPRPoller is a test double for PRPoller.
@@ -78,9 +82,21 @@ func (m *mockPRPoller) GetCIStatus(ctx context.Context, prURL string) (*CIStatus
 	return resp.status, resp.err
 }
 
+// monitorEngineSetup holds the options for setupMonitorEngine.
+// The runner field allows tests to provide a runner for response execution.
+type monitorEngineSetup struct {
+	runner runner.Runner
+}
+
 // setupMonitorEngine creates an engine configured for monitor testing.
 // The submit phase is pre-completed with a PR URL.
 func setupMonitorEngine(t *testing.T, poller PRPoller, pollingConfig *PollingConfig, opts ...func(*EngineConfig)) (*Engine, *State, *[]Event) {
+	return setupMonitorEngineWithRunner(t, nil, poller, pollingConfig, opts...)
+}
+
+// setupMonitorEngineWithRunner is like setupMonitorEngine but accepts a runner
+// for testing response execution.
+func setupMonitorEngineWithRunner(t *testing.T, r runner.Runner, poller PRPoller, pollingConfig *PollingConfig, opts ...func(*EngineConfig)) (*Engine, *State, *[]Event) {
 	t.Helper()
 
 	stateDir := t.TempDir()
@@ -89,7 +105,7 @@ func setupMonitorEngine(t *testing.T, poller PRPoller, pollingConfig *PollingCon
 
 	// Write minimal prompt templates.
 	submitPrompt := "Phase: submit\nTicket: {{.Ticket.Key}}\n"
-	monitorPrompt := "Phase: monitor\nTicket: {{.Ticket.Key}}\n"
+	monitorPrompt := "Phase: monitor\nTicket: {{.Ticket.Key}}\n\n## Review Comments\n\n{{.ReviewComments}}\n"
 	if err := os.MkdirAll(promptDir+"/prompts", 0755); err != nil {
 		t.Fatalf("MkdirAll prompts: %v", err)
 	}
@@ -161,7 +177,7 @@ func setupMonitorEngine(t *testing.T, poller PRPoller, pollingConfig *PollingCon
 		opt(&cfg)
 	}
 
-	engine := NewEngine(nil, state, cfg) // runner not needed for monitor
+	engine := NewEngine(r, state, cfg)
 	return engine, state, &events
 }
 
@@ -861,5 +877,449 @@ func TestMonitor_CIStatusNoChangeDoesNotEmit(t *testing.T) {
 	// First transition from "" to "success" should emit, but second same status should not.
 	if ciChangeCount != 1 {
 		t.Errorf("CI change events = %d, want 1", ciChangeCount)
+	}
+}
+
+func TestMonitor_ResponseExecution(t *testing.T) {
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "open", Approved: false}},
+			{status: &PRStatus{State: "open", Approved: true}}, // approve on 2nd poll
+		},
+		commentResponses: []mockCommentResponse{
+			{comments: []PRComment{
+				{ID: "IC_1", Author: "reviewer", Body: "Please fix this bug.", Path: "main.go", Line: 42},
+			}},
+		},
+	}
+
+	monitorOutput := json.RawMessage(`{
+		"ticket_key":"TEST-MON",
+		"pr_url":"https://github.com/decko/soda/pull/49",
+		"comments_handled":[{"comment_id":"IC_1","author":"reviewer","content":"Please fix this bug.","action":"fixed","response":"Fixed the bug.","classification":"code_change","authoritative":true}],
+		"files_changed":[{"path":"main.go","action":"modified"}],
+		"commits":[{"hash":"abc123","message":"fix: address review feedback","task_id":"IC_1"}],
+		"tests_passed":true
+	}`)
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"monitor/response_1": {{
+				result: &runner.RunResult{
+					Output:  monitorOutput,
+					CostUSD: 0.15,
+				},
+			}},
+		},
+	}
+
+	engine, state, events := setupMonitorEngineWithRunner(t, mock, poller, nil)
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !state.IsCompleted("monitor") {
+		t.Error("monitor should be completed")
+	}
+
+	monState, err := state.ReadMonitorState()
+	if err != nil {
+		t.Fatalf("ReadMonitorState: %v", err)
+	}
+	if monState.ResponseRounds != 1 {
+		t.Errorf("ResponseRounds = %d, want 1", monState.ResponseRounds)
+	}
+
+	// Verify runner was called.
+	mock.mu.Lock()
+	callCount := len(mock.calls)
+	mock.mu.Unlock()
+	if callCount != 1 {
+		t.Fatalf("runner call count = %d, want 1", callCount)
+	}
+
+	mock.mu.Lock()
+	call := mock.calls[0]
+	mock.mu.Unlock()
+	if call.Phase != "monitor/response_1" {
+		t.Errorf("runner phase = %q, want %q", call.Phase, "monitor/response_1")
+	}
+	if !strings.Contains(call.SystemPrompt, "IC_1") {
+		t.Error("system prompt should contain the comment ID")
+	}
+	if !strings.Contains(call.SystemPrompt, "Please fix this bug.") {
+		t.Error("system prompt should contain the comment body")
+	}
+
+	// Verify cost was accumulated.
+	if state.Meta().Phases["monitor"].Cost != 0.15 {
+		t.Errorf("monitor cost = %f, want 0.15", state.Meta().Phases["monitor"].Cost)
+	}
+	if state.Meta().TotalCost != 0.15 {
+		t.Errorf("total cost = %f, want 0.15", state.Meta().TotalCost)
+	}
+
+	// Verify response events were emitted.
+	hasStarted := false
+	hasCompleted := false
+	for _, evt := range *events {
+		if evt.Kind == EventMonitorResponseStarted {
+			hasStarted = true
+			if round, _ := evt.Data["response_round"].(int); round != 1 {
+				t.Errorf("response_started round = %d, want 1", round)
+			}
+		}
+		if evt.Kind == EventMonitorResponseCompleted {
+			hasCompleted = true
+			if handled, _ := evt.Data["comments_handled"].(int); handled != 1 {
+				t.Errorf("comments_handled = %d, want 1", handled)
+			}
+			if cost, _ := evt.Data["cost"].(float64); cost != 0.15 {
+				t.Errorf("cost = %f, want 0.15", cost)
+			}
+		}
+	}
+	if !hasStarted {
+		t.Error("monitor_response_started event not emitted")
+	}
+	if !hasCompleted {
+		t.Error("monitor_response_completed event not emitted")
+	}
+
+	// Verify result was written (for PhaseSummary consumption).
+	result, err := state.ReadResult("monitor")
+	if err != nil {
+		t.Fatalf("ReadResult monitor: %v", err)
+	}
+	var parsed struct {
+		CommentsHandled []json.RawMessage `json:"comments_handled"`
+	}
+	if err := json.Unmarshal(result, &parsed); err != nil {
+		t.Fatalf("Unmarshal monitor result: %v", err)
+	}
+	if len(parsed.CommentsHandled) != 1 {
+		t.Errorf("result comments_handled count = %d, want 1", len(parsed.CommentsHandled))
+	}
+}
+
+func TestMonitor_ResponseExecutionFailure(t *testing.T) {
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "open", Approved: false}},
+			{status: &PRStatus{State: "open", Approved: true}},
+		},
+		commentResponses: []mockCommentResponse{
+			{comments: []PRComment{
+				{ID: "IC_1", Author: "reviewer", Body: "Fix this."},
+			}},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"monitor/response_1": {{
+				err: fmt.Errorf("runner failed: API timeout"),
+			}},
+		},
+	}
+
+	engine, state, events := setupMonitorEngineWithRunner(t, mock, poller, nil)
+
+	// Should not return error — response failure is non-fatal.
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !state.IsCompleted("monitor") {
+		t.Error("monitor should be completed (PR approved despite response failure)")
+	}
+
+	monState, err := state.ReadMonitorState()
+	if err != nil {
+		t.Fatalf("ReadMonitorState: %v", err)
+	}
+	// Response rounds should still be incremented even on failure.
+	if monState.ResponseRounds != 1 {
+		t.Errorf("ResponseRounds = %d, want 1", monState.ResponseRounds)
+	}
+
+	// Should have response_failed event.
+	hasFailed := false
+	for _, evt := range *events {
+		if evt.Kind == EventMonitorResponseFailed {
+			hasFailed = true
+			if errMsg, _ := evt.Data["error"].(string); !strings.Contains(errMsg, "API timeout") {
+				t.Errorf("error = %q, should contain 'API timeout'", errMsg)
+			}
+		}
+	}
+	if !hasFailed {
+		t.Error("monitor_response_failed event not emitted")
+	}
+}
+
+func TestMonitor_NilRunnerSkipsResponse(t *testing.T) {
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "open", Approved: false}},
+			{status: &PRStatus{State: "open", Approved: true}},
+		},
+		commentResponses: []mockCommentResponse{
+			{comments: []PRComment{
+				{ID: "IC_1", Author: "reviewer", Body: "Fix this."},
+			}},
+		},
+	}
+
+	// Use setupMonitorEngine (nil runner).
+	engine, state, events := setupMonitorEngine(t, poller, nil)
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	monState, err := state.ReadMonitorState()
+	if err != nil {
+		t.Fatalf("ReadMonitorState: %v", err)
+	}
+	// Response rounds should be incremented even without a runner.
+	if monState.ResponseRounds != 1 {
+		t.Errorf("ResponseRounds = %d, want 1", monState.ResponseRounds)
+	}
+
+	// Should NOT have response_started event (runner is nil).
+	for _, evt := range *events {
+		if evt.Kind == EventMonitorResponseStarted {
+			t.Error("monitor_response_started should not be emitted with nil runner")
+		}
+	}
+}
+
+func TestMonitor_ResponseBudgetExceeded(t *testing.T) {
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "open", Approved: false}},
+			{status: &PRStatus{State: "open", Approved: true}},
+		},
+		commentResponses: []mockCommentResponse{
+			{comments: []PRComment{
+				{ID: "IC_1", Author: "reviewer", Body: "Fix this."},
+			}},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{},
+	}
+
+	engine, state, events := setupMonitorEngineWithRunner(t, mock, poller, nil, func(cfg *EngineConfig) {
+		cfg.MaxCostUSD = 1.0
+	})
+
+	// Set total cost to exceed budget.
+	state.Meta().TotalCost = 1.5
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Should have budget_warning event with skipping=monitor_response.
+	hasBudgetWarning := false
+	for _, evt := range *events {
+		if evt.Kind == EventBudgetWarning {
+			if skipping, _ := evt.Data["skipping"].(string); skipping == "monitor_response" {
+				hasBudgetWarning = true
+			}
+		}
+	}
+	if !hasBudgetWarning {
+		t.Error("budget_warning event with skipping=monitor_response not emitted")
+	}
+
+	// Runner should NOT have been called.
+	mock.mu.Lock()
+	callCount := len(mock.calls)
+	mock.mu.Unlock()
+	if callCount != 0 {
+		t.Errorf("runner call count = %d, want 0 (budget exceeded)", callCount)
+	}
+}
+
+func TestMonitor_MultipleResponseRounds(t *testing.T) {
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "open", Approved: false}},
+			{status: &PRStatus{State: "open", Approved: false}},
+			{status: &PRStatus{State: "open", Approved: true}}, // approve on 3rd poll
+		},
+		commentResponses: []mockCommentResponse{
+			{comments: []PRComment{
+				{ID: "IC_1", Author: "reviewer", Body: "Fix this."},
+			}},
+			{comments: []PRComment{
+				{ID: "IC_2", Author: "reviewer", Body: "Fix that too."},
+			}},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"monitor/response_1": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"ticket_key":"TEST-MON","pr_url":"https://github.com/decko/soda/pull/49","comments_handled":[{"comment_id":"IC_1","author":"reviewer","content":"Fix this.","action":"fixed","response":"Done.","classification":"code_change","authoritative":true}],"tests_passed":true}`),
+					CostUSD: 0.10,
+				},
+			}},
+			"monitor/response_2": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"ticket_key":"TEST-MON","pr_url":"https://github.com/decko/soda/pull/49","comments_handled":[{"comment_id":"IC_2","author":"reviewer","content":"Fix that too.","action":"fixed","response":"Done.","classification":"code_change","authoritative":true}],"tests_passed":true}`),
+					CostUSD: 0.12,
+				},
+			}},
+		},
+	}
+
+	engine, state, events := setupMonitorEngineWithRunner(t, mock, poller, nil)
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	monState, err := state.ReadMonitorState()
+	if err != nil {
+		t.Fatalf("ReadMonitorState: %v", err)
+	}
+	if monState.ResponseRounds != 2 {
+		t.Errorf("ResponseRounds = %d, want 2", monState.ResponseRounds)
+	}
+
+	// Verify costs accumulated correctly.
+	expectedCost := 0.22 // 0.10 + 0.12
+	if diff := state.Meta().Phases["monitor"].Cost - expectedCost; diff > 0.001 || diff < -0.001 {
+		t.Errorf("monitor cost = %f, want %f", state.Meta().Phases["monitor"].Cost, expectedCost)
+	}
+
+	// Verify both response events were emitted.
+	responseStarted := 0
+	responseCompleted := 0
+	for _, evt := range *events {
+		if evt.Kind == EventMonitorResponseStarted {
+			responseStarted++
+		}
+		if evt.Kind == EventMonitorResponseCompleted {
+			responseCompleted++
+		}
+	}
+	if responseStarted != 2 {
+		t.Errorf("response_started events = %d, want 2", responseStarted)
+	}
+	if responseCompleted != 2 {
+		t.Errorf("response_completed events = %d, want 2", responseCompleted)
+	}
+}
+
+func TestFormatCommentsForPrompt(t *testing.T) {
+	classified := []ClassifiedComment{
+		{
+			Comment: PRComment{
+				ID:     "IC_1",
+				Author: "reviewer",
+				Body:   "Please fix this bug.",
+				Path:   "main.go",
+				Line:   42,
+			},
+			Type:       CommentCodeChange,
+			Action:     ActionApplyFix,
+			Actionable: true,
+			Reason:     "code change requested",
+		},
+		{
+			Comment: PRComment{
+				ID:     "IC_2",
+				Author: "reviewer",
+				Body:   "LGTM",
+			},
+			Type:       CommentApproval,
+			Action:     ActionAcknowledge,
+			Actionable: false,
+			Reason:     "approval/positive feedback",
+		},
+		{
+			Comment: PRComment{
+				ID:     "IC_3",
+				Author: "reviewer",
+				Body:   "Why did you do it this way?",
+				Path:   "util.go",
+			},
+			Type:       CommentQuestion,
+			Action:     ActionRespond,
+			Actionable: true,
+			Reason:     "question requiring response",
+		},
+	}
+
+	result := formatCommentsForPrompt(classified)
+
+	// Should contain all comment IDs.
+	if !strings.Contains(result, "IC_1") {
+		t.Error("result should contain IC_1")
+	}
+	if !strings.Contains(result, "IC_2") {
+		t.Error("result should contain IC_2")
+	}
+	if !strings.Contains(result, "IC_3") {
+		t.Error("result should contain IC_3")
+	}
+
+	// Should contain file paths with line numbers where applicable.
+	if !strings.Contains(result, "main.go:42") {
+		t.Error("result should contain main.go:42")
+	}
+	if !strings.Contains(result, "File: util.go") {
+		t.Error("result should contain File: util.go")
+	}
+
+	// Should contain comment bodies.
+	if !strings.Contains(result, "Please fix this bug.") {
+		t.Error("result should contain comment body")
+	}
+	if !strings.Contains(result, "LGTM") {
+		t.Error("result should contain LGTM")
+	}
+
+	// Should contain classifications.
+	if !strings.Contains(result, "code_change") {
+		t.Error("result should contain code_change classification")
+	}
+	if !strings.Contains(result, "approval") {
+		t.Error("result should contain approval classification")
+	}
+	if !strings.Contains(result, "question") {
+		t.Error("result should contain question classification")
+	}
+}
+
+func TestFormatCommentsForPrompt_Empty(t *testing.T) {
+	result := formatCommentsForPrompt(nil)
+	if result != "" {
+		t.Errorf("empty classified should produce empty string, got %q", result)
+	}
+}
+
+func TestCountActionable(t *testing.T) {
+	classified := []ClassifiedComment{
+		{Actionable: true},
+		{Actionable: false},
+		{Actionable: true},
+		{Actionable: false},
+		{Actionable: true},
+	}
+	if count := countActionable(classified); count != 3 {
+		t.Errorf("countActionable = %d, want 3", count)
+	}
+
+	if count := countActionable(nil); count != 0 {
+		t.Errorf("countActionable(nil) = %d, want 0", count)
 	}
 }
