@@ -16,6 +16,7 @@ import (
 
 	"github.com/decko/soda/internal/claude"
 	"github.com/decko/soda/internal/config"
+	"github.com/decko/soda/internal/git"
 	"github.com/decko/soda/internal/pipeline"
 	"github.com/decko/soda/internal/progress"
 	"github.com/decko/soda/internal/runner"
@@ -114,8 +115,22 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 		return runDryRun(cfg, pl, loader, ticketData)
 	}
 
+	// Resolve working directory to the main repo root so worktrees,
+	// state, and all paths are always relative to the root, even when
+	// soda is invoked from inside an existing worktree.
+	workDir, err := git.RepoRoot(".")
+	if err != nil {
+		return fmt.Errorf("run: resolve repo root: %w", err)
+	}
+
+	// Resolve StateDir relative to repo root.
+	stateDir := cfg.StateDir
+	if !filepath.IsAbs(stateDir) {
+		stateDir = filepath.Join(workDir, stateDir)
+	}
+
 	// Load or create state
-	state, err := pipeline.LoadOrCreate(cfg.StateDir, ticketKey)
+	state, err := pipeline.LoadOrCreate(stateDir, ticketKey)
 	if err != nil {
 		return fmt.Errorf("run: %w", err)
 	}
@@ -141,10 +156,6 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 	if useMock {
 		r = buildMockRunner()
 	} else {
-		workDir, err := filepath.Abs(".")
-		if err != nil {
-			return fmt.Errorf("run: resolve workdir: %w", err)
-		}
 		claudeRunner, err := runner.NewClaudeRunner("claude", cfg.Model, workDir)
 		if err != nil {
 			return fmt.Errorf("run: create claude runner: %w", err)
@@ -176,8 +187,8 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 		PromptConfig:  promptConfig,
 		PromptContext: promptContext,
 		Model:         cfg.Model,
-		WorkDir:       ".",
-		WorktreeBase:  cfg.WorktreeDir,
+		WorkDir:       workDir,
+		WorktreeBase:  filepath.Join(workDir, cfg.WorktreeDir),
 		BaseBranch:    "main",
 		MaxCostUSD:    cfg.Limits.MaxCostPerTicket,
 		Mode:          mode,

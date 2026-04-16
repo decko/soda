@@ -10,6 +10,23 @@ import (
 	"strings"
 )
 
+// RepoRoot returns the absolute path of the main repository root,
+// even when called from inside a worktree. Uses --git-common-dir
+// which always points to the shared .git directory.
+func RepoRoot(dir string) (string, error) {
+	cmd := exec.Command("git", "rev-parse", "--git-common-dir")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git: rev-parse --git-common-dir in %s: %w", dir, err)
+	}
+	gitDir := strings.TrimSpace(string(out))
+	if !filepath.IsAbs(gitDir) {
+		gitDir = filepath.Join(dir, gitDir)
+	}
+	return filepath.Dir(gitDir), nil
+}
+
 // CreateWorktree creates a git worktree for a new branch based on baseBranch.
 // Returns the absolute path to the worktree directory.
 // If the worktree already exists at the expected path, returns that path.

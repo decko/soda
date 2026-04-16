@@ -29,6 +29,64 @@ func initGitRepo(t *testing.T) string {
 	return dir
 }
 
+func TestRepoRoot(t *testing.T) {
+	t.Run("returns_repo_root", func(t *testing.T) {
+		repoDir := initGitRepo(t)
+
+		got, err := RepoRoot(repoDir)
+		if err != nil {
+			t.Fatalf("RepoRoot: %v", err)
+		}
+		if got != repoDir {
+			t.Errorf("RepoRoot = %q, want %q", got, repoDir)
+		}
+	})
+
+	t.Run("resolves_from_subdirectory", func(t *testing.T) {
+		repoDir := initGitRepo(t)
+
+		subDir := filepath.Join(repoDir, "sub", "deep")
+		if err := os.MkdirAll(subDir, 0755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+
+		got, err := RepoRoot(subDir)
+		if err != nil {
+			t.Fatalf("RepoRoot: %v", err)
+		}
+		if got != repoDir {
+			t.Errorf("RepoRoot = %q, want %q", got, repoDir)
+		}
+	})
+
+	t.Run("returns_main_repo_from_worktree", func(t *testing.T) {
+		repoDir := initGitRepo(t)
+		worktreeBase := filepath.Join(repoDir, ".worktrees")
+
+		wtPath, err := CreateWorktree(context.Background(), repoDir, worktreeBase, "feat/reporoot-test", "main")
+		if err != nil {
+			t.Fatalf("CreateWorktree: %v", err)
+		}
+
+		got, err := RepoRoot(wtPath)
+		if err != nil {
+			t.Fatalf("RepoRoot: %v", err)
+		}
+		// RepoRoot must return the MAIN repo root, not the worktree.
+		if got != repoDir {
+			t.Errorf("RepoRoot from worktree = %q, want %q (main repo)", got, repoDir)
+		}
+	})
+
+	t.Run("errors_outside_git_repo", func(t *testing.T) {
+		dir := t.TempDir()
+		_, err := RepoRoot(dir)
+		if err == nil {
+			t.Fatal("expected error outside git repo")
+		}
+	})
+}
+
 func TestCreateWorktree(t *testing.T) {
 	t.Run("creates_worktree_and_branch", func(t *testing.T) {
 		repoDir := initGitRepo(t)
