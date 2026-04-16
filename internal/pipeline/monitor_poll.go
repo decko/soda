@@ -198,8 +198,11 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 		// 2b. Response execution: run a Claude session for actionable comments.
 		if HasActionable(classified) {
 			if e.runner == nil {
-				// No runner configured; count the round to avoid infinite loops.
-				monState.ResponseRounds++
+				// No runner configured; count the round to avoid infinite loops,
+				// but only for fix attempts, not reply-only sessions.
+				if !isReplyOnly(classified) {
+					monState.ResponseRounds++
+				}
 			} else if e.config.MaxCostUSD > 0 && e.state.Meta().TotalCost >= e.config.MaxCostUSD {
 				// Budget exceeded — do not consume a response round since no
 				// work is performed. This prevents premature MaxRounds
@@ -214,8 +217,10 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 					},
 				})
 			} else {
-				// Increment only when actual work will be performed.
-				monState.ResponseRounds++
+				// Increment only for fix attempts, not reply-only sessions.
+				if !isReplyOnly(classified) {
+					monState.ResponseRounds++
+				}
 				output, err := e.respondToComments(ctx, phase, classified, monState)
 				if err != nil {
 					// Non-fatal: log and continue polling.
