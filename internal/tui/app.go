@@ -216,12 +216,17 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// sendPauseSignal sends a pause (true) or resume (false) signal to the
+// engine. The send is non-blocking: if the channel buffer is full, the
+// signal is dropped. Callers should use a sufficiently large buffered
+// channel (e.g., cap >= 8) to avoid dropped signals during rapid toggles.
 func (m *Model) sendPauseSignal(paused bool) {
 	if m.pauseSignal != nil {
 		select {
 		case m.pauseSignal <- paused:
 		default:
-			// Drop signal if buffer is full — engine will catch up.
+			// Signal dropped — channel buffer full. With a sufficiently
+			// large buffer this should not occur in practice.
 		}
 	}
 }

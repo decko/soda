@@ -67,14 +67,15 @@ func (c *EngineConfig) maxReworkCycles() int {
 // Engine orchestrates a pipeline run, tying together the runner,
 // state management, prompt rendering, and retry logic.
 type Engine struct {
-	runner      runner.Runner
-	config      EngineConfig
-	state       *State
-	confirmCh   chan struct{}
-	reranPhases map[string]bool // phases that ran (not skipped) in this execution
-	pauseMu     sync.Mutex
-	paused      bool
-	pauseCond   *sync.Cond
+	runner       runner.Runner
+	config       EngineConfig
+	state        *State
+	confirmCh    chan struct{}
+	reranPhases  map[string]bool // phases that ran (not skipped) in this execution
+	pauseMu      sync.Mutex
+	paused       bool
+	pauseCond    *sync.Cond
+	inCheckpoint bool // true while blocked on <-confirmCh; guarded by pauseMu
 }
 
 // NewEngine creates an Engine with sensible defaults for sleep and jitter.
@@ -106,6 +107,10 @@ func NewEngine(r runner.Runner, state *State, cfg EngineConfig) *Engine {
 }
 
 // drainPauseSignal reads from the pause channel and updates the paused flag.
+// When a resume signal (false) arrives while the engine is blocked on a
+// checkpoint (inCheckpoint), the method also sends to confirmCh to unblock
+// the checkpoint wait — without this, the engine deadlocks because it waits
+// on confirmCh, not pauseCond.
 // When the channel is closed (TUI exits), the goroutine force-unpauses to
 // unblock any waiters, preventing deadlock.
 func (e *Engine) drainPauseSignal(ch <-chan bool) {
@@ -114,6 +119,13 @@ func (e *Engine) drainPauseSignal(ch <-chan bool) {
 		e.paused = p
 		if !p {
 			e.pauseCond.Broadcast()
+			// If the engine is blocked on a checkpoint, unblock it.
+			if e.inCheckpoint && e.confirmCh != nil {
+				select {
+				case e.confirmCh <- struct{}{}:
+				default:
+				}
+			}
 		}
 		e.pauseMu.Unlock()
 	}
@@ -121,6 +133,13 @@ func (e *Engine) drainPauseSignal(ch <-chan bool) {
 	e.pauseMu.Lock()
 	e.paused = false
 	e.pauseCond.Broadcast()
+	// Also unblock checkpoint if blocked.
+	if e.inCheckpoint && e.confirmCh != nil {
+		select {
+		case e.confirmCh <- struct{}{}:
+		default:
+		}
+	}
 	e.pauseMu.Unlock()
 }
 
@@ -400,11 +419,20 @@ func (e *Engine) executePhases(ctx context.Context, phases []PhaseConfig, forceF
 
 				if e.config.Mode == Checkpoint {
 					e.emit(Event{Phase: phase.Name, Kind: EventCheckpointPause})
+					e.pauseMu.Lock()
+					e.inCheckpoint = true
+					e.pauseMu.Unlock()
 					select {
 					case <-e.confirmCh:
 					case <-ctx.Done():
+						e.pauseMu.Lock()
+						e.inCheckpoint = false
+						e.pauseMu.Unlock()
 						return fmt.Errorf("engine: context cancelled during checkpoint: %w", ctx.Err())
 					}
+					e.pauseMu.Lock()
+					e.inCheckpoint = false
+					e.pauseMu.Unlock()
 				}
 				continue
 			}
@@ -454,11 +482,20 @@ func (e *Engine) executePhases(ctx context.Context, phases []PhaseConfig, forceF
 
 			if e.config.Mode == Checkpoint {
 				e.emit(Event{Phase: phase.Name, Kind: EventCheckpointPause})
+				e.pauseMu.Lock()
+				e.inCheckpoint = true
+				e.pauseMu.Unlock()
 				select {
 				case <-e.confirmCh:
 				case <-ctx.Done():
+					e.pauseMu.Lock()
+					e.inCheckpoint = false
+					e.pauseMu.Unlock()
 					return fmt.Errorf("engine: context cancelled during checkpoint: %w", ctx.Err())
 				}
+				e.pauseMu.Lock()
+				e.inCheckpoint = false
+				e.pauseMu.Unlock()
 			}
 		}
 
@@ -1311,13 +1348,14 @@ func (e *Engine) runReviewer(ctx context.Context, phase PhaseConfig, reviewer Re
 	// Use a reviewer-specific OnChunk that routes events through msgCh
 	// to maintain the serialization contract — all events flow through
 	// the channel to avoid concurrent State/callback access.
+	// The waitIfPaused error is deliberately discarded; see makeOnChunk comment.
 	onChunk := func(line string) {
 		msgCh <- reviewerMsg{Event: &Event{
 			Phase: phase.Name,
 			Kind:  EventOutputChunk,
 			Data:  map[string]any{"line": line},
 		}, Index: idx}
-		_ = e.waitIfPaused(ctx)
+		_ = e.waitIfPaused(ctx) // error deliberately discarded; see makeOnChunk comment
 	}
 
 	// Use the parent phase's schema for the reviewer findings.
@@ -1517,6 +1555,13 @@ func (e *Engine) workDir(phase PhaseConfig) string {
 // blocks while the engine is paused. The ctx parameter allows the callback
 // to unblock when the engine context is cancelled (e.g., Ctrl+C, timeout),
 // preventing deadlocks when paused.
+//
+// NOTE: waitIfPaused may return a context-cancellation error, which is
+// deliberately discarded here. The OnChunk signature (func(string)) cannot
+// propagate errors, and the runner's own context check will detect the
+// cancellation on its next iteration. The pause applies backpressure to
+// the subprocess via the stdout pipe buffer (~64KB on Linux): when the
+// callback blocks, the scanner blocks, and the subprocess blocks on write.
 func (e *Engine) makeOnChunk(ctx context.Context, phase string) func(string) {
 	return func(line string) {
 		e.emitChunk(Event{
@@ -1524,7 +1569,7 @@ func (e *Engine) makeOnChunk(ctx context.Context, phase string) func(string) {
 			Kind:  EventOutputChunk,
 			Data:  map[string]any{"line": line},
 		})
-		_ = e.waitIfPaused(ctx)
+		_ = e.waitIfPaused(ctx) // error deliberately discarded; see comment above
 	}
 }
 
