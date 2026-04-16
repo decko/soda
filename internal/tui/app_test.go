@@ -489,6 +489,27 @@ func TestPauseSignalSent(t *testing.T) {
 	}
 }
 
+func TestSendPauseSignalNonBlocking(t *testing.T) {
+	// Verify that sendPauseSignal does not block when the channel is full.
+	ch := make(chan bool) // unbuffered channel with no receiver
+	m := &Model{
+		pauseSignal: ch,
+	}
+
+	done := make(chan struct{})
+	go func() {
+		m.sendPauseSignal(true) // should not block
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// OK — did not block
+	case <-time.After(2 * time.Second):
+		t.Fatal("sendPauseSignal blocked on full channel")
+	}
+}
+
 func TestEnterResumeSignalSent(t *testing.T) {
 	tk := ticket.Ticket{
 		Key:     "TEST-1",

@@ -5319,3 +5319,207 @@ func (c *capturingChunkRunner) Run(ctx context.Context, opts runner.RunOpts) (*r
 	}
 	return c.result, nil
 }
+
+func TestEngine_DrainPauseSignalUnpausesOnClose(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "plan",
+			Prompt:    "plan.md",
+			DependsOn: []string{"triage"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage done",
+					CostUSD: 0.10,
+				},
+			}},
+			"plan": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tasks":["task1"]}`),
+					RawText: "Plan done",
+					CostUSD: 0.20,
+				},
+			}},
+		},
+	}
+
+	pauseCh := make(chan bool, 10)
+
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.PauseSignal = pauseCh
+	})
+
+	// Pause the engine.
+	pauseCh <- true
+
+	// Close the channel (simulating TUI exit) — should force-unpause.
+	close(pauseCh)
+
+	// Engine should complete without deadlock.
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- engine.Run(context.Background())
+	}()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("engine deadlocked after pause channel close")
+	}
+
+	if !state.IsCompleted("triage") {
+		t.Error("triage should be completed")
+	}
+	if !state.IsCompleted("plan") {
+		t.Error("plan should be completed")
+	}
+}
+
+func TestEngine_OnChunkContextCancel(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	// Runner that pauses the engine, calls OnChunk (which will block), then
+	// waits for context cancellation.
+	pauseCh := make(chan bool, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	chunkStarted := make(chan struct{})
+	slowRunner := &funcRunner{
+		fn: func(rctx context.Context, opts runner.RunOpts) (*runner.RunResult, error) {
+			// Pause the engine.
+			pauseCh <- true
+			// Give drainPauseSignal time to process.
+			time.Sleep(50 * time.Millisecond)
+
+			// Call OnChunk in a goroutine — it will block because engine is paused.
+			go func() {
+				close(chunkStarted)
+				if opts.OnChunk != nil {
+					opts.OnChunk("blocked line")
+				}
+			}()
+
+			// Wait for context cancellation.
+			<-rctx.Done()
+			return nil, rctx.Err()
+		},
+	}
+
+	engine, _ := setupEngine(t, phases, slowRunner, func(cfg *EngineConfig) {
+		cfg.PauseSignal = pauseCh
+	})
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- engine.Run(ctx)
+	}()
+
+	// Wait for OnChunk to be called (blocking in waitIfPaused).
+	select {
+	case <-chunkStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("OnChunk was not called")
+	}
+
+	// Give OnChunk time to enter waitIfPaused.
+	time.Sleep(50 * time.Millisecond)
+
+	// Cancel context — should unblock OnChunk's waitIfPaused.
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("expected error from context cancellation")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("engine deadlocked — OnChunk did not unblock on context cancel")
+	}
+}
+
+// funcRunner is a test runner that calls a function.
+type funcRunner struct {
+	fn func(context.Context, runner.RunOpts) (*runner.RunResult, error)
+}
+
+func (f *funcRunner) Run(ctx context.Context, opts runner.RunOpts) (*runner.RunResult, error) {
+	return f.fn(ctx, opts)
+}
+
+func TestEngine_OutputChunkNotLoggedToFile(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &chunkMockRunner{
+		flexMockRunner: flexMockRunner{
+			responses: map[string][]flexResponse{
+				"triage": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"automatable":true}`),
+						RawText: "Triage done",
+						CostUSD: 0.10,
+					},
+				}},
+			},
+		},
+		chunks: map[string][]string{
+			"triage": {"line1", "line2", "line3"},
+		},
+	}
+
+	var callbackChunks []string
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(e Event) {
+			if e.Kind == EventOutputChunk {
+				if line, ok := e.Data["line"].(string); ok {
+					callbackChunks = append(callbackChunks, line)
+				}
+			}
+		}
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Chunks should still arrive via OnEvent callback.
+	if len(callbackChunks) != 3 {
+		t.Errorf("got %d callback chunks, want 3", len(callbackChunks))
+	}
+
+	// Read the events.jsonl file — output_chunk events should NOT be present.
+	events, err := ReadEvents(state.Dir())
+	if err != nil {
+		t.Fatalf("ReadEvents: %v", err)
+	}
+	for _, ev := range events {
+		if ev.Kind == EventOutputChunk {
+			t.Errorf("output_chunk event found in events.jsonl — should be excluded from disk log")
+		}
+	}
+}

@@ -218,7 +218,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *Model) sendPauseSignal(paused bool) {
 	if m.pauseSignal != nil {
-		m.pauseSignal <- paused
+		select {
+		case m.pauseSignal <- paused:
+		default:
+			// Drop signal if buffer is full — engine will catch up.
+		}
 	}
 }
 
