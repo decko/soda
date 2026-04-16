@@ -48,7 +48,7 @@ func TestPhaseCompletedSetsDone(t *testing.T) {
 		Phase: "triage",
 		Data: map[string]any{
 			"summary":    "small, my-service",
-			"duration_s": 8.0,
+			"duration_ms": float64(8000),
 			"cost":       0.12,
 			"tokens_in":  3200.0,
 			"tokens_out": 850.0,
@@ -261,7 +261,7 @@ func TestPipelineViewPhaseIcons(t *testing.T) {
 	m.handleEvent(pipeline.Event{
 		Kind:  pipeline.EventPhaseCompleted,
 		Phase: "triage",
-		Data:  map[string]any{"summary": "small, my-service", "duration_s": 8.0},
+		Data:  map[string]any{"summary": "small, my-service", "duration_ms": float64(8000)},
 	})
 	v = m.pipeline.View()
 	if !strings.Contains(v, "✓") {
@@ -494,6 +494,7 @@ func TestSendPauseSignalNonBlocking(t *testing.T) {
 	ch := make(chan bool) // unbuffered channel with no receiver
 	m := &Model{
 		pauseSignal: ch,
+		pauseG:      &pauseGuard{},
 	}
 
 	done := make(chan struct{})

@@ -1,13 +1,20 @@
 package tui
 
 import (
-	"sync"
+	"sync/atomic"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/decko/soda/internal/pipeline"
 	"github.com/decko/soda/internal/ticket"
 )
+
+// pauseGuard tracks whether the pause channel has been closed.
+// Shared via pointer so bubbletea's value-copy of Model still
+// references the same guard the engine goroutine marks as closed.
+type pauseGuard struct {
+	closed atomic.Bool
+}
 
 // Model is the top-level bubbletea model for the TUI.
 type Model struct {
@@ -20,8 +27,7 @@ type Model struct {
 	phases      []string
 	events      <-chan pipeline.Event
 	pauseSignal chan<- bool
-	pauseMu     sync.Mutex
-	pauseClosed bool
+	pauseG      *pauseGuard
 	buffered    []pipeline.Event
 	detailMode  bool
 	paused      bool
@@ -44,6 +50,7 @@ func New(t ticket.Ticket, phases []string, events <-chan pipeline.Event, pauseSi
 		phases:      phases,
 		events:      events,
 		pauseSignal: pauseSignal,
+		pauseG:      &pauseGuard{},
 	}
 }
 
@@ -122,8 +129,10 @@ func (m *Model) handleEvent(ev pipeline.Event) {
 		if s, ok := ev.Data["summary"].(string); ok {
 			m.pipeline.setSummary(ev.Phase, s)
 		}
-		if d, ok := ev.Data["duration_s"].(float64); ok {
-			m.pipeline.setElapsed(ev.Phase, time.Duration(d*float64(time.Second)))
+		if dMs, ok := ev.Data["duration_ms"].(int64); ok {
+			m.pipeline.setElapsed(ev.Phase, time.Duration(dMs)*time.Millisecond)
+		} else if dFloat, ok := ev.Data["duration_ms"].(float64); ok {
+			m.pipeline.setElapsed(ev.Phase, time.Duration(dFloat)*time.Millisecond)
 		}
 		if c, ok := ev.Data["cost"].(float64); ok {
 			m.stats.addCost(c)
@@ -227,11 +236,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // sendPauseSignal sends a pause (true) or resume (false) signal to the
 // engine. The send is non-blocking: if the channel buffer is full, the
 // signal is dropped. Safe to call after the channel has been closed via
-// MarkPauseClosed.
+// MarkPauseClosed. The guard is shared via pointer so bubbletea's
+// value-copy of Model sees the same closed state.
 func (m *Model) sendPauseSignal(paused bool) {
-	m.pauseMu.Lock()
-	defer m.pauseMu.Unlock()
-	if m.pauseSignal == nil || m.pauseClosed {
+	if m.pauseSignal == nil || m.pauseG.closed.Load() {
 		return
 	}
 	select {
@@ -241,12 +249,11 @@ func (m *Model) sendPauseSignal(paused bool) {
 }
 
 // MarkPauseClosed marks the pause channel as closed so that subsequent
-// sendPauseSignal calls are no-ops. The caller must close the channel
-// after calling this method.
+// sendPauseSignal calls are no-ops. Uses an atomic bool behind a pointer
+// so bubbletea's value-copy of Model shares the same guard. The caller
+// must close the channel after calling this method.
 func (m *Model) MarkPauseClosed() {
-	m.pauseMu.Lock()
-	defer m.pauseMu.Unlock()
-	m.pauseClosed = true
+	m.pauseG.closed.Store(true)
 }
 
 func (m *Model) flushBuffered() {
