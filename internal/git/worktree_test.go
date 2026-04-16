@@ -29,16 +29,16 @@ func initGitRepo(t *testing.T) string {
 	return dir
 }
 
-func TestToplevel(t *testing.T) {
+func TestRepoRoot(t *testing.T) {
 	t.Run("returns_repo_root", func(t *testing.T) {
 		repoDir := initGitRepo(t)
 
-		got, err := Toplevel(repoDir)
+		got, err := RepoRoot(repoDir)
 		if err != nil {
-			t.Fatalf("Toplevel: %v", err)
+			t.Fatalf("RepoRoot: %v", err)
 		}
 		if got != repoDir {
-			t.Errorf("Toplevel = %q, want %q", got, repoDir)
+			t.Errorf("RepoRoot = %q, want %q", got, repoDir)
 		}
 	})
 
@@ -50,38 +50,37 @@ func TestToplevel(t *testing.T) {
 			t.Fatalf("MkdirAll: %v", err)
 		}
 
-		got, err := Toplevel(subDir)
+		got, err := RepoRoot(subDir)
 		if err != nil {
-			t.Fatalf("Toplevel: %v", err)
+			t.Fatalf("RepoRoot: %v", err)
 		}
 		if got != repoDir {
-			t.Errorf("Toplevel = %q, want %q", got, repoDir)
+			t.Errorf("RepoRoot = %q, want %q", got, repoDir)
 		}
 	})
 
-	t.Run("resolves_from_worktree", func(t *testing.T) {
+	t.Run("returns_main_repo_from_worktree", func(t *testing.T) {
 		repoDir := initGitRepo(t)
 		worktreeBase := filepath.Join(repoDir, ".worktrees")
 
-		wtPath, err := CreateWorktree(context.Background(), repoDir, worktreeBase, "feat/toplevel-test", "main")
+		wtPath, err := CreateWorktree(context.Background(), repoDir, worktreeBase, "feat/reporoot-test", "main")
 		if err != nil {
 			t.Fatalf("CreateWorktree: %v", err)
 		}
 
-		got, err := Toplevel(wtPath)
+		got, err := RepoRoot(wtPath)
 		if err != nil {
-			t.Fatalf("Toplevel: %v", err)
+			t.Fatalf("RepoRoot: %v", err)
 		}
-		// Inside a worktree, git rev-parse --show-toplevel returns
-		// the worktree root, not the main repository.
-		if got != wtPath {
-			t.Errorf("Toplevel = %q, want %q (worktree root)", got, wtPath)
+		// RepoRoot must return the MAIN repo root, not the worktree.
+		if got != repoDir {
+			t.Errorf("RepoRoot from worktree = %q, want %q (main repo)", got, repoDir)
 		}
 	})
 
 	t.Run("errors_outside_git_repo", func(t *testing.T) {
 		dir := t.TempDir()
-		_, err := Toplevel(dir)
+		_, err := RepoRoot(dir)
 		if err == nil {
 			t.Fatal("expected error outside git repo")
 		}

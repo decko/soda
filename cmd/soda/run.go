@@ -115,8 +115,22 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 		return runDryRun(cfg, pl, loader, ticketData)
 	}
 
+	// Resolve working directory to the main repo root so worktrees,
+	// state, and all paths are always relative to the root, even when
+	// soda is invoked from inside an existing worktree.
+	workDir, err := git.RepoRoot(".")
+	if err != nil {
+		return fmt.Errorf("run: resolve repo root: %w", err)
+	}
+
+	// Resolve StateDir relative to repo root.
+	stateDir := cfg.StateDir
+	if !filepath.IsAbs(stateDir) {
+		stateDir = filepath.Join(workDir, stateDir)
+	}
+
 	// Load or create state
-	state, err := pipeline.LoadOrCreate(cfg.StateDir, ticketKey)
+	state, err := pipeline.LoadOrCreate(stateDir, ticketKey)
 	if err != nil {
 		return fmt.Errorf("run: %w", err)
 	}
@@ -134,14 +148,6 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 		// default
 	default:
 		return fmt.Errorf("run: unknown mode %q (expected 'checkpoint' or 'autonomous')", modeStr)
-	}
-
-	// Resolve working directory to the git repo toplevel so worktrees are
-	// always created from the root, even when soda is invoked from a subdirectory
-	// or from inside an existing worktree.
-	workDir, err := git.Toplevel(".")
-	if err != nil {
-		return fmt.Errorf("run: resolve git toplevel: %w", err)
 	}
 
 	// Build runner
@@ -182,7 +188,7 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 		PromptContext: promptContext,
 		Model:         cfg.Model,
 		WorkDir:       workDir,
-		WorktreeBase:  cfg.WorktreeDir,
+		WorktreeBase:  filepath.Join(workDir, cfg.WorktreeDir),
 		BaseBranch:    "main",
 		MaxCostUSD:    cfg.Limits.MaxCostPerTicket,
 		Mode:          mode,

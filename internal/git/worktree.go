@@ -10,18 +10,21 @@ import (
 	"strings"
 )
 
-// Toplevel returns the absolute path of the top-level directory of the git
-// repository that contains dir. It runs "git rev-parse --show-toplevel".
-// This resolves through worktrees, so calling it from inside a worktree
-// returns the worktree root (not the main repo).
-func Toplevel(dir string) (string, error) {
-	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+// RepoRoot returns the absolute path of the main repository root,
+// even when called from inside a worktree. Uses --git-common-dir
+// which always points to the shared .git directory.
+func RepoRoot(dir string) (string, error) {
+	cmd := exec.Command("git", "rev-parse", "--git-common-dir")
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("git: rev-parse --show-toplevel in %s: %w", dir, err)
+		return "", fmt.Errorf("git: rev-parse --git-common-dir in %s: %w", dir, err)
 	}
-	return strings.TrimSpace(string(out)), nil
+	gitDir := strings.TrimSpace(string(out))
+	if !filepath.IsAbs(gitDir) {
+		gitDir = filepath.Join(dir, gitDir)
+	}
+	return filepath.Dir(gitDir), nil
 }
 
 // CreateWorktree creates a git worktree for a new branch based on baseBranch.
