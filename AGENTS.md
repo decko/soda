@@ -37,15 +37,43 @@ Triage → Plan → Implement → Verify → Review → Submit → Monitor
 
 | Phase | Purpose | Tools | Timeout |
 |-------|---------|-------|---------|
-| Triage | Classify ticket, identify repo/files/complexity | Read-only | 3m |
-| Plan | Design approach, break into atomic tasks | Read-only | 5m |
+| Triage | Classify ticket, identify repo/files/complexity, route pipeline | Read-only | 3m |
+| Plan | Design approach, break into atomic tasks (skippable if plan exists) | Read-only | 8m |
 | Implement | Write code, run tests, commit | Full | 15m |
-| Verify | Run tests, check acceptance criteria, review code | Read + Bash | 5m |
-| Review | Parallel specialist review (Go + AI harness) | Read + Bash | 5m |
+| Verify | Run tests, check acceptance criteria, review code | Read + Bash | 8m |
+| Review | Parallel specialist review (Go + AI harness) | Read + Bash | 12m |
 | Submit | Push branch, create PR/MR | git + gh/glab | 3m |
-| Monitor | Poll for review comments, respond (polling loop) | Full | 4h max |
+| Monitor | *Disabled* — response execution not yet implemented (#73) | — | — |
 
 Phase definitions, tools, timeouts, and retry policies are in `phases.yaml`. Output schemas are generated from Go structs in `schemas/` via `go generate ./schemas/...` and resolved automatically at pipeline load time.
+
+### Spec/plan extraction
+
+Triage can detect existing specs and plans from ticket comments (GitHub) or structured fields (Jira). When a reviewed plan is found, triage sets `skip_plan: true` and the plan phase is skipped — the existing plan is injected as the plan artifact directly.
+
+**GitHub:** Configure comment markers in `soda.yaml`:
+```yaml
+github:
+  fetch_comments: true
+  spec:
+    source: comment_marker
+    marker: "<!-- soda:spec -->"
+  plan:
+    source: comment_marker
+    marker: "<!-- soda:plan -->"
+```
+
+**Jira:** Configure extraction strategies:
+```yaml
+jira:
+  spec:
+    source: epic_description
+  plan:
+    source: subtask
+    match: "Implementation Plan"
+```
+
+**Issue labels:** Use `spec ready` (has reviewed spec) and `plan ready` (has reviewed spec + plan) to signal readiness. Triage uses these as hints for routing.
 
 ### Review rework routing
 
@@ -179,7 +207,7 @@ Atomic writes: always write to `.tmp` then rename. Archive on re-run (`verify.js
 - **Disk state over in-memory**: crash recovery for free. Resume works by reading `.soda/<ticket>/`. No daemon needed.
 - **Config-driven phases**: users can add, remove, or reorder phases via `phases.yaml`. Engine doesn't hardcode phase names.
 - **Prompt overrides**: `~/.config/soda/prompts/<phase>.md` overrides embedded prompts without forking.
-- **Monitor is a polling loop**: separate from one-shot phases. 2m initial interval, 5m after 30m, max 4h, max 3 auto-response rounds.
+- **Root `phases.yaml` overrides embedded**: `resolvePhasesPath()` checks for a local `phases.yaml` in the working directory first, then falls back to the embedded copy. When changing pipeline config, update BOTH `cmd/soda/embeds/phases.yaml` (compiled into binary) AND the root `phases.yaml` (runtime override). Or just update the root file for immediate effect without rebuild.
 
 ## Git workflow
 
@@ -203,7 +231,7 @@ Atomic writes: always write to `.tmp` then rename. Archive on re-run (`verify.js
 - **Linting**: `go vet` + `staticcheck` (`staticcheck` is CI-only; `gofmt` and `go vet` run locally via the pre-commit hook)
 - **Pre-commit hook**: `.githooks/pre-commit` enforces `gofmt` and `go vet` on staged `.go` files. Setup: `./scripts/setup-hooks.sh`
 - **Testing**: `go test ./...`
-- **Building**: `go build -o soda ./cmd/soda`
+- **Building**: `CGO_ENABLED=0 go build -o soda ./cmd/soda` (CGO disabled — `go-arapuca` lib requires Git LFS which is not available in all environments)
 - **Code generation**: `go generate ./schemas/...` regenerates JSON schemas from Go struct types. Run after modifying structs in `schemas/`.
 - **No single-char variables**: use descriptive names in loops and closures
 - **Errors**: wrap with `fmt.Errorf("context: %w", err)`, never discard
@@ -217,14 +245,26 @@ Atomic writes: always write to `.tmp` then rename. Archive on re-run (`verify.js
 4. **Landlock requires `agent-sandbox` wrapper binary**: it's a separate binary in the agentic-orchestrator. Must be on PATH.
 5. **Network namespace requires unprivileged user namespaces**: test with `unshare --user --net --map-current-user -- /bin/true`. If it fails, sandbox falls back to seccomp-only.
 6. **File locks are per-machine, not cross-machine**: `flock` on `.soda/<ticket>/lock` prevents concurrent runs on the same host but not across machines.
+7. **Lock files persist after clean exit**: `ReleaseLock()` releases the flock but does not delete the lock file (intentional — avoids TOCTOU race). `soda status` derives terminal status from phase state, not lock presence.
+8. **Root `phases.yaml` overrides embedded**: a `phases.yaml` in the project root takes precedence over the compiled-in version. Changes to the embedded file require a rebuild; the root file takes effect immediately.
+9. **Always run `soda` from the main repo checkout**: running from inside a worktree used to create nested worktrees (fixed in #156), but it's still good practice to run from the root.
 
 ## Implementation workflow
 
-**All development must be done using soda itself.** Run `soda run <ticket>` to implement issues through the pipeline. Do not implement tickets manually outside of soda unless the pipeline is broken or the work is on soda's own pipeline infrastructure.
+**All development should be done using soda itself.** Run `soda run <ticket>` to implement issues through the pipeline. Manual implementation is acceptable when the pipeline is broken, the work is on soda's own infrastructure, or triage gates the ticket as "not automatable."
 
-Issues are fully specified with acceptance criteria.
-Do NOT write separate spec or plan documents.
-Read the issue, read the existing code, implement, test.
+### Spec and plan workflow
+
+For non-trivial tickets, the recommended workflow is:
+
+1. **Write a spec** — post it on the issue (in body or as a comment with `<!-- soda:spec -->` markers)
+2. **Get specialist reviews** — dispatch Go Specialist + AI Harness agents in parallel to review the spec
+3. **Incorporate feedback** — update the spec based on review findings
+4. **Write a plan** — post it on the issue with `<!-- soda:plan -->` markers
+5. **Label the issue** — `spec ready` or `plan ready`
+6. **Run soda** — `soda run <ticket>`. Triage detects the existing plan and skips the plan phase.
+
+For small/trivial tickets, skip the spec/plan and let soda handle everything end-to-end.
 
 ### Test-driven development
 
@@ -385,6 +425,20 @@ When creating a new issue, check whether any existing docs need updating as part
 - Does it affect the state format? (update "State on disk" section in `AGENTS.md`)
 
 If yes, include a "Docs to update" section in the issue body listing the files that need changes.
+
+## CLI commands
+
+| Command | Purpose |
+|---------|---------|
+| `soda run <ticket>` | Run the pipeline for a ticket |
+| `soda run <ticket> --from <phase>` | Resume from a specific phase |
+| `soda status` | Show active and recent pipelines (sorted by status group, then submission time) |
+| `soda history <ticket>` | Show phase details for a ticket |
+| `soda history <ticket> --detail` | Show full structured JSON output per phase |
+| `soda history <ticket> --phase <name>` | Drill down into a specific phase |
+| `soda sessions` | List all previous pipeline runs with filtering and sorting |
+| `soda clean <ticket>` | Remove completed/failed pipeline state and worktrees |
+| `soda render-prompt <phase> <ticket>` | Render a phase prompt template for debugging |
 
 ## What NOT to do
 
