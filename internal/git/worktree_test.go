@@ -78,6 +78,32 @@ func TestRepoRoot(t *testing.T) {
 		}
 	})
 
+	t.Run("returns_absolute_path_from_dot", func(t *testing.T) {
+		repoDir := initGitRepo(t)
+
+		// Simulate calling RepoRoot(".") from inside the repo root
+		// by changing to the repo directory.
+		origDir, err := os.Getwd()
+		if err != nil {
+			t.Fatalf("Getwd: %v", err)
+		}
+		t.Cleanup(func() { os.Chdir(origDir) })
+		if err := os.Chdir(repoDir); err != nil {
+			t.Fatalf("Chdir: %v", err)
+		}
+
+		got, err := RepoRoot(".")
+		if err != nil {
+			t.Fatalf("RepoRoot: %v", err)
+		}
+		if !filepath.IsAbs(got) {
+			t.Errorf("RepoRoot(\".\") = %q, want absolute path", got)
+		}
+		if got != repoDir {
+			t.Errorf("RepoRoot(\".\") = %q, want %q", got, repoDir)
+		}
+	})
+
 	t.Run("errors_outside_git_repo", func(t *testing.T) {
 		dir := t.TempDir()
 		_, err := RepoRoot(dir)
