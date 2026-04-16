@@ -1830,3 +1830,28 @@ func TestMonitor_GetCIStatusErrorEmitsWarning(t *testing.T) {
 		t.Error("monitor_warning event not emitted when GetCIStatus fails")
 	}
 }
+
+func TestMonitor_CorruptStateReturnsError(t *testing.T) {
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "open", Approved: true}},
+		},
+	}
+
+	engine, state, _ := setupMonitorEngine(t, poller, nil)
+
+	// Write corrupt JSON to the monitor state file so ReadMonitorState
+	// returns a parse error (not os.ErrNotExist).
+	corruptPath := state.Dir() + "/monitor_state.json"
+	if err := os.WriteFile(corruptPath, []byte("{invalid json"), 0644); err != nil {
+		t.Fatalf("write corrupt state: %v", err)
+	}
+
+	err := engine.Run(context.Background())
+	if err == nil {
+		t.Fatal("expected error from corrupt monitor state")
+	}
+	if !strings.Contains(err.Error(), "read monitor state") {
+		t.Errorf("expected 'read monitor state' error, got: %v", err)
+	}
+}

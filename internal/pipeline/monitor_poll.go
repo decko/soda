@@ -3,7 +3,9 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -90,6 +92,9 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 	// Initialize or resume monitor state.
 	monState, err := e.state.ReadMonitorState()
 	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("engine: read monitor state: %w", err)
+		}
 		monState = &MonitorState{
 			PRURL:     prURL,
 			Status:    MonitorPolling,
