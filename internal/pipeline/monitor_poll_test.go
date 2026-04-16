@@ -1421,7 +1421,7 @@ func TestMonitor_VerifyGateSkippedForReplyOnly(t *testing.T) {
 
 	mock := &flexMockRunner{
 		responses: map[string][]flexResponse{
-			"monitor/response_0": {{
+			"monitor/reply_0": {{
 				result: &runner.RunResult{Output: monitorOutput, CostUSD: 0.05},
 			}},
 		},
@@ -1697,9 +1697,10 @@ func TestReplyOnlyTools(t *testing.T) {
 			t.Errorf("replyOnlyTools should exclude %q", tool)
 		}
 	}
-	// Should have: Read, Glob, Grep + Bash(git:*), Bash(go test:*), Bash(ls:*)
-	if len(got) != 6 {
-		t.Errorf("replyOnlyTools returned %d tools, want 6: %v", len(got), got)
+	// Should have: Read, Glob, Grep + Bash(git log:*), Bash(git diff:*),
+	// Bash(git show:*), Bash(git status:*), Bash(go test:*), Bash(ls:*)
+	if len(got) != 9 {
+		t.Errorf("replyOnlyTools returned %d tools, want 9: %v", len(got), got)
 	}
 }
 
@@ -1742,7 +1743,7 @@ func TestMonitor_ReplyOnlyToolRestriction(t *testing.T) {
 
 	mock := &flexMockRunner{
 		responses: map[string][]flexResponse{
-			"monitor/response_0": {{
+			"monitor/reply_0": {{
 				result: &runner.RunResult{
 					Output:  monitorOutput,
 					CostUSD: 0.10,

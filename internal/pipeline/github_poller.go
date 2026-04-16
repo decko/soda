@@ -276,8 +276,8 @@ func (p *GitHubPRPoller) PostComment(ctx context.Context, prURL string, body str
 
 // filterCommentsAfterID returns comments that appear after afterID in the
 // sorted comment list. If afterID is empty, all comments are returned.
-// If afterID is not found in the list (e.g., deleted comment), all comments
-// are returned to avoid silent data loss.
+// If afterID is not found (e.g., deleted comment), returns nil to avoid
+// re-processing the entire comment history.
 func filterCommentsAfterID(comments []PRComment, afterID string) []PRComment {
 	if afterID == "" {
 		return comments

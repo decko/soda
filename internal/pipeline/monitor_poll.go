@@ -253,8 +253,9 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 		autoRebase := profile == nil || profile.ShouldAutoRebase()
 		e.checkMergeConflicts(ctx, phase.Name, monState, autoRebase)
 
-		// 5. Check max response rounds.
-		if monState.ResponseRounds >= monState.MaxResponseRounds {
+		// 5. Check max response rounds (fix + reply combined).
+		totalRounds := monState.ResponseRounds + monState.ReplyRounds
+		if totalRounds >= monState.MaxResponseRounds {
 			monState.Status = MonitorMaxRounds
 			_ = e.state.WriteMonitorState(monState)
 			e.emit(Event{
@@ -675,7 +676,7 @@ func (e *Engine) respondToComments(ctx context.Context, phase PhaseConfig, class
 
 	// Write response output as a log for debugging.
 	if result.Output != nil {
-		_ = e.state.WriteLog(phase.Name, fmt.Sprintf("response_%d_output", monState.ResponseRounds), result.Output)
+		_ = e.state.WriteLog(phase.Name, sessionLabel+"_output", result.Output)
 	}
 
 	// Write the result so PhaseSummary and other consumers can read it.
@@ -912,7 +913,10 @@ func replyOnlyTools(tools []string) []string {
 		filtered = append(filtered, t)
 	}
 	// Add read-only Bash patterns for common inspection commands.
-	filtered = append(filtered, "Bash(git:*)", "Bash(go test:*)", "Bash(ls:*)")
+	filtered = append(filtered,
+		"Bash(git log:*)", "Bash(git diff:*)", "Bash(git show:*)", "Bash(git status:*)",
+		"Bash(go test:*)", "Bash(ls:*)",
+	)
 	return filtered
 }
 
@@ -929,10 +933,20 @@ func hasCodeChanges(classified []ClassifiedComment) bool {
 
 // contextSleep sleeps for the given duration but returns early if the context
 // is cancelled. Returns ctx.Err() on cancellation, nil on normal completion.
+// When sleepFn is nil (production), uses time.NewTimer directly to avoid
+// goroutine leaks. Custom sleepFn (tests) uses a goroutine wrapper.
 func contextSleep(ctx context.Context, d time.Duration, sleepFn func(time.Duration)) error {
 	if sleepFn == nil {
-		sleepFn = time.Sleep
+		timer := time.NewTimer(d)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
+	// Custom sleepFn (test injected): wrap in a goroutine.
 	done := make(chan struct{})
 	go func() {
 		sleepFn(d)
