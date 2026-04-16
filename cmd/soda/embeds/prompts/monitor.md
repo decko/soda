@@ -46,7 +46,9 @@ Address each review comment:
 3. **Make code changes** if needed. Follow repo conventions.
 4. **Run the formatter** if configured.
 5. **Run the test command** to verify your changes pass.
-6. **Commit and push** with a descriptive message.
+6. **Commit and push**: Only commit and push if the test command passes.
+   If tests fail, do NOT push — report the failure in the structured output
+   with `tests_passed: false`.
 7. **Reply to comments** explaining what you did.
 
 Report all changes made and comments replied to in the structured output.
