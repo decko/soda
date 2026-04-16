@@ -287,11 +287,18 @@ func runWithTUI(ctx context.Context, engine *pipeline.Engine, state *pipeline.St
 
 	model := tui.New(tuiTicket, phaseNames, tuiEventCh, pauseSignal)
 
+	// Create a cancellable context so TUI exit stops the engine.
+	engineCtx, engineCancel := context.WithCancel(ctx)
+	defer engineCancel()
+
 	// Run engine in background.
 	engineDone := make(chan error, 1)
 	go func() {
 		defer close(tuiEventCh)
-		defer close(pauseSignal)
+		defer func() {
+			model.MarkPauseClosed()
+			close(pauseSignal)
+		}()
 		var runErr error
 		if fromPhase != "" {
 			if fromPhase == "last" {
@@ -302,9 +309,9 @@ func runWithTUI(ctx context.Context, engine *pipeline.Engine, state *pipeline.St
 				}
 				fromPhase = resolved
 			}
-			runErr = engine.Resume(ctx, fromPhase)
+			runErr = engine.Resume(engineCtx, fromPhase)
 		} else {
-			runErr = engine.Run(ctx)
+			runErr = engine.Run(engineCtx)
 		}
 		engineDone <- runErr
 	}()
@@ -312,8 +319,12 @@ func runWithTUI(ctx context.Context, engine *pipeline.Engine, state *pipeline.St
 	// Run TUI in foreground.
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
+		engineCancel()
 		return fmt.Errorf("run: TUI error: %w", err)
 	}
+
+	// Cancel engine if TUI exited before engine finished.
+	engineCancel()
 
 	// Wait for engine to finish.
 	runErr := <-engineDone

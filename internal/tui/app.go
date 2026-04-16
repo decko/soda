@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -19,9 +20,12 @@ type Model struct {
 	phases      []string
 	events      <-chan pipeline.Event
 	pauseSignal chan<- bool
+	pauseMu     sync.Mutex
+	pauseClosed bool
 	buffered    []pipeline.Event
 	detailMode  bool
 	paused      bool
+	engineDone  bool
 	width       int
 	height      int
 }
@@ -93,6 +97,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.buffered = append(m.buffered, ev)
 		} else {
 			m.handleEvent(ev)
+		}
+		if ev.Kind == pipeline.EventEngineCompleted {
+			m.engineDone = true
+			return m, nil
 		}
 		return m, m.pollEvents()
 
@@ -218,17 +226,27 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // sendPauseSignal sends a pause (true) or resume (false) signal to the
 // engine. The send is non-blocking: if the channel buffer is full, the
-// signal is dropped. Callers should use a sufficiently large buffered
-// channel (e.g., cap >= 8) to avoid dropped signals during rapid toggles.
+// signal is dropped. Safe to call after the channel has been closed via
+// MarkPauseClosed.
 func (m *Model) sendPauseSignal(paused bool) {
-	if m.pauseSignal != nil {
-		select {
-		case m.pauseSignal <- paused:
-		default:
-			// Signal dropped — channel buffer full. With a sufficiently
-			// large buffer this should not occur in practice.
-		}
+	m.pauseMu.Lock()
+	defer m.pauseMu.Unlock()
+	if m.pauseSignal == nil || m.pauseClosed {
+		return
 	}
+	select {
+	case m.pauseSignal <- paused:
+	default:
+	}
+}
+
+// MarkPauseClosed marks the pause channel as closed so that subsequent
+// sendPauseSignal calls are no-ops. The caller must close the channel
+// after calling this method.
+func (m *Model) MarkPauseClosed() {
+	m.pauseMu.Lock()
+	defer m.pauseMu.Unlock()
+	m.pauseClosed = true
 }
 
 func (m *Model) flushBuffered() {
