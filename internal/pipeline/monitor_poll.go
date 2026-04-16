@@ -2,10 +2,16 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/decko/soda/internal/git"
+	"github.com/decko/soda/internal/runner"
+	"github.com/decko/soda/schemas"
 )
 
 // runMonitor handles polling phases: polls the PR for changes, detects new
@@ -86,20 +92,27 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 	// Initialize or resume monitor state.
 	monState, err := e.state.ReadMonitorState()
 	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("engine: read monitor state: %w", err)
+		}
 		monState = &MonitorState{
-			PRURL:             prURL,
-			MaxResponseRounds: polling.MaxResponseRounds,
-			Status:            MonitorPolling,
+			PRURL:     prURL,
+			Status:    MonitorPolling,
+			StartedAt: e.now(),
 		}
 	}
 	monState.PRURL = prURL
 	monState.Status = MonitorPolling
+	// Always apply current config so that config changes take effect on resume.
+	monState.MaxResponseRounds = polling.MaxResponseRounds
 
 	if err := e.state.WriteMonitorState(monState); err != nil {
 		return fmt.Errorf("engine: write initial monitor state: %w", err)
 	}
 
-	startTime := e.now()
+	// Use persisted StartedAt so max duration is measured from the true start,
+	// not the latest restart.
+	startTime := monState.StartedAt
 
 	// Polling loop.
 	for {
@@ -174,7 +187,64 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 		}
 
 		// 2. Check for new comments.
-		e.checkNewComments(ctx, phase.Name, monState)
+		classified := e.checkNewComments(ctx, phase.Name, monState)
+
+		// Apply profile behavior filters to classified comments.
+		classified = applyProfileFilters(classified, profile)
+
+		// 2a. Post canned acknowledgment for non-authoritative comments.
+		e.postAcknowledgments(ctx, phase.Name, classified, monState)
+
+		// 2b. Response execution: run a Claude session for actionable comments.
+		if HasActionable(classified) {
+			if e.runner == nil {
+				// No runner configured; count the round to avoid infinite loops,
+				// but only for fix attempts, not reply-only sessions.
+				if !isReplyOnly(classified) {
+					monState.ResponseRounds++
+				}
+			} else if e.config.MaxCostUSD > 0 && e.state.Meta().TotalCost >= e.config.MaxCostUSD {
+				// Budget exceeded — do not consume a response round since no
+				// work is performed. This prevents premature MaxRounds
+				// termination when all rounds are budget-skipped.
+				e.emit(Event{
+					Phase: phase.Name,
+					Kind:  EventBudgetWarning,
+					Data: map[string]any{
+						"total_cost": e.state.Meta().TotalCost,
+						"limit":      e.config.MaxCostUSD,
+						"skipping":   "monitor_response",
+					},
+				})
+			} else {
+				output, err := e.respondToComments(ctx, phase, classified, monState)
+				if err != nil {
+					// Non-fatal: log and continue polling. Do not increment
+					// ResponseRounds so transient failures don't consume the budget.
+					e.emit(Event{
+						Phase: phase.Name,
+						Kind:  EventMonitorResponseFailed,
+						Data: map[string]any{
+							"response_round": monState.ResponseRounds,
+							"error":          err.Error(),
+						},
+					})
+				} else if output != nil {
+					// Increment the appropriate counter after a successful response.
+					if isReplyOnly(classified) {
+						monState.ReplyRounds++
+					} else {
+						monState.ResponseRounds++
+					}
+					// Programmatic verify gate: when files were changed,
+					// check tests_passed to decide whether to allow push.
+					e.gateMonitorResponse(ctx, phase, output, monState)
+
+					// Post a summary reply to the PR.
+					e.postResponseSummary(ctx, phase.Name, output, monState)
+				}
+			}
+		}
 
 		// 3. Check CI status changes.
 		e.checkCIStatus(ctx, phase.Name, monState)
@@ -183,8 +253,9 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 		autoRebase := profile == nil || profile.ShouldAutoRebase()
 		e.checkMergeConflicts(ctx, phase.Name, monState, autoRebase)
 
-		// 5. Check max response rounds.
-		if monState.ResponseRounds >= monState.MaxResponseRounds {
+		// 5. Check max response rounds (fix + reply combined).
+		totalRounds := monState.ResponseRounds + monState.ReplyRounds
+		if totalRounds >= monState.MaxResponseRounds {
 			monState.Status = MonitorMaxRounds
 			_ = e.state.WriteMonitorState(monState)
 			e.emit(Event{
@@ -214,9 +285,11 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 			return fmt.Errorf("engine: write monitor state: %w", err)
 		}
 
-		// Sleep until next poll.
+		// Sleep until next poll, respecting context cancellation.
 		interval := e.pollInterval(polling, now.Sub(startTime))
-		e.config.SleepFunc(interval)
+		if err := contextSleep(ctx, interval, e.config.SleepFunc); err != nil {
+			return ctx.Err()
+		}
 	}
 }
 
@@ -261,17 +334,24 @@ func (e *Engine) checkPRStatus(ctx context.Context, phaseName string, monState *
 	return false, nil
 }
 
-// checkNewComments polls for new review comments, classifies them,
-// and only increments response rounds for actionable comments.
-func (e *Engine) checkNewComments(ctx context.Context, phaseName string, monState *MonitorState) {
+// checkNewComments polls for new review comments and classifies them.
+// Returns the classified comments so the caller can trigger response execution.
+// ResponseRounds is NOT incremented here — the caller handles that after
+// response execution.
+func (e *Engine) checkNewComments(ctx context.Context, phaseName string, monState *MonitorState) []ClassifiedComment {
 	comments, err := e.config.PRPoller.GetNewComments(ctx, monState.PRURL, monState.LastCommentID)
 	if err != nil {
-		// Non-fatal: log and continue.
-		return
+		// Non-fatal: emit warning and continue.
+		e.emit(Event{
+			Phase: phaseName,
+			Kind:  EventMonitorWarning,
+			Data:  map[string]any{"warning": fmt.Sprintf("get new comments: %v", err)},
+		})
+		return nil
 	}
 
 	if len(comments) == 0 {
-		return
+		return nil
 	}
 
 	// Update last comment ID to the latest one.
@@ -315,11 +395,7 @@ func (e *Engine) checkNewComments(ctx context.Context, phaseName string, monStat
 		}
 	}
 
-	// Only increment response rounds if there are actionable comments.
 	actionable := HasActionable(classified)
-	if actionable {
-		monState.ResponseRounds++
-	}
 
 	commentSummaries := make([]map[string]any, 0, len(classified))
 	for _, cc := range classified {
@@ -343,13 +419,20 @@ func (e *Engine) checkNewComments(ctx context.Context, phaseName string, monStat
 			"comments":        commentSummaries,
 		},
 	})
+
+	return classified
 }
 
 // checkCIStatus polls CI status and emits events on status changes.
 func (e *Engine) checkCIStatus(ctx context.Context, phaseName string, monState *MonitorState) {
 	ciStatus, err := e.config.PRPoller.GetCIStatus(ctx, monState.PRURL)
 	if err != nil {
-		// Non-fatal: log and continue.
+		// Non-fatal: emit warning and continue.
+		e.emit(Event{
+			Phase: phaseName,
+			Kind:  EventMonitorWarning,
+			Data:  map[string]any{"warning": fmt.Sprintf("get CI status: %v", err)},
+		})
 		return
 	}
 
@@ -464,4 +547,453 @@ func (e *Engine) pollInterval(polling *PollingConfig, elapsed time.Duration) tim
 		return polling.MaxInterval.Duration
 	}
 	return polling.InitialInterval.Duration
+}
+
+// respondToComments runs a Claude session to address actionable review comments.
+// It renders the monitor prompt with the classified comments, invokes the runner,
+// and records the result. Returns the parsed MonitorOutput and any error.
+func (e *Engine) respondToComments(ctx context.Context, phase PhaseConfig, classified []ClassifiedComment, monState *MonitorState) (*schemas.MonitorOutput, error) {
+	actionableCount := countActionable(classified)
+	replyOnly := isReplyOnly(classified)
+	e.emit(Event{
+		Phase: phase.Name,
+		Kind:  EventMonitorResponseStarted,
+		Data: map[string]any{
+			"response_round":   monState.ResponseRounds,
+			"comment_count":    len(classified),
+			"actionable_count": actionableCount,
+			"reply_only":       replyOnly,
+		},
+	})
+
+	// Build prompt data from phase dependencies.
+	promptData, err := e.buildPromptData(phase)
+	if err != nil {
+		return nil, fmt.Errorf("engine: build prompt data for monitor response: %w", err)
+	}
+
+	// Inject classified review comments into the prompt.
+	promptData.ReviewComments = formatCommentsForPrompt(classified)
+
+	// Inject diff context so the Claude session has the current changes.
+	workDir := e.workDir(phase)
+	baseBranch := e.config.BaseBranch
+	if baseBranch == "" {
+		baseBranch = "main"
+	}
+
+	// Fetch latest base branch before computing diff so the comparison
+	// is against the current remote state, not a stale local ref.
+	if fetchErr := git.FetchBranch(ctx, workDir, "origin", baseBranch); fetchErr != nil {
+		// Non-fatal: proceed with potentially stale ref.
+		e.emit(Event{
+			Phase: phase.Name,
+			Kind:  EventMonitorWarning,
+			Data: map[string]any{
+				"warning": fmt.Sprintf("fetch base branch before diff: %v", fetchErr),
+			},
+		})
+	}
+
+	diffCtx, err := git.Diff(ctx, workDir, "origin/"+baseBranch, 50000)
+	if err != nil {
+		// Non-fatal: the session can still read files.
+		diffCtx = "(diff unavailable: " + err.Error() + ")"
+	}
+	if diffCtx == "" {
+		diffCtx = "(no differences from base branch)"
+	}
+	promptData.DiffContext = diffCtx
+
+	// Load and render the monitor prompt template.
+	loadResult, err := e.config.Loader.LoadWithSource(phase.Prompt)
+	if err != nil {
+		return nil, fmt.Errorf("engine: load monitor prompt: %w", err)
+	}
+
+	rendered, err := RenderPrompt(loadResult.Content, promptData)
+	if err != nil {
+		return nil, fmt.Errorf("engine: render monitor prompt: %w", err)
+	}
+
+	// Use separate naming for reply-only vs fix sessions to avoid collisions.
+	var sessionLabel string
+	if replyOnly {
+		sessionLabel = fmt.Sprintf("reply_%d", monState.ReplyRounds)
+	} else {
+		sessionLabel = fmt.Sprintf("response_%d", monState.ResponseRounds)
+	}
+
+	_ = e.state.WriteLog(phase.Name, sessionLabel+"_prompt", []byte(rendered))
+
+	// Build runner opts with remaining budget.
+	remaining := 0.0
+	if e.config.MaxCostUSD > 0 {
+		remaining = e.config.MaxCostUSD - e.state.Meta().TotalCost
+	}
+
+	// Restrict tools for reply-only sessions (questions only — no code changes).
+	tools := phase.Tools
+	if replyOnly {
+		tools = replyOnlyTools(phase.Tools)
+	}
+
+	opts := runner.RunOpts{
+		Phase:        fmt.Sprintf("%s/%s", phase.Name, sessionLabel),
+		SystemPrompt: rendered,
+		UserPrompt:   "Address the review comments described in the system prompt.",
+		OutputSchema: phase.Schema,
+		AllowedTools: tools,
+		MaxBudgetUSD: remaining,
+		WorkDir:      e.workDir(phase),
+		Model:        e.config.Model,
+		Timeout:      phase.Timeout.Duration,
+	}
+
+	result, err := e.runWithRetry(ctx, phase, opts)
+	if err != nil {
+		return nil, fmt.Errorf("engine: monitor response round %d: %w", monState.ResponseRounds, err)
+	}
+
+	// Record cost.
+	if err := e.state.AccumulateCost(phase.Name, result.CostUSD); err != nil {
+		return nil, fmt.Errorf("engine: accumulate monitor response cost: %w", err)
+	}
+
+	// Parse output.
+	var output schemas.MonitorOutput
+	if result.Output != nil {
+		if parseErr := json.Unmarshal(result.Output, &output); parseErr != nil {
+			e.emit(Event{
+				Phase: phase.Name,
+				Kind:  EventMonitorWarning,
+				Data: map[string]any{
+					"warning": fmt.Sprintf("parse monitor response output: %v", parseErr),
+				},
+			})
+		}
+	}
+
+	// Write response output as a log for debugging.
+	if result.Output != nil {
+		_ = e.state.WriteLog(phase.Name, sessionLabel+"_output", result.Output)
+	}
+
+	// Write the result so PhaseSummary and other consumers can read it.
+	// Each response round overwrites the previous result; the final round
+	// represents the latest state.
+	if result.Output != nil {
+		_ = e.state.WriteResult(phase.Name, result.Output)
+	}
+
+	e.emit(Event{
+		Phase: phase.Name,
+		Kind:  EventMonitorResponseCompleted,
+		Data: map[string]any{
+			"response_round":   monState.ResponseRounds,
+			"comments_handled": len(output.CommentsHandled),
+			"files_changed":    len(output.FilesChanged),
+			"commits":          len(output.Commits),
+			"cost":             result.CostUSD,
+		},
+	})
+
+	return &output, nil
+}
+
+// gateMonitorResponse enforces a programmatic verify gate after response
+// execution. When files were changed (fix session), it checks tests_passed:
+//   - true  → allow (commit+push was done by the session)
+//   - false → emit notify_user event so the user is alerted; the session
+//     should NOT have pushed (the prompt instructs it not to), but
+//     the engine does not try to undo pushes.
+//
+// Reply-only sessions (no files changed) skip this gate entirely.
+func (e *Engine) gateMonitorResponse(ctx context.Context, phase PhaseConfig, output *schemas.MonitorOutput, monState *MonitorState) {
+	if len(output.FilesChanged) == 0 {
+		// No code changes — nothing to gate.
+		return
+	}
+
+	if output.TestsPassed {
+		// Verification passed — commit+push is allowed.
+		return
+	}
+
+	// Tests failed: notify the user.
+	e.emit(Event{
+		Phase: phase.Name,
+		Kind:  EventMonitorVerifyFailed,
+		Data: map[string]any{
+			"response_round": monState.ResponseRounds,
+			"files_changed":  len(output.FilesChanged),
+			"commits":        len(output.Commits),
+		},
+	})
+	e.emit(Event{
+		Phase: phase.Name,
+		Kind:  EventMonitorNotifyUser,
+		Data: map[string]any{
+			"reason":         "verification failed after monitor code changes",
+			"response_round": monState.ResponseRounds,
+			"files_changed":  len(output.FilesChanged),
+		},
+	})
+}
+
+// postAcknowledgments posts a canned acknowledgment reply to the PR for
+// non-authoritative comments that were classified with ActionAcknowledge.
+func (e *Engine) postAcknowledgments(ctx context.Context, phaseName string, classified []ClassifiedComment, monState *MonitorState) {
+	if e.config.PRPoller == nil {
+		return
+	}
+
+	for _, cc := range classified {
+		if cc.Action != ActionAcknowledge || cc.Actionable {
+			continue
+		}
+		// Only acknowledge non-authoritative users (skip approvals from auth users).
+		if !cc.NonAuthoritative {
+			continue
+		}
+
+		body := fmt.Sprintf(
+			"Thanks for the feedback, @%s! I've noted your comment. "+
+				"A project maintainer will review and decide whether to act on it.",
+			cc.Comment.Author,
+		)
+
+		if err := e.config.PRPoller.PostComment(ctx, monState.PRURL, body); err != nil {
+			e.emit(Event{
+				Phase: phaseName,
+				Kind:  EventMonitorWarning,
+				Data: map[string]any{
+					"warning":    fmt.Sprintf("failed to post acknowledgment for %s: %v", cc.Comment.ID, err),
+					"comment_id": cc.Comment.ID,
+				},
+			})
+			continue
+		}
+
+		e.emit(Event{
+			Phase: phaseName,
+			Kind:  EventMonitorAcknowledgePosted,
+			Data: map[string]any{
+				"comment_id": cc.Comment.ID,
+				"author":     cc.Comment.Author,
+			},
+		})
+	}
+}
+
+// postResponseSummary posts a summary reply to the PR after a response
+// session completes. This makes the response visible to reviewers on the PR.
+func (e *Engine) postResponseSummary(ctx context.Context, phaseName string, output *schemas.MonitorOutput, monState *MonitorState) {
+	if e.config.PRPoller == nil || output == nil {
+		return
+	}
+
+	if len(output.CommentsHandled) == 0 {
+		return
+	}
+
+	var sb strings.Builder
+	sb.WriteString("I've addressed the review feedback:\n\n")
+
+	for _, handled := range output.CommentsHandled {
+		action := handled.Action
+		if action == "" {
+			action = "handled"
+		}
+		sb.WriteString(fmt.Sprintf("- **%s** %s's comment", action, handled.Author))
+		if handled.CommentID != "" {
+			sb.WriteString(fmt.Sprintf(" (%s)", handled.CommentID))
+		}
+		if handled.Response != "" {
+			sb.WriteString(": " + handled.Response)
+		}
+		sb.WriteString("\n")
+	}
+
+	if len(output.FilesChanged) > 0 {
+		sb.WriteString(fmt.Sprintf("\n%d file(s) changed", len(output.FilesChanged)))
+		if output.TestsPassed {
+			sb.WriteString(", tests passing ✅")
+		} else {
+			sb.WriteString(", tests failing ⚠️")
+		}
+		sb.WriteString("\n")
+	}
+
+	if err := e.config.PRPoller.PostComment(ctx, monState.PRURL, sb.String()); err != nil {
+		e.emit(Event{
+			Phase: phaseName,
+			Kind:  EventMonitorWarning,
+			Data: map[string]any{
+				"warning": fmt.Sprintf("failed to post response summary: %v", err),
+			},
+		})
+		return
+	}
+
+	e.emit(Event{
+		Phase: phaseName,
+		Kind:  EventMonitorReplyPosted,
+		Data: map[string]any{
+			"response_round":   monState.ResponseRounds,
+			"comments_handled": len(output.CommentsHandled),
+		},
+	})
+}
+
+// formatCommentsForPrompt converts classified comments into a human-readable
+// format suitable for injection into the monitor prompt template's
+// ReviewComments field.
+func formatCommentsForPrompt(classified []ClassifiedComment) string {
+	var sb strings.Builder
+	for idx, cc := range classified {
+		if idx > 0 {
+			sb.WriteString("\n")
+		}
+		sb.WriteString(fmt.Sprintf("### Comment %s by %s\n", cc.Comment.ID, cc.Comment.Author))
+		sb.WriteString(fmt.Sprintf("Classification: %s | Action: %s\n", cc.Type, cc.Action))
+		if cc.Comment.Path != "" {
+			if cc.Comment.Line > 0 {
+				sb.WriteString(fmt.Sprintf("File: %s:%d\n", cc.Comment.Path, cc.Comment.Line))
+			} else {
+				sb.WriteString(fmt.Sprintf("File: %s\n", cc.Comment.Path))
+			}
+		}
+		sb.WriteString("\n")
+		sb.WriteString(cc.Comment.Body)
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
+// countActionable returns the number of actionable comments in a classified slice.
+func countActionable(classified []ClassifiedComment) int {
+	count := 0
+	for _, cc := range classified {
+		if cc.Actionable {
+			count++
+		}
+	}
+	return count
+}
+
+// isReplyOnly returns true when every actionable comment in classified
+// is a question (ActionRespond) and none require code changes (ActionApplyFix).
+// Used to decide whether to restrict the Claude session's tool set.
+func isReplyOnly(classified []ClassifiedComment) bool {
+	hasActionable := false
+	for _, cc := range classified {
+		if !cc.Actionable {
+			continue
+		}
+		hasActionable = true
+		if cc.Action == ActionApplyFix {
+			return false
+		}
+	}
+	return hasActionable
+}
+
+// replyOnlyTools returns a restricted tool set suitable for reply-only sessions
+// that should not modify code. Excludes Write, Edit, and unrestricted Bash
+// (which could modify files via shell commands). Restricted Bash patterns
+// like Bash(git:*) are kept.
+func replyOnlyTools(tools []string) []string {
+	var filtered []string
+	for _, t := range tools {
+		switch t {
+		case "Write", "Edit", "Bash":
+			continue
+		}
+		filtered = append(filtered, t)
+	}
+	// Add read-only Bash patterns for common inspection commands.
+	filtered = append(filtered,
+		"Bash(git log:*)", "Bash(git diff:*)", "Bash(git show:*)", "Bash(git status:*)",
+		"Bash(go test:*)", "Bash(ls:*)",
+	)
+	return filtered
+}
+
+// hasCodeChanges returns true when at least one actionable comment has
+// ActionApplyFix, meaning the session may modify files.
+func hasCodeChanges(classified []ClassifiedComment) bool {
+	for _, cc := range classified {
+		if cc.Actionable && cc.Action == ActionApplyFix {
+			return true
+		}
+	}
+	return false
+}
+
+// contextSleep sleeps for the given duration but returns early if the context
+// is cancelled. Returns ctx.Err() on cancellation, nil on normal completion.
+// When sleepFn is nil (production), uses time.NewTimer directly to avoid
+// goroutine leaks. Custom sleepFn (tests) uses a goroutine wrapper.
+func contextSleep(ctx context.Context, d time.Duration, sleepFn func(time.Duration)) error {
+	if sleepFn == nil {
+		timer := time.NewTimer(d)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	// Custom sleepFn (test injected): wrap in a goroutine.
+	done := make(chan struct{})
+	go func() {
+		sleepFn(d)
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// applyProfileFilters adjusts classified comments based on the monitor
+// profile's behavior flags. When profile is nil, comments pass through
+// unchanged.
+//
+//   - ShouldApplyNit() == false: nit comments with ActionApplyFix are
+//     downgraded to ActionAcknowledge and marked non-actionable.
+//   - ShouldRespondToNonAuth() == false: non-authoritative acknowledge
+//     comments are downgraded to ActionSkip so no acknowledgment is posted.
+func applyProfileFilters(classified []ClassifiedComment, profile *MonitorProfile) []ClassifiedComment {
+	if profile == nil {
+		return classified
+	}
+
+	result := make([]ClassifiedComment, len(classified))
+	copy(result, classified)
+
+	for i := range result {
+		cc := &result[i]
+
+		// Downgrade nits to acknowledge when profile disallows auto-fixing.
+		if !profile.ShouldApplyNit() && cc.Type == CommentNit && cc.Action == ActionApplyFix {
+			cc.Action = ActionAcknowledge
+			cc.Actionable = false
+			cc.Reason = "nit downgraded by profile (auto_fix_nits=false)"
+		}
+
+		// Skip acknowledgment for non-authoritative comments when profile
+		// disallows responding to them.
+		if !profile.ShouldRespondToNonAuth() && cc.NonAuthoritative && cc.Action == ActionAcknowledge {
+			cc.Action = ActionSkip
+			cc.Actionable = false
+			cc.Reason = "non-authoritative comment skipped by profile (respond_to_non_auth=false)"
+		}
+	}
+
+	return result
 }

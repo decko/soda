@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"sort"
 	"strings"
+	"time"
 )
 
 // GitHubPRPoller implements PRPoller using the gh CLI.
@@ -58,9 +60,10 @@ type ghCheck struct {
 
 // ghComment is a review comment from gh api.
 type ghComment struct {
-	ID     int    `json:"id"`
-	NodeID string `json:"node_id"`
-	User   struct {
+	ID        int       `json:"id"`
+	NodeID    string    `json:"node_id"`
+	CreatedAt time.Time `json:"created_at"`
+	User      struct {
 		Login string `json:"login"`
 	} `json:"user"`
 	Body string `json:"body"`
@@ -109,10 +112,13 @@ func (p *GitHubPRPoller) GetNewComments(ctx context.Context, prURL string, after
 	}
 
 	// Get review comments (inline code review comments).
-	endpoint := fmt.Sprintf("repos/%s/%s/pulls/%s/comments", owner, repo, number)
+	// --paginate --slurp produces [[page1...],[page2...]], so we use --jq 'flatten'
+	// to merge pages into a single flat array.
+	// Sort by created ascending so newest comments are last (consistent with afterID filtering).
+	endpoint := fmt.Sprintf("repos/%s/%s/pulls/%s/comments?sort=created&direction=asc", owner, repo, number)
 	out, err := exec.CommandContext(ctx, p.command,
 		"api", endpoint,
-		"--paginate", "--slurp",
+		"--paginate", "--slurp", "--jq", "flatten",
 	).Output()
 	if err != nil {
 		return nil, fmt.Errorf("monitor: get comments: %w: %s", err, ghStderr(err))
@@ -124,10 +130,11 @@ func (p *GitHubPRPoller) GetNewComments(ctx context.Context, prURL string, after
 	}
 
 	// Also get issue comments (top-level PR conversation comments).
-	issueEndpoint := fmt.Sprintf("repos/%s/%s/issues/%s/comments", owner, repo, number)
+	// Sort ascending so newest are last, consistent with afterID filtering.
+	issueEndpoint := fmt.Sprintf("repos/%s/%s/issues/%s/comments?sort=created&direction=asc", owner, repo, number)
 	issueOut, err := exec.CommandContext(ctx, p.command,
 		"api", issueEndpoint,
-		"--paginate", "--slurp",
+		"--paginate", "--slurp", "--jq", "flatten",
 	).Output()
 	if err != nil {
 		return nil, fmt.Errorf("monitor: get issue comments: %w: %s", err, ghStderr(err))
@@ -142,38 +149,36 @@ func (p *GitHubPRPoller) GetNewComments(ctx context.Context, prURL string, after
 	var allComments []PRComment
 	for _, comment := range comments {
 		allComments = append(allComments, PRComment{
-			ID:     fmt.Sprintf("RC_%d", comment.ID),
-			Author: comment.User.Login,
-			Body:   comment.Body,
-			Path:   comment.Path,
-			Line:   comment.Line,
+			ID:        fmt.Sprintf("RC_%d", comment.ID),
+			Author:    comment.User.Login,
+			Body:      comment.Body,
+			Path:      comment.Path,
+			Line:      comment.Line,
+			CreatedAt: comment.CreatedAt,
 		})
 	}
 	// Convert issue comments with IC_ prefix.
 	for _, comment := range issueComments {
 		allComments = append(allComments, PRComment{
-			ID:     fmt.Sprintf("IC_%d", comment.ID),
-			Author: comment.User.Login,
-			Body:   comment.Body,
-			Path:   comment.Path,
-			Line:   comment.Line,
+			ID:        fmt.Sprintf("IC_%d", comment.ID),
+			Author:    comment.User.Login,
+			Body:      comment.Body,
+			Path:      comment.Path,
+			Line:      comment.Line,
+			CreatedAt: comment.CreatedAt,
 		})
 	}
 
-	// Filter to comments after afterID.
-	var result []PRComment
-	pastAfter := afterID == ""
-	for _, prComment := range allComments {
-		if !pastAfter {
-			if prComment.ID == afterID {
-				pastAfter = true
-			}
-			continue
+	// Sort all comments by creation time so that afterID filtering is stable
+	// regardless of whether the comment is a review (RC_) or issue (IC_) comment.
+	sort.Slice(allComments, func(i, j int) bool {
+		if allComments[i].CreatedAt.Equal(allComments[j].CreatedAt) {
+			return allComments[i].ID < allComments[j].ID
 		}
-		result = append(result, prComment)
-	}
+		return allComments[i].CreatedAt.Before(allComments[j].CreatedAt)
+	})
 
-	return result, nil
+	return filterCommentsAfterID(allComments, afterID), nil
 }
 
 // GetCIStatus returns the current CI check status for the PR.
@@ -246,6 +251,58 @@ func (p *GitHubPRPoller) GetCIStatus(ctx context.Context, prURL string) (*CIStat
 	}
 
 	return status, nil
+}
+
+// PostComment posts a top-level comment to the PR using gh pr comment.
+func (p *GitHubPRPoller) PostComment(ctx context.Context, prURL string, body string) error {
+	owner, repo, number, err := parsePRRef(prURL)
+	if err != nil {
+		return err
+	}
+
+	nwoRef := owner + "/" + repo
+
+	cmd := exec.CommandContext(ctx, p.command,
+		"pr", "comment", number,
+		"--repo", nwoRef,
+		"--body", body,
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("monitor: post comment: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+// filterCommentsAfterID returns comments that appear after afterID in the
+// sorted comment list. If afterID is empty, all comments are returned.
+// If afterID is not found (e.g., deleted comment), returns nil to avoid
+// re-processing the entire comment history.
+func filterCommentsAfterID(comments []PRComment, afterID string) []PRComment {
+	if afterID == "" {
+		return comments
+	}
+
+	var result []PRComment
+	pastAfter := false
+	for _, c := range comments {
+		if !pastAfter {
+			if c.ID == afterID {
+				pastAfter = true
+			}
+			continue
+		}
+		result = append(result, c)
+	}
+
+	// If afterID was not found (e.g., deleted comment), return empty
+	// to avoid re-processing all comments. The next poll with an updated
+	// afterID will pick up new comments.
+	if !pastAfter {
+		return nil
+	}
+
+	return result
 }
 
 // ghStderr extracts stderr from an exec.ExitError for error messages.

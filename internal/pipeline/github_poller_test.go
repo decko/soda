@@ -79,6 +79,76 @@ func TestParsePRRef(t *testing.T) {
 	}
 }
 
+func TestFilterCommentsAfterID(t *testing.T) {
+	comments := []PRComment{
+		{ID: "RC_1", Author: "alice"},
+		{ID: "IC_2", Author: "bob"},
+		{ID: "RC_3", Author: "charlie"},
+	}
+
+	tests := []struct {
+		name    string
+		afterID string
+		wantIDs []string
+	}{
+		{
+			name:    "empty_afterID_returns_all",
+			afterID: "",
+			wantIDs: []string{"RC_1", "IC_2", "RC_3"},
+		},
+		{
+			name:    "after_first",
+			afterID: "RC_1",
+			wantIDs: []string{"IC_2", "RC_3"},
+		},
+		{
+			name:    "after_middle",
+			afterID: "IC_2",
+			wantIDs: []string{"RC_3"},
+		},
+		{
+			name:    "after_last_returns_empty",
+			afterID: "RC_3",
+			wantIDs: nil,
+		},
+		{
+			name:    "not_found_returns_empty",
+			afterID: "IC_999",
+			wantIDs: nil,
+		},
+		{
+			name:    "deleted_comment_returns_empty",
+			afterID: "RC_deleted",
+			wantIDs: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := filterCommentsAfterID(comments, tt.afterID)
+			var gotIDs []string
+			for _, c := range result {
+				gotIDs = append(gotIDs, c.ID)
+			}
+			if len(gotIDs) != len(tt.wantIDs) {
+				t.Fatalf("got %v, want %v", gotIDs, tt.wantIDs)
+			}
+			for i := range gotIDs {
+				if gotIDs[i] != tt.wantIDs[i] {
+					t.Errorf("got[%d] = %q, want %q", i, gotIDs[i], tt.wantIDs[i])
+				}
+			}
+		})
+	}
+}
+
+func TestFilterCommentsAfterID_Empty(t *testing.T) {
+	result := filterCommentsAfterID(nil, "IC_1")
+	if result != nil {
+		t.Errorf("nil comments should return nil, got %v", result)
+	}
+}
+
 // TestIntegration_GetNewComments is an optional integration test that exercises
 // GitHubPRPoller.GetNewComments against the real GitHub API via the gh CLI.
 // Skipped unless SODA_API_TEST=1 is set. Requires the 'gh' binary to be

@@ -43,9 +43,26 @@ Triage → Plan → Implement → Verify → Review → Submit → Monitor
 | Verify | Run tests, check acceptance criteria, review code | Read + Bash | 8m |
 | Review | Parallel specialist review (Go + AI harness) | Read + Bash | 12m |
 | Submit | Push branch, create PR/MR | git + gh/glab | 3m |
-| Monitor | *Disabled* — response execution not yet implemented (#73) | — | — |
+| Monitor | Poll PR, respond to review comments, fix CI, auto-rebase | Full | 10m/round |
 
 Phase definitions, tools, timeouts, and retry policies are in `phases.yaml`. Output schemas are generated from Go structs in `schemas/` via `go generate ./schemas/...` and resolved automatically at pipeline load time.
+
+### Monitor phase
+
+After PR submission, the monitor phase polls for activity and responds:
+
+1. **Poll cycle**: check PR status (approved/merged/closed), new comments, CI status, merge conflicts
+2. **Comment classification**: each comment is classified (code_change, question, nit, approval, dismissal, bot, self) with authority checks via CODEOWNERS
+3. **Response execution**: when actionable comments are found, a Claude session runs with the monitor prompt to apply fixes, reply to comments, run tests, and push changes
+4. **Termination**: the phase completes when the PR is approved/merged, max response rounds are reached, or the max polling duration expires
+
+Configuration (in `phases.yaml`):
+- `polling.initial_interval`: time between polls (default 2m, escalates to `max_interval` after `escalate_after`)
+- `polling.max_response_rounds`: max Claude sessions for comment responses (default 3)
+- `polling.max_duration`: total monitor phase wall-clock limit (default 4h)
+- `timeout`: per-response session timeout (default 10m)
+
+Monitor profiles (`conservative`, `smart`, `aggressive`) control auto-rebase, nit auto-fix, and response to non-authoritative comments.
 
 ### Spec/plan extraction
 
@@ -169,6 +186,7 @@ Per-phase tool scoping via `--allowed-tools`:
 - Implement: `Read Write Edit Glob Grep Bash`
 - Verify: `Read Glob Grep Bash`
 - Submit: `Bash(git:*) Bash(gh:*) Bash(glab:*)`
+- Monitor: `Read Write Edit Glob Grep Bash` (per response session)
 
 ## Error handling
 
@@ -191,10 +209,14 @@ Three error categories with different retry strategies:
 ├── implement.json
 ├── verify.json
 ├── submit.json
+├── monitor.json        # monitor response output (latest round)
+├── monitor_state.json  # monitor polling state (poll count, rounds, last comment ID)
 ├── events.jsonl        # structured event log
 └── logs/
     ├── triage_prompt.md
     ├── triage_response.md
+    ├── monitor_response_1_prompt.md
+    ├── monitor_response_1_output.md
     └── ...
 ```
 

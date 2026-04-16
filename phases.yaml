@@ -129,6 +129,7 @@ phases:
       - Glob
       - Grep
       - Bash
+    timeout: 10m      # per-response session timeout
     polling:
       initial_interval: 2m
       max_interval: 5m
@@ -141,3 +142,4 @@ phases:
       semantic: 0
     depends_on:
       - submit
+      - plan

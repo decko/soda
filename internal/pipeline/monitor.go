@@ -25,10 +25,12 @@ type MonitorState struct {
 	PRURL             string        `json:"pr_url"`
 	PollCount         int           `json:"poll_count"`
 	ResponseRounds    int           `json:"response_rounds"`
+	ReplyRounds       int           `json:"reply_rounds"`
 	MaxResponseRounds int           `json:"max_response_rounds"`
 	LastCommentID     string        `json:"last_comment_id,omitempty"`
 	LastCIStatus      string        `json:"last_ci_status,omitempty"`
 	LastPolledAt      time.Time     `json:"last_polled_at"`
+	StartedAt         time.Time     `json:"started_at"`
 	Status            MonitorStatus `json:"status"`
 }
 
@@ -42,6 +44,9 @@ type PRPoller interface {
 	GetNewComments(ctx context.Context, prURL string, afterID string) ([]PRComment, error)
 	// GetCIStatus returns the current CI check status for the PR's head commit.
 	GetCIStatus(ctx context.Context, prURL string) (*CIStatus, error)
+	// PostComment posts a comment to the pull request. Used for canned
+	// acknowledgments and reply summaries.
+	PostComment(ctx context.Context, prURL string, body string) error
 }
 
 // PRStatus holds the current state of a pull request.
@@ -74,24 +79,26 @@ type CIJobInfo struct {
 	ExitCode   int    // non-zero on failure (if available)
 }
 
-// WriteMonitorState persists the monitor state to monitor.json atomically.
+// WriteMonitorState persists the monitor state to monitor_state.json atomically.
+// Named monitor_state.json (not monitor.json) to avoid collision with the
+// phase result file written by WriteResult.
 func (s *State) WriteMonitorState(ms *MonitorState) error {
 	data, err := json.MarshalIndent(ms, "", "  ")
 	if err != nil {
 		return fmt.Errorf("pipeline: marshal monitor state: %w", err)
 	}
 	data = append(data, '\n')
-	path := filepath.Join(s.dir, "monitor.json")
+	path := filepath.Join(s.dir, "monitor_state.json")
 	if err := atomicWrite(path, data); err != nil {
 		return fmt.Errorf("pipeline: write monitor state: %w", err)
 	}
 	return nil
 }
 
-// ReadMonitorState reads the monitor state from monitor.json.
+// ReadMonitorState reads the monitor state from monitor_state.json.
 // Returns nil and os.ErrNotExist if the file does not exist.
 func (s *State) ReadMonitorState() (*MonitorState, error) {
-	path := filepath.Join(s.dir, "monitor.json")
+	path := filepath.Join(s.dir, "monitor_state.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err

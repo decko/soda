@@ -120,8 +120,27 @@ phases:
       - verify
       - review
 
-  # monitor phase disabled — response execution not yet implemented (#73)
-  # - name: monitor
-  #   type: polling
-  #   depends_on:
-  #     - submit
+  - name: monitor
+    prompt: prompts/monitor.md
+    type: polling
+    tools:
+      - Read
+      - Write
+      - Edit
+      - Glob
+      - Grep
+      - Bash
+    timeout: 10m
+    polling:
+      initial_interval: 2m
+      max_interval: 5m
+      escalate_after: 30m
+      max_duration: 4h
+      max_response_rounds: 3
+    retry:
+      transient: 2
+      parse: 1
+      semantic: 0
+    depends_on:
+      - submit
+      - plan
