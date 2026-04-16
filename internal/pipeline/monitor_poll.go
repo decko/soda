@@ -91,8 +91,9 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 	monState, err := e.state.ReadMonitorState()
 	if err != nil {
 		monState = &MonitorState{
-			PRURL:  prURL,
-			Status: MonitorPolling,
+			PRURL:     prURL,
+			Status:    MonitorPolling,
+			StartedAt: e.now(),
 		}
 	}
 	monState.PRURL = prURL
@@ -104,7 +105,9 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 		return fmt.Errorf("engine: write initial monitor state: %w", err)
 	}
 
-	startTime := e.now()
+	// Use persisted StartedAt so max duration is measured from the true start,
+	// not the latest restart.
+	startTime := monState.StartedAt
 
 	// Polling loop.
 	for {

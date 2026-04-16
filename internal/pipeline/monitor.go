@@ -29,6 +29,7 @@ type MonitorState struct {
 	LastCommentID     string        `json:"last_comment_id,omitempty"`
 	LastCIStatus      string        `json:"last_ci_status,omitempty"`
 	LastPolledAt      time.Time     `json:"last_polled_at"`
+	StartedAt         time.Time     `json:"started_at"`
 	Status            MonitorStatus `json:"status"`
 }
 
