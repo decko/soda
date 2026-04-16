@@ -1359,6 +1359,12 @@ func (e *Engine) runReviewer(ctx context.Context, phase PhaseConfig, reviewer Re
 	}
 
 	// Use the parent phase's schema for the reviewer findings.
+	// Prefer per-reviewer model if set, otherwise use the global model.
+	model := e.config.Model
+	if reviewer.Model != "" {
+		model = reviewer.Model
+	}
+
 	opts := runner.RunOpts{
 		Phase:        phase.Name + "/" + reviewer.Name,
 		SystemPrompt: rendered,
@@ -1367,7 +1373,7 @@ func (e *Engine) runReviewer(ctx context.Context, phase PhaseConfig, reviewer Re
 		AllowedTools: phase.Tools,
 		MaxBudgetUSD: budgetRemaining,
 		WorkDir:      e.workDir(phase),
-		Model:        e.config.Model,
+		Model:        model,
 		Timeout:      phase.Timeout.Duration,
 		OnChunk:      onChunk,
 	}
