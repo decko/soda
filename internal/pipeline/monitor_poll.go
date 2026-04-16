@@ -570,6 +570,20 @@ func (e *Engine) respondToComments(ctx context.Context, phase PhaseConfig, class
 	if baseBranch == "" {
 		baseBranch = "main"
 	}
+
+	// Fetch latest base branch before computing diff so the comparison
+	// is against the current remote state, not a stale local ref.
+	if fetchErr := git.FetchBranch(ctx, workDir, "origin", baseBranch); fetchErr != nil {
+		// Non-fatal: proceed with potentially stale ref.
+		e.emit(Event{
+			Phase: phase.Name,
+			Kind:  EventMonitorWarning,
+			Data: map[string]any{
+				"warning": fmt.Sprintf("fetch base branch before diff: %v", fetchErr),
+			},
+		})
+	}
+
 	diffCtx, err := git.Diff(ctx, workDir, "origin/"+baseBranch, 50000)
 	if err != nil {
 		// Non-fatal: the session can still read files.
