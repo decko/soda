@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"sort"
 	"strings"
+	"time"
 )
 
 // GitHubPRPoller implements PRPoller using the gh CLI.
@@ -58,9 +60,10 @@ type ghCheck struct {
 
 // ghComment is a review comment from gh api.
 type ghComment struct {
-	ID     int    `json:"id"`
-	NodeID string `json:"node_id"`
-	User   struct {
+	ID        int       `json:"id"`
+	NodeID    string    `json:"node_id"`
+	CreatedAt time.Time `json:"created_at"`
+	User      struct {
 		Login string `json:"login"`
 	} `json:"user"`
 	Body string `json:"body"`
@@ -109,10 +112,12 @@ func (p *GitHubPRPoller) GetNewComments(ctx context.Context, prURL string, after
 	}
 
 	// Get review comments (inline code review comments).
+	// --paginate --slurp produces [[page1...],[page2...]], so we use --jq 'flatten'
+	// to merge pages into a single flat array.
 	endpoint := fmt.Sprintf("repos/%s/%s/pulls/%s/comments", owner, repo, number)
 	out, err := exec.CommandContext(ctx, p.command,
 		"api", endpoint,
-		"--paginate", "--slurp",
+		"--paginate", "--slurp", "--jq", "flatten",
 	).Output()
 	if err != nil {
 		return nil, fmt.Errorf("monitor: get comments: %w: %s", err, ghStderr(err))
@@ -127,7 +132,7 @@ func (p *GitHubPRPoller) GetNewComments(ctx context.Context, prURL string, after
 	issueEndpoint := fmt.Sprintf("repos/%s/%s/issues/%s/comments", owner, repo, number)
 	issueOut, err := exec.CommandContext(ctx, p.command,
 		"api", issueEndpoint,
-		"--paginate", "--slurp",
+		"--paginate", "--slurp", "--jq", "flatten",
 	).Output()
 	if err != nil {
 		return nil, fmt.Errorf("monitor: get issue comments: %w: %s", err, ghStderr(err))
@@ -142,23 +147,34 @@ func (p *GitHubPRPoller) GetNewComments(ctx context.Context, prURL string, after
 	var allComments []PRComment
 	for _, comment := range comments {
 		allComments = append(allComments, PRComment{
-			ID:     fmt.Sprintf("RC_%d", comment.ID),
-			Author: comment.User.Login,
-			Body:   comment.Body,
-			Path:   comment.Path,
-			Line:   comment.Line,
+			ID:        fmt.Sprintf("RC_%d", comment.ID),
+			Author:    comment.User.Login,
+			Body:      comment.Body,
+			Path:      comment.Path,
+			Line:      comment.Line,
+			CreatedAt: comment.CreatedAt,
 		})
 	}
 	// Convert issue comments with IC_ prefix.
 	for _, comment := range issueComments {
 		allComments = append(allComments, PRComment{
-			ID:     fmt.Sprintf("IC_%d", comment.ID),
-			Author: comment.User.Login,
-			Body:   comment.Body,
-			Path:   comment.Path,
-			Line:   comment.Line,
+			ID:        fmt.Sprintf("IC_%d", comment.ID),
+			Author:    comment.User.Login,
+			Body:      comment.Body,
+			Path:      comment.Path,
+			Line:      comment.Line,
+			CreatedAt: comment.CreatedAt,
 		})
 	}
+
+	// Sort all comments by creation time so that afterID filtering is stable
+	// regardless of whether the comment is a review (RC_) or issue (IC_) comment.
+	sort.Slice(allComments, func(i, j int) bool {
+		if allComments[i].CreatedAt.Equal(allComments[j].CreatedAt) {
+			return allComments[i].ID < allComments[j].ID
+		}
+		return allComments[i].CreatedAt.Before(allComments[j].CreatedAt)
+	})
 
 	// Filter to comments after afterID.
 	var result []PRComment
