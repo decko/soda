@@ -45,6 +45,7 @@ type EngineConfig struct {
 	MaxReworkCycles   int // max review→implement rework loops; 0 means use default (2)
 	Mode              Mode
 	OnEvent           func(Event)
+	PauseSignal       <-chan bool // receives true=pause, false=resume from TUI; nil disables
 	SleepFunc         func(time.Duration)
 	JitterFunc        func(max time.Duration) time.Duration
 	PRPoller          PRPoller          // for monitor phase polling; nil disables monitor
@@ -71,10 +72,14 @@ type Engine struct {
 	state       *State
 	confirmCh   chan struct{}
 	reranPhases map[string]bool // phases that ran (not skipped) in this execution
+	pauseMu     sync.Mutex
+	paused      bool
+	pauseCond   *sync.Cond
 }
 
 // NewEngine creates an Engine with sensible defaults for sleep and jitter.
-// confirmCh is only created in Checkpoint mode.
+// confirmCh is only created in Checkpoint mode. If PauseSignal is set,
+// a goroutine drains it and blocks output streaming while paused.
 func NewEngine(r runner.Runner, state *State, cfg EngineConfig) *Engine {
 	if cfg.SleepFunc == nil {
 		cfg.SleepFunc = time.Sleep
@@ -88,10 +93,56 @@ func NewEngine(r runner.Runner, state *State, cfg EngineConfig) *Engine {
 		config: cfg,
 		state:  state,
 	}
+	e.pauseCond = sync.NewCond(&e.pauseMu)
+
 	if cfg.Mode == Checkpoint {
 		e.confirmCh = make(chan struct{}, 1)
 	}
+
+	if cfg.PauseSignal != nil {
+		go e.drainPauseSignal(cfg.PauseSignal)
+	}
 	return e
+}
+
+// drainPauseSignal reads from the pause channel and updates the paused flag.
+// When the channel is closed (TUI exits), the goroutine exits.
+func (e *Engine) drainPauseSignal(ch <-chan bool) {
+	for p := range ch {
+		e.pauseMu.Lock()
+		e.paused = p
+		if !p {
+			e.pauseCond.Broadcast()
+		}
+		e.pauseMu.Unlock()
+	}
+}
+
+// waitIfPaused blocks until the engine is unpaused or context is cancelled.
+// Returns ctx.Err() if context was cancelled while paused, nil otherwise.
+func (e *Engine) waitIfPaused(ctx context.Context) error {
+	e.pauseMu.Lock()
+	defer e.pauseMu.Unlock()
+	for e.paused {
+		// Check context before waiting
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		// Use a goroutine to wake on context cancellation
+		done := make(chan struct{})
+		go func() {
+			select {
+			case <-ctx.Done():
+				e.pauseMu.Lock()
+				e.pauseCond.Broadcast()
+				e.pauseMu.Unlock()
+			case <-done:
+			}
+		}()
+		e.pauseCond.Wait()
+		close(done)
+	}
+	return ctx.Err()
 }
 
 // ensureWorktree creates a worktree if one hasn't been created yet and
@@ -278,6 +329,11 @@ func (e *Engine) executePhases(ctx context.Context, phases []PhaseConfig, forceF
 		for idx, phase := range phases {
 			if err := ctx.Err(); err != nil {
 				return fmt.Errorf("engine: context cancelled: %w", err)
+			}
+
+			// Block between phases while paused.
+			if err := e.waitIfPaused(ctx); err != nil {
+				return fmt.Errorf("engine: context cancelled while paused: %w", err)
 			}
 
 			skipCheck := !(forceFirst && idx == 0)
@@ -508,6 +564,7 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 		WorkDir:      e.workDir(phase),
 		Model:        e.config.Model,
 		Timeout:      phase.Timeout.Duration,
+		OnChunk:      e.makeOnChunk(phase.Name),
 	}
 
 	// Run with retry.
@@ -1252,6 +1309,7 @@ func (e *Engine) runReviewer(ctx context.Context, phase PhaseConfig, reviewer Re
 		WorkDir:      e.workDir(phase),
 		Model:        e.config.Model,
 		Timeout:      phase.Timeout.Duration,
+		OnChunk:      e.makeOnChunk(phase.Name),
 	}
 
 	result, err := e.runner.Run(ctx, opts)
@@ -1431,6 +1489,21 @@ func (e *Engine) workDir(phase PhaseConfig) string {
 		return wt
 	}
 	return e.config.WorkDir
+}
+
+// makeOnChunk returns a callback that emits EventOutputChunk events and
+// blocks while the engine is paused.
+func (e *Engine) makeOnChunk(phase string) func(string) {
+	return func(line string) {
+		e.emit(Event{
+			Phase: phase,
+			Kind:  EventOutputChunk,
+			Data:  map[string]any{"line": line},
+		})
+		// Block streaming while paused. Ignore context errors here —
+		// the runner will observe context cancellation on its own.
+		_ = e.waitIfPaused(context.Background())
+	}
 }
 
 // emit logs an event to state and calls the OnEvent callback if set.
