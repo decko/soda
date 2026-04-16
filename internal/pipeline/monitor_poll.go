@@ -180,6 +180,9 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 		// 2. Check for new comments.
 		classified := e.checkNewComments(ctx, phase.Name, monState)
 
+		// 2a. Post canned acknowledgment for non-authoritative comments.
+		e.postAcknowledgments(ctx, phase.Name, classified, monState)
+
 		// 2b. Response execution: run a Claude session for actionable comments.
 		if HasActionable(classified) {
 			monState.ResponseRounds++
@@ -212,6 +215,9 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 						// Programmatic verify gate: when files were changed,
 						// check tests_passed to decide whether to allow push.
 						e.gateMonitorResponse(ctx, phase, output, monState)
+
+						// Post a summary reply to the PR.
+						e.postResponseSummary(ctx, phase.Name, output, monState)
 					}
 				}
 			}
@@ -673,6 +679,111 @@ func (e *Engine) gateMonitorResponse(ctx context.Context, phase PhaseConfig, out
 			"reason":         "verification failed after monitor code changes",
 			"response_round": monState.ResponseRounds,
 			"files_changed":  len(output.FilesChanged),
+		},
+	})
+}
+
+// postAcknowledgments posts a canned acknowledgment reply to the PR for
+// non-authoritative comments that were classified with ActionAcknowledge.
+func (e *Engine) postAcknowledgments(ctx context.Context, phaseName string, classified []ClassifiedComment, monState *MonitorState) {
+	if e.config.PRPoller == nil {
+		return
+	}
+
+	for _, cc := range classified {
+		if cc.Action != ActionAcknowledge || cc.Actionable {
+			continue
+		}
+		// Only acknowledge non-authoritative users (skip approvals from auth users).
+		if cc.Reason != "comment from non-authoritative user" {
+			continue
+		}
+
+		body := fmt.Sprintf(
+			"Thanks for the feedback, @%s! I've noted your comment. "+
+				"A project maintainer will review and decide whether to act on it.",
+			cc.Comment.Author,
+		)
+
+		if err := e.config.PRPoller.PostComment(ctx, monState.PRURL, body); err != nil {
+			e.emit(Event{
+				Phase: phaseName,
+				Kind:  EventMonitorWarning,
+				Data: map[string]any{
+					"warning":    fmt.Sprintf("failed to post acknowledgment for %s: %v", cc.Comment.ID, err),
+					"comment_id": cc.Comment.ID,
+				},
+			})
+			continue
+		}
+
+		e.emit(Event{
+			Phase: phaseName,
+			Kind:  EventMonitorAcknowledgePosted,
+			Data: map[string]any{
+				"comment_id": cc.Comment.ID,
+				"author":     cc.Comment.Author,
+			},
+		})
+	}
+}
+
+// postResponseSummary posts a summary reply to the PR after a response
+// session completes. This makes the response visible to reviewers on the PR.
+func (e *Engine) postResponseSummary(ctx context.Context, phaseName string, output *schemas.MonitorOutput, monState *MonitorState) {
+	if e.config.PRPoller == nil || output == nil {
+		return
+	}
+
+	if len(output.CommentsHandled) == 0 {
+		return
+	}
+
+	var sb strings.Builder
+	sb.WriteString("I've addressed the review feedback:\n\n")
+
+	for _, handled := range output.CommentsHandled {
+		action := handled.Action
+		if action == "" {
+			action = "handled"
+		}
+		sb.WriteString(fmt.Sprintf("- **%s** %s's comment", action, handled.Author))
+		if handled.CommentID != "" {
+			sb.WriteString(fmt.Sprintf(" (%s)", handled.CommentID))
+		}
+		if handled.Response != "" {
+			sb.WriteString(": " + handled.Response)
+		}
+		sb.WriteString("\n")
+	}
+
+	if len(output.FilesChanged) > 0 {
+		sb.WriteString(fmt.Sprintf("\n%d file(s) changed", len(output.FilesChanged)))
+		if output.TestsPassed {
+			sb.WriteString(", tests passing ✅")
+		} else {
+			sb.WriteString(", tests failing ⚠️")
+		}
+		sb.WriteString("\n")
+	}
+
+	if err := e.config.PRPoller.PostComment(ctx, monState.PRURL, sb.String()); err != nil {
+		e.emit(Event{
+			Phase: phaseName,
+			Kind:  EventMonitorWarning,
+			Data: map[string]any{
+				"warning": fmt.Sprintf("failed to post response summary: %v", err),
+			},
+		})
+		return
+	}
+
+	e.emit(Event{
+		Phase: phaseName,
+		Kind:  EventMonitorReplyPosted,
+		Data: map[string]any{
+			"response_round":   monState.ResponseRounds,
+			"comments_handled": len(output.CommentsHandled),
 		},
 	})
 }

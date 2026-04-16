@@ -1380,6 +1380,120 @@ func TestMonitor_VerifyGateSkippedForReplyOnly(t *testing.T) {
 	}
 }
 
+func TestMonitor_NonAuthoritativeCannedAcknowledgment(t *testing.T) {
+	auth := NewCODEOWNERSAuthority([]CODEOWNERSRule{
+		{Pattern: "*.go", Owners: []string{"go-owner"}},
+	})
+
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "open", Approved: false}},
+			{status: &PRStatus{State: "open", Approved: true}},
+		},
+		commentResponses: []mockCommentResponse{
+			{comments: []PRComment{
+				{ID: "IC_1", Author: "random-user", Body: "Fix this please.", Path: "main.go"},
+			}},
+		},
+	}
+
+	engine, _, events := setupMonitorEngine(t, poller, nil, func(cfg *EngineConfig) {
+		cfg.SelfUser = "soda-bot"
+		cfg.AuthorityResolver = auth
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Should have posted a canned acknowledgment.
+	poller.mu.Lock()
+	posted := poller.postedComments
+	poller.mu.Unlock()
+	if len(posted) != 1 {
+		t.Fatalf("posted comments = %d, want 1", len(posted))
+	}
+	if !strings.Contains(posted[0], "@random-user") {
+		t.Errorf("posted comment should mention @random-user, got: %q", posted[0])
+	}
+
+	// Should have acknowledge_posted event.
+	hasAck := false
+	for _, evt := range *events {
+		if evt.Kind == EventMonitorAcknowledgePosted {
+			hasAck = true
+			if author, _ := evt.Data["author"].(string); author != "random-user" {
+				t.Errorf("author = %q, want %q", author, "random-user")
+			}
+		}
+	}
+	if !hasAck {
+		t.Error("monitor_acknowledge_posted event not emitted")
+	}
+}
+
+func TestMonitor_ResponseSummaryPostedToPR(t *testing.T) {
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "open", Approved: false}},
+			{status: &PRStatus{State: "open", Approved: true}},
+		},
+		commentResponses: []mockCommentResponse{
+			{comments: []PRComment{
+				{ID: "IC_1", Author: "reviewer", Body: "Fix this bug.", Path: "main.go"},
+			}},
+		},
+	}
+
+	monitorOutput := json.RawMessage(`{
+		"ticket_key":"TEST-MON",
+		"pr_url":"https://github.com/decko/soda/pull/49",
+		"comments_handled":[{"comment_id":"IC_1","author":"reviewer","content":"Fix this bug.","action":"fixed","response":"Fixed the bug.","classification":"code_change","authoritative":true}],
+		"files_changed":[{"path":"main.go","action":"modified"}],
+		"commits":[{"hash":"abc123","message":"fix: address review","task_id":"IC_1"}],
+		"tests_passed":true
+	}`)
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"monitor/response_1": {{
+				result: &runner.RunResult{Output: monitorOutput, CostUSD: 0.10},
+			}},
+		},
+	}
+
+	engine, _, events := setupMonitorEngineWithRunner(t, mock, poller, nil)
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Should have posted a reply summary.
+	poller.mu.Lock()
+	posted := poller.postedComments
+	poller.mu.Unlock()
+	if len(posted) != 1 {
+		t.Fatalf("posted comments = %d, want 1", len(posted))
+	}
+	if !strings.Contains(posted[0], "addressed") {
+		t.Errorf("reply summary should mention 'addressed', got: %q", posted[0])
+	}
+	if !strings.Contains(posted[0], "tests passing") {
+		t.Errorf("reply summary should mention tests passing, got: %q", posted[0])
+	}
+
+	// Should have reply_posted event.
+	hasReply := false
+	for _, evt := range *events {
+		if evt.Kind == EventMonitorReplyPosted {
+			hasReply = true
+		}
+	}
+	if !hasReply {
+		t.Error("monitor_reply_posted event not emitted")
+	}
+}
+
 func TestFormatCommentsForPrompt(t *testing.T) {
 	classified := []ClassifiedComment{
 		{
