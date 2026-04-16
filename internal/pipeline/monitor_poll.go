@@ -508,6 +508,7 @@ func (e *Engine) pollInterval(polling *PollingConfig, elapsed time.Duration) tim
 // and records the result. Returns the parsed MonitorOutput and any error.
 func (e *Engine) respondToComments(ctx context.Context, phase PhaseConfig, classified []ClassifiedComment, monState *MonitorState) (*schemas.MonitorOutput, error) {
 	actionableCount := countActionable(classified)
+	replyOnly := isReplyOnly(classified)
 	e.emit(Event{
 		Phase: phase.Name,
 		Kind:  EventMonitorResponseStarted,
@@ -515,6 +516,7 @@ func (e *Engine) respondToComments(ctx context.Context, phase PhaseConfig, class
 			"response_round":   monState.ResponseRounds,
 			"comment_count":    len(classified),
 			"actionable_count": actionableCount,
+			"reply_only":       replyOnly,
 		},
 	})
 
@@ -562,12 +564,18 @@ func (e *Engine) respondToComments(ctx context.Context, phase PhaseConfig, class
 		remaining = e.config.MaxCostUSD - e.state.Meta().TotalCost
 	}
 
+	// Restrict tools for reply-only sessions (questions only — no code changes).
+	tools := phase.Tools
+	if replyOnly {
+		tools = replyOnlyTools(phase.Tools)
+	}
+
 	opts := runner.RunOpts{
 		Phase:        fmt.Sprintf("%s/response_%d", phase.Name, monState.ResponseRounds),
 		SystemPrompt: rendered,
 		UserPrompt:   "Address the review comments described in the system prompt.",
 		OutputSchema: phase.Schema,
-		AllowedTools: phase.Tools,
+		AllowedTools: tools,
 		MaxBudgetUSD: remaining,
 		WorkDir:      e.workDir(phase),
 		Model:        e.config.Model,
@@ -659,4 +667,45 @@ func countActionable(classified []ClassifiedComment) int {
 		}
 	}
 	return count
+}
+
+// isReplyOnly returns true when every actionable comment in classified
+// is a question (ActionRespond) and none require code changes (ActionApplyFix).
+// Used to decide whether to restrict the Claude session's tool set.
+func isReplyOnly(classified []ClassifiedComment) bool {
+	hasActionable := false
+	for _, cc := range classified {
+		if !cc.Actionable {
+			continue
+		}
+		hasActionable = true
+		if cc.Action == ActionApplyFix {
+			return false
+		}
+	}
+	return hasActionable
+}
+
+// replyOnlyTools returns a restricted tool set that excludes Write and Edit,
+// suitable for reply-only sessions that should not modify code.
+func replyOnlyTools(tools []string) []string {
+	var filtered []string
+	for _, t := range tools {
+		if t == "Write" || t == "Edit" {
+			continue
+		}
+		filtered = append(filtered, t)
+	}
+	return filtered
+}
+
+// hasCodeChanges returns true when at least one actionable comment has
+// ActionApplyFix, meaning the session may modify files.
+func hasCodeChanges(classified []ClassifiedComment) bool {
+	for _, cc := range classified {
+		if cc.Actionable && cc.Action == ActionApplyFix {
+			return true
+		}
+	}
+	return false
 }

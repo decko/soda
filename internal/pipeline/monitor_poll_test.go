@@ -1311,6 +1311,140 @@ func TestFormatCommentsForPrompt(t *testing.T) {
 	}
 }
 
+func TestIsReplyOnly(t *testing.T) {
+	tests := []struct {
+		name     string
+		items    []ClassifiedComment
+		expected bool
+	}{
+		{
+			name:     "empty",
+			items:    nil,
+			expected: false,
+		},
+		{
+			name: "all_questions",
+			items: []ClassifiedComment{
+				{Actionable: true, Action: ActionRespond},
+				{Actionable: true, Action: ActionRespond},
+			},
+			expected: true,
+		},
+		{
+			name: "mixed_fix_and_respond",
+			items: []ClassifiedComment{
+				{Actionable: true, Action: ActionApplyFix},
+				{Actionable: true, Action: ActionRespond},
+			},
+			expected: false,
+		},
+		{
+			name: "only_fixes",
+			items: []ClassifiedComment{
+				{Actionable: true, Action: ActionApplyFix},
+			},
+			expected: false,
+		},
+		{
+			name: "non_actionable_skipped",
+			items: []ClassifiedComment{
+				{Actionable: false, Action: ActionSkip},
+				{Actionable: true, Action: ActionRespond},
+			},
+			expected: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isReplyOnly(tt.items)
+			if got != tt.expected {
+				t.Errorf("isReplyOnly = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestReplyOnlyTools(t *testing.T) {
+	tools := []string{"Read", "Write", "Edit", "Glob", "Grep", "Bash"}
+	got := replyOnlyTools(tools)
+	for _, tool := range got {
+		if tool == "Write" || tool == "Edit" {
+			t.Errorf("replyOnlyTools should exclude %q", tool)
+		}
+	}
+	if len(got) != 4 {
+		t.Errorf("replyOnlyTools returned %d tools, want 4", len(got))
+	}
+}
+
+func TestHasCodeChanges(t *testing.T) {
+	yes := []ClassifiedComment{
+		{Actionable: true, Action: ActionApplyFix},
+		{Actionable: true, Action: ActionRespond},
+	}
+	if !hasCodeChanges(yes) {
+		t.Error("hasCodeChanges should return true")
+	}
+	no := []ClassifiedComment{
+		{Actionable: true, Action: ActionRespond},
+		{Actionable: false, Action: ActionApplyFix},
+	}
+	if hasCodeChanges(no) {
+		t.Error("hasCodeChanges should return false when fix is non-actionable")
+	}
+}
+
+func TestMonitor_ReplyOnlyToolRestriction(t *testing.T) {
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "open", Approved: false}},
+			{status: &PRStatus{State: "open", Approved: true}},
+		},
+		commentResponses: []mockCommentResponse{
+			{comments: []PRComment{
+				{ID: "IC_1", Author: "reviewer", Body: "Why did you do it this way?"},
+			}},
+		},
+	}
+
+	monitorOutput := json.RawMessage(`{
+		"ticket_key":"TEST-MON",
+		"pr_url":"https://github.com/decko/soda/pull/49",
+		"comments_handled":[{"comment_id":"IC_1","author":"reviewer","content":"Why did you do it this way?","action":"explained","response":"Because...","classification":"question","authoritative":true}],
+		"tests_passed":true
+	}`)
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"monitor/response_1": {{
+				result: &runner.RunResult{
+					Output:  monitorOutput,
+					CostUSD: 0.10,
+				},
+			}},
+		},
+	}
+
+	engine, _, _ := setupMonitorEngineWithRunner(t, mock, poller, nil)
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Verify runner was called with restricted tools (no Write, no Edit).
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+	if len(mock.calls) != 1 {
+		t.Fatalf("runner call count = %d, want 1", len(mock.calls))
+	}
+	call := mock.calls[0]
+	for _, tool := range call.AllowedTools {
+		if tool == "Write" || tool == "Edit" {
+			t.Errorf("reply-only session should not have %q tool", tool)
+		}
+	}
+}
+
 func TestFormatCommentsForPrompt_Empty(t *testing.T) {
 	result := formatCommentsForPrompt(nil)
 	if result != "" {
