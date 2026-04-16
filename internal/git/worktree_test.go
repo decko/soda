@@ -29,6 +29,65 @@ func initGitRepo(t *testing.T) string {
 	return dir
 }
 
+func TestToplevel(t *testing.T) {
+	t.Run("returns_repo_root", func(t *testing.T) {
+		repoDir := initGitRepo(t)
+
+		got, err := Toplevel(repoDir)
+		if err != nil {
+			t.Fatalf("Toplevel: %v", err)
+		}
+		if got != repoDir {
+			t.Errorf("Toplevel = %q, want %q", got, repoDir)
+		}
+	})
+
+	t.Run("resolves_from_subdirectory", func(t *testing.T) {
+		repoDir := initGitRepo(t)
+
+		subDir := filepath.Join(repoDir, "sub", "deep")
+		if err := os.MkdirAll(subDir, 0755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+
+		got, err := Toplevel(subDir)
+		if err != nil {
+			t.Fatalf("Toplevel: %v", err)
+		}
+		if got != repoDir {
+			t.Errorf("Toplevel = %q, want %q", got, repoDir)
+		}
+	})
+
+	t.Run("resolves_from_worktree", func(t *testing.T) {
+		repoDir := initGitRepo(t)
+		worktreeBase := filepath.Join(repoDir, ".worktrees")
+
+		wtPath, err := CreateWorktree(context.Background(), repoDir, worktreeBase, "feat/toplevel-test", "main")
+		if err != nil {
+			t.Fatalf("CreateWorktree: %v", err)
+		}
+
+		got, err := Toplevel(wtPath)
+		if err != nil {
+			t.Fatalf("Toplevel: %v", err)
+		}
+		// Inside a worktree, git rev-parse --show-toplevel returns
+		// the worktree root, not the main repository.
+		if got != wtPath {
+			t.Errorf("Toplevel = %q, want %q (worktree root)", got, wtPath)
+		}
+	})
+
+	t.Run("errors_outside_git_repo", func(t *testing.T) {
+		dir := t.TempDir()
+		_, err := Toplevel(dir)
+		if err == nil {
+			t.Fatal("expected error outside git repo")
+		}
+	})
+}
+
 func TestCreateWorktree(t *testing.T) {
 	t.Run("creates_worktree_and_branch", func(t *testing.T) {
 		repoDir := initGitRepo(t)

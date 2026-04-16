@@ -16,6 +16,7 @@ import (
 
 	"github.com/decko/soda/internal/claude"
 	"github.com/decko/soda/internal/config"
+	"github.com/decko/soda/internal/git"
 	"github.com/decko/soda/internal/pipeline"
 	"github.com/decko/soda/internal/progress"
 	"github.com/decko/soda/internal/runner"
@@ -135,16 +136,20 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 		return fmt.Errorf("run: unknown mode %q (expected 'checkpoint' or 'autonomous')", modeStr)
 	}
 
+	// Resolve working directory to the git repo toplevel so worktrees are
+	// always created from the root, even when soda is invoked from a subdirectory
+	// or from inside an existing worktree.
+	workDir, err := git.Toplevel(".")
+	if err != nil {
+		return fmt.Errorf("run: resolve git toplevel: %w", err)
+	}
+
 	// Build runner
 	var r runner.Runner
 	useMock, _ := cmd.Flags().GetBool("mock")
 	if useMock {
 		r = buildMockRunner()
 	} else {
-		workDir, err := filepath.Abs(".")
-		if err != nil {
-			return fmt.Errorf("run: resolve workdir: %w", err)
-		}
 		claudeRunner, err := runner.NewClaudeRunner("claude", cfg.Model, workDir)
 		if err != nil {
 			return fmt.Errorf("run: create claude runner: %w", err)
@@ -176,7 +181,7 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 		PromptConfig:  promptConfig,
 		PromptContext: promptContext,
 		Model:         cfg.Model,
-		WorkDir:       ".",
+		WorkDir:       workDir,
 		WorktreeBase:  cfg.WorktreeDir,
 		BaseBranch:    "main",
 		MaxCostUSD:    cfg.Limits.MaxCostPerTicket,
