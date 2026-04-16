@@ -29,11 +29,12 @@ const (
 
 // ClassifiedComment holds the result of classifying a single PRComment.
 type ClassifiedComment struct {
-	Comment    PRComment
-	Type       CommentType
-	Action     CommentAction
-	Actionable bool   // true if this comment should count toward response rounds
-	Reason     string // human-readable explanation of classification
+	Comment          PRComment
+	Type             CommentType
+	Action           CommentAction
+	Actionable       bool   // true if this comment should count toward response rounds
+	NonAuthoritative bool   // true if the comment author lacks authority on the file
+	Reason           string // human-readable explanation of classification
 }
 
 // CommentClassifier classifies PR comments and determines actions.
@@ -87,11 +88,12 @@ func (c *CommentClassifier) Classify(comment PRComment) ClassifiedComment {
 	// 3. Authority check: non-authoritative commenters get acknowledged.
 	if c.authority != nil && !c.authority.IsAuthoritative(comment.Author, comment.Path) {
 		return ClassifiedComment{
-			Comment:    comment,
-			Type:       classifyCommentBody(comment.Body),
-			Action:     ActionAcknowledge,
-			Actionable: false,
-			Reason:     "comment from non-authoritative user",
+			Comment:          comment,
+			Type:             classifyCommentBody(comment.Body),
+			Action:           ActionAcknowledge,
+			Actionable:       false,
+			NonAuthoritative: true,
+			Reason:           "comment from non-authoritative user",
 		}
 	}
 

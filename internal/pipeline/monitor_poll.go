@@ -706,7 +706,7 @@ func (e *Engine) postAcknowledgments(ctx context.Context, phaseName string, clas
 			continue
 		}
 		// Only acknowledge non-authoritative users (skip approvals from auth users).
-		if cc.Reason != "comment from non-authoritative user" {
+		if !cc.NonAuthoritative {
 			continue
 		}
 
