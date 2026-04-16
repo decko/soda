@@ -176,20 +176,7 @@ func (p *GitHubPRPoller) GetNewComments(ctx context.Context, prURL string, after
 		return allComments[i].CreatedAt.Before(allComments[j].CreatedAt)
 	})
 
-	// Filter to comments after afterID.
-	var result []PRComment
-	pastAfter := afterID == ""
-	for _, prComment := range allComments {
-		if !pastAfter {
-			if prComment.ID == afterID {
-				pastAfter = true
-			}
-			continue
-		}
-		result = append(result, prComment)
-	}
-
-	return result, nil
+	return filterCommentsAfterID(allComments, afterID), nil
 }
 
 // GetCIStatus returns the current CI check status for the PR.
@@ -283,6 +270,36 @@ func (p *GitHubPRPoller) PostComment(ctx context.Context, prURL string, body str
 		return fmt.Errorf("monitor: post comment: %w: %s", err, strings.TrimSpace(string(output)))
 	}
 	return nil
+}
+
+// filterCommentsAfterID returns comments that appear after afterID in the
+// sorted comment list. If afterID is empty, all comments are returned.
+// If afterID is not found in the list (e.g., deleted comment), all comments
+// are returned to avoid silent data loss.
+func filterCommentsAfterID(comments []PRComment, afterID string) []PRComment {
+	if afterID == "" {
+		return comments
+	}
+
+	var result []PRComment
+	pastAfter := false
+	for _, c := range comments {
+		if !pastAfter {
+			if c.ID == afterID {
+				pastAfter = true
+			}
+			continue
+		}
+		result = append(result, c)
+	}
+
+	// If afterID was not found (e.g., deleted comment), treat as stale
+	// and return all comments to avoid silent data loss.
+	if !pastAfter {
+		return comments
+	}
+
+	return result
 }
 
 // ghStderr extracts stderr from an exec.ExitError for error messages.
