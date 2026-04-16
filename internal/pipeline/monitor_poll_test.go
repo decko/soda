@@ -1230,6 +1230,156 @@ func TestMonitor_MultipleResponseRounds(t *testing.T) {
 	}
 }
 
+func TestMonitor_VerifyGatePassesWhenTestsPass(t *testing.T) {
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "open", Approved: false}},
+			{status: &PRStatus{State: "open", Approved: true}},
+		},
+		commentResponses: []mockCommentResponse{
+			{comments: []PRComment{
+				{ID: "IC_1", Author: "reviewer", Body: "Fix this bug.", Path: "main.go"},
+			}},
+		},
+	}
+
+	monitorOutput := json.RawMessage(`{
+		"ticket_key":"TEST-MON",
+		"pr_url":"https://github.com/decko/soda/pull/49",
+		"comments_handled":[{"comment_id":"IC_1","author":"reviewer","content":"Fix this bug.","action":"fixed","response":"Fixed.","classification":"code_change","authoritative":true}],
+		"files_changed":[{"path":"main.go","action":"modified"}],
+		"commits":[{"hash":"abc123","message":"fix: address review","task_id":"IC_1"}],
+		"tests_passed":true
+	}`)
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"monitor/response_1": {{
+				result: &runner.RunResult{Output: monitorOutput, CostUSD: 0.10},
+			}},
+		},
+	}
+
+	engine, _, events := setupMonitorEngineWithRunner(t, mock, poller, nil)
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Should NOT have verify_failed or notify_user events.
+	for _, evt := range *events {
+		if evt.Kind == EventMonitorVerifyFailed {
+			t.Error("verify_failed event should not be emitted when tests pass")
+		}
+		if evt.Kind == EventMonitorNotifyUser {
+			t.Error("notify_user event should not be emitted when tests pass")
+		}
+	}
+}
+
+func TestMonitor_VerifyGateFailsWhenTestsFail(t *testing.T) {
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "open", Approved: false}},
+			{status: &PRStatus{State: "open", Approved: true}},
+		},
+		commentResponses: []mockCommentResponse{
+			{comments: []PRComment{
+				{ID: "IC_1", Author: "reviewer", Body: "Fix this bug.", Path: "main.go"},
+			}},
+		},
+	}
+
+	monitorOutput := json.RawMessage(`{
+		"ticket_key":"TEST-MON",
+		"pr_url":"https://github.com/decko/soda/pull/49",
+		"comments_handled":[{"comment_id":"IC_1","author":"reviewer","content":"Fix this bug.","action":"fixed","response":"Fixed.","classification":"code_change","authoritative":true}],
+		"files_changed":[{"path":"main.go","action":"modified"}],
+		"commits":[{"hash":"abc123","message":"fix: address review","task_id":"IC_1"}],
+		"tests_passed":false
+	}`)
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"monitor/response_1": {{
+				result: &runner.RunResult{Output: monitorOutput, CostUSD: 0.10},
+			}},
+		},
+	}
+
+	engine, _, events := setupMonitorEngineWithRunner(t, mock, poller, nil)
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Should have verify_failed and notify_user events.
+	hasVerifyFailed := false
+	hasNotifyUser := false
+	for _, evt := range *events {
+		if evt.Kind == EventMonitorVerifyFailed {
+			hasVerifyFailed = true
+		}
+		if evt.Kind == EventMonitorNotifyUser {
+			hasNotifyUser = true
+			reason, _ := evt.Data["reason"].(string)
+			if reason == "" {
+				t.Error("notify_user event should have a reason")
+			}
+		}
+	}
+	if !hasVerifyFailed {
+		t.Error("verify_failed event not emitted when tests fail")
+	}
+	if !hasNotifyUser {
+		t.Error("notify_user event not emitted when tests fail")
+	}
+}
+
+func TestMonitor_VerifyGateSkippedForReplyOnly(t *testing.T) {
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "open", Approved: false}},
+			{status: &PRStatus{State: "open", Approved: true}},
+		},
+		commentResponses: []mockCommentResponse{
+			{comments: []PRComment{
+				{ID: "IC_1", Author: "reviewer", Body: "Why did you do it this way?"},
+			}},
+		},
+	}
+
+	// No files_changed → reply only
+	monitorOutput := json.RawMessage(`{
+		"ticket_key":"TEST-MON",
+		"pr_url":"https://github.com/decko/soda/pull/49",
+		"comments_handled":[{"comment_id":"IC_1","author":"reviewer","content":"Why?","action":"explained","response":"Because...","classification":"question","authoritative":true}],
+		"files_changed":[],
+		"tests_passed":false
+	}`)
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"monitor/response_1": {{
+				result: &runner.RunResult{Output: monitorOutput, CostUSD: 0.05},
+			}},
+		},
+	}
+
+	engine, _, events := setupMonitorEngineWithRunner(t, mock, poller, nil)
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Should NOT have verify_failed events for reply-only sessions.
+	for _, evt := range *events {
+		if evt.Kind == EventMonitorVerifyFailed {
+			t.Error("verify_failed event should not be emitted for reply-only sessions")
+		}
+	}
+}
+
 func TestFormatCommentsForPrompt(t *testing.T) {
 	classified := []ClassifiedComment{
 		{

@@ -197,7 +197,7 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 						},
 					})
 				} else {
-					_, err := e.respondToComments(ctx, phase, classified, monState)
+					output, err := e.respondToComments(ctx, phase, classified, monState)
 					if err != nil {
 						// Non-fatal: log and continue polling.
 						e.emit(Event{
@@ -208,6 +208,10 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 								"error":          err.Error(),
 							},
 						})
+					} else if output != nil {
+						// Programmatic verify gate: when files were changed,
+						// check tests_passed to decide whether to allow push.
+						e.gateMonitorResponse(ctx, phase, output, monState)
 					}
 				}
 			}
@@ -631,6 +635,46 @@ func (e *Engine) respondToComments(ctx context.Context, phase PhaseConfig, class
 	})
 
 	return &output, nil
+}
+
+// gateMonitorResponse enforces a programmatic verify gate after response
+// execution. When files were changed (fix session), it checks tests_passed:
+//   - true  → allow (commit+push was done by the session)
+//   - false → emit notify_user event so the user is alerted; the session
+//     should NOT have pushed (the prompt instructs it not to), but
+//     the engine does not try to undo pushes.
+//
+// Reply-only sessions (no files changed) skip this gate entirely.
+func (e *Engine) gateMonitorResponse(ctx context.Context, phase PhaseConfig, output *schemas.MonitorOutput, monState *MonitorState) {
+	if len(output.FilesChanged) == 0 {
+		// No code changes — nothing to gate.
+		return
+	}
+
+	if output.TestsPassed {
+		// Verification passed — commit+push is allowed.
+		return
+	}
+
+	// Tests failed: notify the user.
+	e.emit(Event{
+		Phase: phase.Name,
+		Kind:  EventMonitorVerifyFailed,
+		Data: map[string]any{
+			"response_round": monState.ResponseRounds,
+			"files_changed":  len(output.FilesChanged),
+			"commits":        len(output.Commits),
+		},
+	})
+	e.emit(Event{
+		Phase: phase.Name,
+		Kind:  EventMonitorNotifyUser,
+		Data: map[string]any{
+			"reason":         "verification failed after monitor code changes",
+			"response_round": monState.ResponseRounds,
+			"files_changed":  len(output.FilesChanged),
+		},
+	})
 }
 
 // formatCommentsForPrompt converts classified comments into a human-readable
