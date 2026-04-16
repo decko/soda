@@ -1733,6 +1733,44 @@ func TestCountActionable(t *testing.T) {
 	}
 }
 
+func TestMonitor_BudgetExceededDoesNotConsumeRound(t *testing.T) {
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "open", Approved: false}},
+			{status: &PRStatus{State: "open", Approved: true}},
+		},
+		commentResponses: []mockCommentResponse{
+			{comments: []PRComment{
+				{ID: "IC_1", Author: "reviewer", Body: "Fix this."},
+			}},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{},
+	}
+
+	engine, state, _ := setupMonitorEngineWithRunner(t, mock, poller, nil, func(cfg *EngineConfig) {
+		cfg.MaxCostUSD = 1.0
+	})
+
+	// Set total cost to exceed budget.
+	state.Meta().TotalCost = 1.5
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	monState, err := state.ReadMonitorState()
+	if err != nil {
+		t.Fatalf("ReadMonitorState: %v", err)
+	}
+	// Budget-skipped rounds should NOT consume response round budget.
+	if monState.ResponseRounds != 0 {
+		t.Errorf("ResponseRounds = %d, want 0 (budget-skipped rounds should not consume budget)", monState.ResponseRounds)
+	}
+}
+
 func TestMonitor_GetNewCommentsErrorEmitsWarning(t *testing.T) {
 	poller := &mockPRPoller{
 		statusResponses: []mockPRStatusResponse{

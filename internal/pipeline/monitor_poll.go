@@ -189,40 +189,43 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 
 		// 2b. Response execution: run a Claude session for actionable comments.
 		if HasActionable(classified) {
-			monState.ResponseRounds++
-			if e.runner != nil {
-				// Check budget before each response round.
-				if e.config.MaxCostUSD > 0 && e.state.Meta().TotalCost >= e.config.MaxCostUSD {
+			if e.runner == nil {
+				// No runner configured; count the round to avoid infinite loops.
+				monState.ResponseRounds++
+			} else if e.config.MaxCostUSD > 0 && e.state.Meta().TotalCost >= e.config.MaxCostUSD {
+				// Budget exceeded — do not consume a response round since no
+				// work is performed. This prevents premature MaxRounds
+				// termination when all rounds are budget-skipped.
+				e.emit(Event{
+					Phase: phase.Name,
+					Kind:  EventBudgetWarning,
+					Data: map[string]any{
+						"total_cost": e.state.Meta().TotalCost,
+						"limit":      e.config.MaxCostUSD,
+						"skipping":   "monitor_response",
+					},
+				})
+			} else {
+				// Increment only when actual work will be performed.
+				monState.ResponseRounds++
+				output, err := e.respondToComments(ctx, phase, classified, monState)
+				if err != nil {
+					// Non-fatal: log and continue polling.
 					e.emit(Event{
 						Phase: phase.Name,
-						Kind:  EventBudgetWarning,
+						Kind:  EventMonitorResponseFailed,
 						Data: map[string]any{
-							"total_cost":     e.state.Meta().TotalCost,
-							"limit":          e.config.MaxCostUSD,
-							"skipping":       "monitor_response",
 							"response_round": monState.ResponseRounds,
+							"error":          err.Error(),
 						},
 					})
-				} else {
-					output, err := e.respondToComments(ctx, phase, classified, monState)
-					if err != nil {
-						// Non-fatal: log and continue polling.
-						e.emit(Event{
-							Phase: phase.Name,
-							Kind:  EventMonitorResponseFailed,
-							Data: map[string]any{
-								"response_round": monState.ResponseRounds,
-								"error":          err.Error(),
-							},
-						})
-					} else if output != nil {
-						// Programmatic verify gate: when files were changed,
-						// check tests_passed to decide whether to allow push.
-						e.gateMonitorResponse(ctx, phase, output, monState)
+				} else if output != nil {
+					// Programmatic verify gate: when files were changed,
+					// check tests_passed to decide whether to allow push.
+					e.gateMonitorResponse(ctx, phase, output, monState)
 
-						// Post a summary reply to the PR.
-						e.postResponseSummary(ctx, phase.Name, output, monState)
-					}
+					// Post a summary reply to the PR.
+					e.postResponseSummary(ctx, phase.Name, output, monState)
 				}
 			}
 		}
