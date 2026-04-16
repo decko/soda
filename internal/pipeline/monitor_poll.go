@@ -91,13 +91,14 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 	monState, err := e.state.ReadMonitorState()
 	if err != nil {
 		monState = &MonitorState{
-			PRURL:             prURL,
-			MaxResponseRounds: polling.MaxResponseRounds,
-			Status:            MonitorPolling,
+			PRURL:  prURL,
+			Status: MonitorPolling,
 		}
 	}
 	monState.PRURL = prURL
 	monState.Status = MonitorPolling
+	// Always apply current config so that config changes take effect on resume.
+	monState.MaxResponseRounds = polling.MaxResponseRounds
 
 	if err := e.state.WriteMonitorState(monState); err != nil {
 		return fmt.Errorf("engine: write initial monitor state: %w", err)
