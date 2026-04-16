@@ -315,7 +315,12 @@ func (e *Engine) checkPRStatus(ctx context.Context, phaseName string, monState *
 func (e *Engine) checkNewComments(ctx context.Context, phaseName string, monState *MonitorState) []ClassifiedComment {
 	comments, err := e.config.PRPoller.GetNewComments(ctx, monState.PRURL, monState.LastCommentID)
 	if err != nil {
-		// Non-fatal: log and continue.
+		// Non-fatal: emit warning and continue.
+		e.emit(Event{
+			Phase: phaseName,
+			Kind:  EventMonitorWarning,
+			Data:  map[string]any{"warning": fmt.Sprintf("get new comments: %v", err)},
+		})
 		return nil
 	}
 
@@ -396,7 +401,12 @@ func (e *Engine) checkNewComments(ctx context.Context, phaseName string, monStat
 func (e *Engine) checkCIStatus(ctx context.Context, phaseName string, monState *MonitorState) {
 	ciStatus, err := e.config.PRPoller.GetCIStatus(ctx, monState.PRURL)
 	if err != nil {
-		// Non-fatal: log and continue.
+		// Non-fatal: emit warning and continue.
+		e.emit(Event{
+			Phase: phaseName,
+			Kind:  EventMonitorWarning,
+			Data:  map[string]any{"warning": fmt.Sprintf("get CI status: %v", err)},
+		})
 		return
 	}
 

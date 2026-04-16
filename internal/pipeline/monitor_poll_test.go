@@ -1732,3 +1732,63 @@ func TestCountActionable(t *testing.T) {
 		t.Errorf("countActionable(nil) = %d, want 0", count)
 	}
 }
+
+func TestMonitor_GetNewCommentsErrorEmitsWarning(t *testing.T) {
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "open", Approved: false}},
+			{status: &PRStatus{State: "open", Approved: true}}, // approve on 2nd poll
+		},
+		commentResponses: []mockCommentResponse{
+			{err: fmt.Errorf("network timeout fetching comments")},
+		},
+	}
+
+	engine, _, events := setupMonitorEngine(t, poller, nil)
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	hasWarning := false
+	for _, evt := range *events {
+		if evt.Kind == EventMonitorWarning {
+			if w, _ := evt.Data["warning"].(string); strings.Contains(w, "get new comments") {
+				hasWarning = true
+			}
+		}
+	}
+	if !hasWarning {
+		t.Error("monitor_warning event not emitted when GetNewComments fails")
+	}
+}
+
+func TestMonitor_GetCIStatusErrorEmitsWarning(t *testing.T) {
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "open", Approved: false}},
+			{status: &PRStatus{State: "open", Approved: true}},
+		},
+		ciResponses: []mockCIResponse{
+			{err: fmt.Errorf("CI API unavailable")},
+		},
+	}
+
+	engine, _, events := setupMonitorEngine(t, poller, nil)
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	hasWarning := false
+	for _, evt := range *events {
+		if evt.Kind == EventMonitorWarning {
+			if w, _ := evt.Data["warning"].(string); strings.Contains(w, "get CI status") {
+				hasWarning = true
+			}
+		}
+	}
+	if !hasWarning {
+		t.Error("monitor_warning event not emitted when GetCIStatus fails")
+	}
+}
