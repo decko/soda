@@ -527,6 +527,22 @@ func (e *Engine) respondToComments(ctx context.Context, phase PhaseConfig, class
 	// Inject classified review comments into the prompt.
 	promptData.ReviewComments = formatCommentsForPrompt(classified)
 
+	// Inject diff context so the Claude session has the current changes.
+	workDir := e.workDir(phase)
+	baseBranch := e.config.BaseBranch
+	if baseBranch == "" {
+		baseBranch = "main"
+	}
+	diffCtx, err := git.Diff(ctx, workDir, "origin/"+baseBranch, 50000)
+	if err != nil {
+		// Non-fatal: the session can still read files.
+		diffCtx = "(diff unavailable: " + err.Error() + ")"
+	}
+	if diffCtx == "" {
+		diffCtx = "(no differences from base branch)"
+	}
+	promptData.DiffContext = diffCtx
+
 	// Load and render the monitor prompt template.
 	loadResult, err := e.config.Loader.LoadWithSource(phase.Prompt)
 	if err != nil {

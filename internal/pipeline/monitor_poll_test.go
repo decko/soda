@@ -116,7 +116,7 @@ func setupMonitorEngineWithRunner(t *testing.T, r runner.Runner, poller PRPoller
 
 	// Write minimal prompt templates.
 	submitPrompt := "Phase: submit\nTicket: {{.Ticket.Key}}\n"
-	monitorPrompt := "Phase: monitor\nTicket: {{.Ticket.Key}}\n\n## Review Comments\n\n{{.ReviewComments}}\n"
+	monitorPrompt := "Phase: monitor\nTicket: {{.Ticket.Key}}\n\n## Diff\n{{.DiffContext}}\n\n## Review Comments\n\n{{.ReviewComments}}\n"
 	if err := os.MkdirAll(promptDir+"/prompts", 0755); err != nil {
 		t.Fatalf("MkdirAll prompts: %v", err)
 	}
