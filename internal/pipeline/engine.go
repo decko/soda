@@ -447,9 +447,27 @@ func (e *Engine) executePhases(ctx context.Context, phases []PhaseConfig, forceF
 				if err := e.gatePhase(phase); err != nil {
 					// Handle rework signal on skipped phases — can occur on
 					// Run() re-entry when a prior rework crashed mid-cycle.
-					// Route to the configured target instead of leaking.
 					var reworkSig *reworkSignal
 					if errors.As(err, &reworkSig) {
+						// When a skipped phase produces a stale corrective
+						// rework signal (e.g., verify FAIL → patch), reset
+						// the phase to PhasePending so it re-runs instead
+						// of routing back to the corrective phase. Without
+						// this, Resume paths create a wasteful loop: patch
+						// runs → verify skipped (stale FAIL, deps not
+						// re-run) → rework to patch → PatchCycles++,
+						// burning LLM budget on patch calls whose fixes
+						// are never verified.
+						if e.isCorrectivePhase(reworkSig.target) {
+							if ps := e.state.Meta().Phases[phase.Name]; ps != nil {
+								ps.Status = PhasePending
+							}
+							forceFirst = false
+							rework = true
+							break
+						}
+						// Non-corrective rework (e.g., review → implement):
+						// route to the configured target.
 						route, routeErr := e.routeRework(phase.Name, reworkSig)
 						if routeErr != nil {
 							return routeErr

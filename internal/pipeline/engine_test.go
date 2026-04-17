@@ -6860,3 +6860,105 @@ func TestEngine_PatchEscalationSkippedLowBudget(t *testing.T) {
 		t.Error("patch_escalation_skipped event not emitted")
 	}
 }
+
+func TestEngine_ResumePatchRerunsVerify(t *testing.T) {
+	// When Resume('patch') is called, after patch completes the engine
+	// must re-run verify — not skip it because of a stale FAIL result.
+	// Before the fix, shouldSkip would gate verify (patch is not in
+	// verify's depends_on), gatePhase would read the stale FAIL, and
+	// rework back to patch, creating a wasteful loop.
+	phases := []PhaseConfig{
+		{
+			Name:   "implement",
+			Prompt: "implement.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:         "patch",
+			Type:         "corrective",
+			Prompt:       "patch.md",
+			DependsOn:    []string{"implement"},
+			FeedbackFrom: []string{"verify"},
+			Retry:        RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "verify",
+			Prompt:    "verify.md",
+			DependsOn: []string{"implement"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Corrective: &CorrectiveConfig{
+				Phase:       "patch",
+				MaxAttempts: 2,
+				OnExhausted: "stop",
+			},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"patch": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"ticket_key":"TEST-1","fix_results":[{"fix_index":0,"status":"fixed","description":"fixed"}],"files_changed":[],"tests_passed":true,"too_complex":false}`),
+					RawText: "patched",
+					CostUSD: 0.20,
+				},
+			}},
+			"verify": {{
+				// After patch, verify should PASS.
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"verdict":"PASS","criteria_results":[],"command_results":[]}`),
+					RawText: "pass",
+					CostUSD: 0.05,
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(ev Event) { events = append(events, ev) }
+	})
+
+	// Simulate prior state: implement completed, verify completed with FAIL
+	// (as if the previous run crashed after verify FAIL routed to patch).
+	_ = state.MarkRunning("implement")
+	_ = state.MarkCompleted("implement")
+	_ = state.WriteResult("implement", json.RawMessage(`{"tests_passed":true}`))
+
+	_ = state.MarkRunning("verify")
+	_ = state.MarkCompleted("verify")
+	_ = state.WriteResult("verify", json.RawMessage(`{"verdict":"FAIL","fixes_required":["fix X"],"criteria_results":[],"command_results":[]}`))
+
+	// Resume from patch — this is the crash-recovery path.
+	if err := engine.Resume(context.Background(), "patch"); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+
+	// Verify should have been re-run (not skipped).
+	verifyRan := false
+	for _, call := range mock.calls {
+		if call.Phase == "verify" {
+			verifyRan = true
+		}
+	}
+	if !verifyRan {
+		t.Error("verify should have been re-run after Resume('patch'), not skipped")
+	}
+
+	// PatchCycles should be 0 — the stale verify FAIL from the prior
+	// crash should NOT increment PatchCycles. In a real crash-recovery
+	// scenario, PatchCycles would already reflect the pre-crash count.
+	if state.Meta().PatchCycles != 0 {
+		t.Errorf("PatchCycles = %d, want 0 (stale signal should not increment)", state.Meta().PatchCycles)
+	}
+
+	// Should have exactly 2 runner calls: patch + verify.
+	if len(mock.calls) != 2 {
+		t.Errorf("runner called %d times, want 2 (patch + verify)", len(mock.calls))
+	}
+
+	// Verify should be completed with PASS.
+	if !state.IsCompleted("verify") {
+		t.Error("verify should be completed after Resume")
+	}
+}
