@@ -1300,13 +1300,11 @@ func (e *Engine) gateRework(phase PhaseConfig, raw json.RawMessage) error {
 // sets of failing criteria.
 type regressionResult struct {
 	Regressions []string // criteria that were previously passing but now fail
-	HasProgress bool     // true if there are strictly fewer failures now
 }
 
 // detectRegression compares the previous set of failing criteria against the
 // current set. A "regression" is a criterion that was NOT in the previous
 // failures (i.e., it was passing) but IS in the current failures.
-// "Progress" means strictly fewer total failures than before.
 func detectRegression(previous, current []string) regressionResult {
 	prevSet := make(map[string]bool, len(previous))
 	for _, f := range previous {
@@ -1322,7 +1320,6 @@ func detectRegression(previous, current []string) regressionResult {
 
 	return regressionResult{
 		Regressions: regressions,
-		HasProgress: len(current) < len(previous),
 	}
 }
 

@@ -6969,73 +6969,60 @@ func TestDetectRegression(t *testing.T) {
 		previous        []string
 		current         []string
 		wantRegressions []string
-		wantProgress    bool
 	}{
 		{
 			name:            "no_regressions_same_failures",
 			previous:        []string{"criterion A", "criterion B"},
 			current:         []string{"criterion A", "criterion B"},
 			wantRegressions: nil,
-			wantProgress:    false,
 		},
 		{
 			name:            "progress_fewer_failures",
 			previous:        []string{"criterion A", "criterion B", "criterion C"},
 			current:         []string{"criterion A"},
 			wantRegressions: nil,
-			wantProgress:    true,
 		},
 		{
 			name:            "regression_new_failure",
 			previous:        []string{"criterion A"},
 			current:         []string{"criterion A", "criterion B"},
 			wantRegressions: []string{"criterion B"},
-			wantProgress:    false,
 		},
 		{
 			name:            "regression_different_failure",
 			previous:        []string{"criterion A"},
 			current:         []string{"criterion B"},
 			wantRegressions: []string{"criterion B"},
-			wantProgress:    false,
 		},
 		{
 			name:            "regression_with_progress",
 			previous:        []string{"criterion A", "criterion B", "criterion C"},
 			current:         []string{"criterion A", "criterion D"},
 			wantRegressions: []string{"criterion D"},
-			wantProgress:    true,
 		},
 		{
 			name:            "empty_previous",
 			previous:        nil,
 			current:         []string{"criterion A"},
 			wantRegressions: []string{"criterion A"},
-			wantProgress:    false,
 		},
 		{
 			name:            "empty_current",
 			previous:        []string{"criterion A"},
 			current:         nil,
 			wantRegressions: nil,
-			wantProgress:    true,
 		},
 		{
 			name:            "both_empty",
 			previous:        nil,
 			current:         nil,
 			wantRegressions: nil,
-			wantProgress:    false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := detectRegression(tt.previous, tt.current)
-
-			if tt.wantProgress != result.HasProgress {
-				t.Errorf("HasProgress = %v, want %v", result.HasProgress, tt.wantProgress)
-			}
 
 			if len(tt.wantRegressions) == 0 && len(result.Regressions) == 0 {
 				return // both empty/nil, OK
