@@ -578,6 +578,13 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 		return fmt.Errorf("engine: build prompt data for %s: %w", phase.Name, err)
 	}
 
+	// Inject diff context for corrective phases (patch) so the agent
+	// can see what was already implemented. Follows the same pattern
+	// as monitor_poll.go which also injects DiffContext post-build.
+	if phase.Name == "patch" {
+		promptData.DiffContext = e.computeDiffContext(ctx, phase)
+	}
+
 	// Store plan hash for staleness guard on phases that depend on plan.
 	for _, dep := range phase.DependsOn {
 		if dep == "plan" {
@@ -1046,6 +1053,39 @@ func truncateLines(s string, maxLines int) string {
 		return s
 	}
 	return strings.Join(lines[:maxLines], "\n") + "\n... (truncated)"
+}
+
+// computeDiffContext computes the git diff between the base branch and HEAD,
+// returning the diff string for injection into prompt data. Non-fatal errors
+// produce placeholder text rather than failing the phase — the agent can still
+// read files directly. Mirrors the approach in monitor_poll.go.
+func (e *Engine) computeDiffContext(ctx context.Context, phase PhaseConfig) string {
+	workDir := e.workDir(phase)
+	baseBranch := e.config.BaseBranch
+	if baseBranch == "" {
+		baseBranch = "main"
+	}
+
+	// Fetch latest base branch so the diff compares against current remote state.
+	if fetchErr := git.FetchBranch(ctx, workDir, "origin", baseBranch); fetchErr != nil {
+		// Non-fatal: proceed with potentially stale local ref.
+		e.emit(Event{
+			Phase: phase.Name,
+			Kind:  EventPhaseRetrying,
+			Data: map[string]any{
+				"warning": fmt.Sprintf("fetch base branch before diff: %v", fetchErr),
+			},
+		})
+	}
+
+	diffCtx, err := git.Diff(ctx, workDir, "origin/"+baseBranch, 50000)
+	if err != nil {
+		return "(diff unavailable: " + err.Error() + ")"
+	}
+	if diffCtx == "" {
+		return "(no differences from base branch)"
+	}
+	return diffCtx
 }
 
 // extractPRURL reads the submit result and extracts the pr_url field.
