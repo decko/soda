@@ -50,8 +50,8 @@ func TestLoadPipeline(t *testing.T) {
 			t.Fatalf("LoadPipeline: %v", err)
 		}
 
-		if len(pipeline.Phases) != 7 {
-			t.Fatalf("got %d phases, want 7", len(pipeline.Phases))
+		if len(pipeline.Phases) != 8 {
+			t.Fatalf("got %d phases, want 8", len(pipeline.Phases))
 		}
 
 		// Verify first phase
@@ -75,10 +75,25 @@ func TestLoadPipeline(t *testing.T) {
 			t.Errorf("plan depends_on = %v, want [triage]", plan.DependsOn)
 		}
 
+		// Verify patch phase
+		patch := pipeline.Phases[4]
+		if patch.Name != "patch" {
+			t.Errorf("fifth phase = %q, want %q", patch.Name, "patch")
+		}
+		if patch.Timeout.Duration != 10*time.Minute {
+			t.Errorf("patch timeout = %v, want 10m", patch.Timeout.Duration)
+		}
+		if len(patch.DependsOn) != 3 {
+			t.Errorf("patch depends_on = %v, want [plan implement verify]", patch.DependsOn)
+		}
+		if len(patch.FeedbackFrom) != 1 || patch.FeedbackFrom[0] != "verify" {
+			t.Errorf("patch feedback_from = %v, want [verify]", patch.FeedbackFrom)
+		}
+
 		// Verify review phase
-		review := pipeline.Phases[4]
+		review := pipeline.Phases[5]
 		if review.Name != "review" {
-			t.Errorf("fifth phase = %q, want %q", review.Name, "review")
+			t.Errorf("sixth phase = %q, want %q", review.Name, "review")
 		}
 		if review.Type != "parallel-review" {
 			t.Errorf("review type = %q, want %q", review.Type, "parallel-review")
@@ -119,7 +134,7 @@ func TestLoadPipeline(t *testing.T) {
 		}
 
 		// Verify monitor phase has polling config
-		monitor := pipeline.Phases[6]
+		monitor := pipeline.Phases[7]
 		if monitor.Name != "monitor" {
 			t.Errorf("last phase = %q, want %q", monitor.Name, "monitor")
 		}

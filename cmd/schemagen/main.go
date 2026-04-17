@@ -30,6 +30,7 @@ var registry = []struct {
 	{"plan", reflect.TypeOf(schemas.PlanOutput{})},
 	{"implement", reflect.TypeOf(schemas.ImplementOutput{})},
 	{"verify", reflect.TypeOf(schemas.VerifyOutput{})},
+	{"patch", reflect.TypeOf(schemas.PatchOutput{})},
 	{"review", reflect.TypeOf(schemas.ReviewOutput{})},
 	{"submit", reflect.TypeOf(schemas.SubmitOutput{})},
 	{"follow-up", reflect.TypeOf(schemas.FollowUpOutput{})},

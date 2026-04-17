@@ -79,6 +79,27 @@ phases:
       - plan
       - implement
 
+  - name: patch
+    prompt: prompts/patch.md
+    tools:
+      - Read
+      - Write
+      - Edit
+      - Glob
+      - Grep
+      - Bash
+    timeout: 10m
+    retry:
+      transient: 2
+      parse: 1
+      semantic: 0    # don't retry semantic failures — fixes are scoped
+    depends_on:
+      - plan
+      - implement
+      - verify
+    feedback_from:
+      - verify
+
   - name: review
     type: parallel-review
     schema: |
