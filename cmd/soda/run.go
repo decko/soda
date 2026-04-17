@@ -501,9 +501,14 @@ func handleEvent(ctx context.Context, cancel context.CancelFunc, engine *pipelin
 		prog.PhaseSkipped(event.Phase)
 
 	case pipeline.EventPatchExhausted:
-		patchCycles, _ := event.Data["patch_cycles"].(float64)
+		patchCycles, _ := event.Data["patch_cycles"].(int)
+		if patchCycles == 0 {
+			if pf, ok := event.Data["patch_cycles"].(float64); ok {
+				patchCycles = int(pf)
+			}
+		}
 		onExhausted, _ := event.Data["on_exhausted"].(string)
-		prog.Message(fmt.Sprintf("  ⏹  Patch exhausted after %d cycles (policy: %s)", int(patchCycles), onExhausted))
+		prog.Message(fmt.Sprintf("  ⏹  Patch exhausted after %d cycles (policy: %s)", patchCycles, onExhausted))
 
 	case pipeline.EventPatchEscalated:
 		escalatingTo, _ := event.Data["escalating_to"].(string)

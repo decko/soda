@@ -10,6 +10,7 @@ import (
 
 	"github.com/decko/soda/internal/claude"
 	"github.com/decko/soda/internal/pipeline"
+	"github.com/decko/soda/internal/progress"
 )
 
 func TestResolveLastPhase(t *testing.T) {
@@ -776,5 +777,52 @@ func TestPrintSummaryGenericError(t *testing.T) {
 	}
 	if !strings.Contains(output, "cd /tmp/worktrees/PROJ-60") {
 		t.Error("expected cd to worktree path")
+	}
+}
+
+func TestHandleEventPatchExhaustedCycles(t *testing.T) {
+	// Verify that handleEvent correctly extracts patch_cycles as int
+	// (native Go type from the engine) and falls back to float64 (JSON).
+	tests := []struct {
+		name       string
+		data       map[string]any
+		wantCycles string
+	}{
+		{
+			name:       "int value from engine",
+			data:       map[string]any{"patch_cycles": 3, "on_exhausted": "stop"},
+			wantCycles: "3 cycles",
+		},
+		{
+			name:       "float64 value from JSON",
+			data:       map[string]any{"patch_cycles": float64(5), "on_exhausted": "escalate"},
+			wantCycles: "5 cycles",
+		},
+		{
+			name:       "zero value",
+			data:       map[string]any{"patch_cycles": 0, "on_exhausted": "stop"},
+			wantCycles: "0 cycles",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			state, _ := pipeline.LoadOrCreate(dir, "T-1")
+
+			var buf bytes.Buffer
+			prog := progress.New(&buf, false)
+
+			event := pipeline.Event{
+				Kind: pipeline.EventPatchExhausted,
+				Data: tt.data,
+			}
+			handleEvent(nil, nil, nil, state, prog, event)
+
+			output := buf.String()
+			if !strings.Contains(output, tt.wantCycles) {
+				t.Errorf("expected output to contain %q, got %q", tt.wantCycles, output)
+			}
+		})
 	}
 }
