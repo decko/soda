@@ -17,6 +17,8 @@ func phaseDescription(phase string) string {
 		return "writing code..."
 	case "verify":
 		return "checking acceptance criteria..."
+	case "patch":
+		return "applying targeted fixes..."
 	case "submit":
 		return "creating PR..."
 	case "monitor":
@@ -42,6 +44,8 @@ func PhaseSummary(phase string, result json.RawMessage) string {
 		return implementSummary(result)
 	case "verify":
 		return verifySummary(result)
+	case "patch":
+		return patchSummary(result)
 	case "submit":
 		return submitSummary(result)
 	case "monitor":
@@ -135,6 +139,32 @@ func verifySummary(data json.RawMessage) string {
 		return ""
 	}
 	return strings.ToUpper(result.Verdict)
+}
+
+func patchSummary(data json.RawMessage) string {
+	var result struct {
+		FixResults []struct {
+			Status string `json:"status"`
+		} `json:"fix_results"`
+		TooComplex bool `json:"too_complex"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return ""
+	}
+	if result.TooComplex {
+		return "too complex"
+	}
+	fixed := 0
+	for _, fr := range result.FixResults {
+		if fr.Status == "fixed" {
+			fixed++
+		}
+	}
+	total := len(result.FixResults)
+	if total == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d/%d fixed", fixed, total)
 }
 
 func submitSummary(data json.RawMessage) string {

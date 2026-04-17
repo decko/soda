@@ -113,6 +113,7 @@ type ArtifactData struct {
 	Implement string
 	Verify    string
 	Review    string
+	Patch     string
 	Submit    SubmitArtifact
 }
 

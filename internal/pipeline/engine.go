@@ -364,8 +364,19 @@ type reworkRoute struct {
 // emitting a routed event, flushing meta, and re-slicing the pipeline phases
 // to start from the rework target. Returns the new route or an error.
 func (e *Engine) routeRework(phaseName string, sig *reworkSignal) (*reworkRoute, error) {
-	e.state.Meta().ReworkCycles++
+	// Increment the appropriate counter based on whether the target is
+	// a corrective phase (patch) or a full rework (implement).
+	isPatch := e.isCorrectivePhase(sig.target)
+	if isPatch {
+		e.state.Meta().PatchCycles++
+	} else {
+		e.state.Meta().ReworkCycles++
+	}
+
 	cycle := e.state.Meta().ReworkCycles
+	if isPatch {
+		cycle = e.state.Meta().PatchCycles
+	}
 
 	e.emit(Event{
 		Phase: phaseName,
@@ -396,6 +407,17 @@ func (e *Engine) routeRework(phaseName string, sig *reworkSignal) (*reworkRoute,
 		phases:     e.config.Pipeline.Phases[targetIdx:],
 		forceFirst: true,
 	}, nil
+}
+
+// isCorrectivePhase returns true if the named phase has type "corrective"
+// in the pipeline configuration.
+func (e *Engine) isCorrectivePhase(name string) bool {
+	for _, p := range e.config.Pipeline.Phases {
+		if p.Name == name {
+			return p.Type == "corrective"
+		}
+	}
+	return false
 }
 
 // executePhases runs a slice of phases, handling skip logic, checkpoint
@@ -440,6 +462,13 @@ func (e *Engine) executePhases(ctx context.Context, phases []PhaseConfig, forceF
 					return err
 				}
 				e.emit(Event{Phase: phase.Name, Kind: EventPhaseSkipped})
+				continue
+			}
+
+			// Corrective phases are skipped in the forward pass — they
+			// only run when routed to via reworkSignal (forceFirst).
+			if phase.Type == "corrective" && skipCheck {
+				e.emit(Event{Phase: phase.Name, Kind: EventCorrectiveSkipped})
 				continue
 			}
 
@@ -837,6 +866,8 @@ func (e *Engine) buildPromptData(phase PhaseConfig) (PromptData, error) {
 			data.Artifacts.Verify = content
 		case "review":
 			data.Artifacts.Review = content
+		case "patch":
+			data.Artifacts.Patch = content
 		case "submit":
 			data.Artifacts.Submit.PRURL = e.extractPRURL()
 		}
@@ -1122,11 +1153,14 @@ func (e *Engine) gatePhase(phase PhaseConfig) error {
 			return nil
 		}
 		if strings.EqualFold(result.Verdict, "FAIL") {
-			reason := "verification failed"
-			if len(result.FixesRequired) > 0 {
-				reason = "verification failed: " + strings.Join(result.FixesRequired, "; ")
+			if err := e.gateVerifyFail(phase, result.FixesRequired); err != nil {
+				return err
 			}
-			return &PhaseGateError{Phase: phase.Name, Reason: reason}
+		}
+
+	case "patch":
+		if err := e.gatePatchResult(phase, raw); err != nil {
+			return err
 		}
 
 	case "submit":
@@ -1219,6 +1253,153 @@ func (e *Engine) gateRework(phase PhaseConfig, raw json.RawMessage) error {
 
 	// Signal rework needed — the engine loop will handle routing.
 	return &reworkSignal{target: phase.Rework.Target, findings: findings}
+}
+
+// gateVerifyFail handles a verify FAIL verdict. When the phase has a
+// CorrectiveConfig, it routes to the corrective phase (e.g., patch) instead
+// of stopping with a PhaseGateError. Respects max_attempts, on_exhausted
+// policy, and the EscalatedFromPatch one-shot flag.
+func (e *Engine) gateVerifyFail(phase PhaseConfig, fixesRequired []string) error {
+	reason := "verification failed"
+	if len(fixesRequired) > 0 {
+		reason = "verification failed: " + strings.Join(fixesRequired, "; ")
+	}
+
+	cc := phase.Corrective
+	if cc == nil {
+		return &PhaseGateError{Phase: phase.Name, Reason: reason}
+	}
+
+	// One-shot escalation flag: once set, subsequent verify FAILs stop.
+	if e.state.Meta().EscalatedFromPatch {
+		return &PhaseGateError{Phase: phase.Name, Reason: reason + " (escalated from patch, no re-entry)"}
+	}
+
+	// Check max_attempts.
+	maxAttempts := cc.MaxAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = 2
+	}
+	if e.state.Meta().PatchCycles >= maxAttempts {
+		e.emit(Event{
+			Phase: phase.Name,
+			Kind:  EventPatchExhausted,
+			Data: map[string]any{
+				"patch_cycles": e.state.Meta().PatchCycles,
+				"on_exhausted": cc.OnExhausted,
+			},
+		})
+		return e.handlePatchExhausted(phase, cc, reason)
+	}
+
+	// Route to the corrective phase.
+	return &reworkSignal{target: cc.Phase}
+}
+
+// handlePatchExhausted applies the on_exhausted policy when patch attempts
+// are depleted. "stop" returns a PhaseGateError; "escalate" routes to
+// the escalation target (e.g., implement) with a budget check.
+func (e *Engine) handlePatchExhausted(phase PhaseConfig, cc *CorrectiveConfig, reason string) error {
+	switch cc.OnExhausted {
+	case "escalate":
+		if cc.EscalateTo == "" {
+			return &PhaseGateError{Phase: phase.Name, Reason: reason + " (escalation target not configured)"}
+		}
+
+		// Budget check: if remaining < $5, skip escalation.
+		if e.config.MaxCostUSD > 0 {
+			remaining := e.config.MaxCostUSD - e.state.Meta().TotalCost
+			if remaining < 5.0 {
+				e.emit(Event{
+					Phase: phase.Name,
+					Kind:  EventPatchEscalationSkipped,
+					Data: map[string]any{
+						"remaining_budget": remaining,
+						"reason":           "insufficient budget for escalation",
+					},
+				})
+				return &PhaseGateError{Phase: phase.Name, Reason: reason + " (insufficient budget to escalate)"}
+			}
+		}
+
+		// Set one-shot flag so we don't re-enter the patch loop.
+		e.state.Meta().EscalatedFromPatch = true
+
+		patchCost := 0.0
+		if ps := e.state.Meta().Phases[cc.Phase]; ps != nil {
+			patchCost = ps.Cost
+		}
+		e.emit(Event{
+			Phase: phase.Name,
+			Kind:  EventPatchEscalated,
+			Data: map[string]any{
+				"escalating_to":    cc.EscalateTo,
+				"total_patch_cost": patchCost,
+			},
+		})
+
+		return &reworkSignal{target: cc.EscalateTo}
+
+	default: // "stop" or unrecognized
+		return &PhaseGateError{Phase: phase.Name, Reason: reason + " (patch attempts exhausted)"}
+	}
+}
+
+// gatePatchResult checks the patch phase result for the TooComplex flag.
+// When set, the engine skips re-verify and either escalates or stops.
+func (e *Engine) gatePatchResult(phase PhaseConfig, raw json.RawMessage) error {
+	var result struct {
+		TooComplex       bool   `json:"too_complex"`
+		TooComplexReason string `json:"too_complex_reason"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil
+	}
+	if !result.TooComplex {
+		return nil
+	}
+
+	e.emit(Event{
+		Phase: phase.Name,
+		Kind:  EventPatchTooComplex,
+		Data:  map[string]any{"reason": result.TooComplexReason},
+	})
+
+	// Find the verify phase's corrective config to get escalation target.
+	for _, p := range e.config.Pipeline.Phases {
+		if p.Corrective != nil && p.Corrective.Phase == phase.Name {
+			if p.Corrective.OnExhausted == "escalate" && p.Corrective.EscalateTo != "" {
+				// Budget check before escalation.
+				if e.config.MaxCostUSD > 0 {
+					remaining := e.config.MaxCostUSD - e.state.Meta().TotalCost
+					if remaining < 5.0 {
+						e.emit(Event{
+							Phase: phase.Name,
+							Kind:  EventPatchEscalationSkipped,
+							Data: map[string]any{
+								"remaining_budget": remaining,
+								"reason":           "insufficient budget for escalation",
+							},
+						})
+						return &PhaseGateError{Phase: phase.Name, Reason: "patch too complex: " + result.TooComplexReason + " (insufficient budget to escalate)"}
+					}
+				}
+				e.state.Meta().EscalatedFromPatch = true
+				e.emit(Event{
+					Phase: phase.Name,
+					Kind:  EventPatchEscalated,
+					Data: map[string]any{
+						"escalating_to": p.Corrective.EscalateTo,
+						"reason":        result.TooComplexReason,
+					},
+				})
+				return &reworkSignal{target: p.Corrective.EscalateTo}
+			}
+			break
+		}
+	}
+
+	return &PhaseGateError{Phase: phase.Name, Reason: "patch too complex: " + result.TooComplexReason}
 }
 
 // reviewerResult holds the outcome of a single reviewer subagent.
