@@ -4657,6 +4657,84 @@ func TestExtractReviewFeedback(t *testing.T) {
 	})
 }
 
+func TestFeedbackSourcesFor(t *testing.T) {
+	t.Run("returns_sources_from_phase_config", func(t *testing.T) {
+		pipeline := &PhasePipeline{
+			Phases: []PhaseConfig{
+				{Name: "implement", FeedbackFrom: []string{"review", "verify"}},
+				{Name: "review", Rework: &ReworkConfig{Target: "implement"}},
+			},
+		}
+		engine := &Engine{config: EngineConfig{Pipeline: pipeline}}
+
+		sources := engine.feedbackSourcesFor(pipeline.Phases[0])
+		if len(sources) != 2 {
+			t.Fatalf("sources = %v, want [review verify]", sources)
+		}
+		if sources[0] != "review" || sources[1] != "verify" {
+			t.Errorf("sources = %v, want [review verify]", sources)
+		}
+	})
+
+	t.Run("returns_nil_for_phase_without_config", func(t *testing.T) {
+		pipeline := &PhasePipeline{
+			Phases: []PhaseConfig{
+				{Name: "triage"},
+			},
+		}
+		engine := &Engine{config: EngineConfig{Pipeline: pipeline}}
+
+		sources := engine.feedbackSourcesFor(pipeline.Phases[0])
+		if sources != nil {
+			t.Errorf("sources = %v, want nil", sources)
+		}
+	})
+}
+
+func TestExtractFeedbackFrom(t *testing.T) {
+	t.Run("review_source", func(t *testing.T) {
+		stateDir := t.TempDir()
+		state, _ := LoadOrCreate(stateDir, "TEST-1")
+		_ = state.MarkRunning("review")
+		_ = state.WriteResult("review", json.RawMessage(`{"verdict":"rework","findings":[{"severity":"critical","issue":"nil deref"}]}`))
+		_ = state.MarkCompleted("review")
+
+		engine := &Engine{state: state, config: EngineConfig{}}
+		fb := engine.extractFeedbackFrom("review")
+		if fb == nil {
+			t.Fatal("expected non-nil feedback from review source")
+		}
+		if fb.Source != "review" {
+			t.Errorf("Source = %q, want %q", fb.Source, "review")
+		}
+	})
+
+	t.Run("verify_source", func(t *testing.T) {
+		stateDir := t.TempDir()
+		state, _ := LoadOrCreate(stateDir, "TEST-1")
+		_ = state.MarkRunning("verify")
+		_ = state.WriteResult("verify", json.RawMessage(`{"verdict":"FAIL","fixes_required":["fix it"]}`))
+		_ = state.MarkCompleted("verify")
+
+		engine := &Engine{state: state, config: EngineConfig{}}
+		fb := engine.extractFeedbackFrom("verify")
+		if fb == nil {
+			t.Fatal("expected non-nil feedback from verify source")
+		}
+		if fb.Source != "verify" {
+			t.Errorf("Source = %q, want %q", fb.Source, "verify")
+		}
+	})
+
+	t.Run("unknown_source_returns_nil", func(t *testing.T) {
+		engine := &Engine{config: EngineConfig{}}
+		fb := engine.extractFeedbackFrom("unknown")
+		if fb != nil {
+			t.Errorf("expected nil for unknown source, got %+v", fb)
+		}
+	})
+}
+
 func TestEngine_SkippedReviewPhaseReworkSignalRoutesToImplement(t *testing.T) {
 	// Scenario: review phase completed with "rework" verdict in a prior run.
 	// On re-run, review is skipped (deps unchanged), but its stored gate
