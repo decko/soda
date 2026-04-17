@@ -1250,6 +1250,9 @@ func TestEngine_SkipPlanRouting_PlanArtifactAvailableToImplement(t *testing.T) {
 }
 
 func TestEngine_GatePhase_ReviewUnmarshalError(t *testing.T) {
+	// When a phase with Rework config produces output that doesn't unmarshal
+	// as valid JSON, gateRework should gracefully skip (return nil), consistent
+	// with all other gating cases in gatePhase.
 	phases := []PhaseConfig{
 		{
 			Name:   "review",
@@ -1271,14 +1274,15 @@ func TestEngine_GatePhase_ReviewUnmarshalError(t *testing.T) {
 		},
 	}
 
-	engine, _ := setupEngine(t, phases, mock)
+	engine, state := setupEngine(t, phases, mock)
 
 	err := engine.Run(context.Background())
-	if err == nil {
-		t.Fatal("expected error for corrupt review result, got nil")
+	if err != nil {
+		t.Fatalf("expected nil (graceful skip) for corrupt review result, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "review rework gate") {
-		t.Errorf("error should mention review rework gate, got: %v", err)
+	// Phase should still complete — the rework gate is skipped on unmarshal failure.
+	if !state.IsCompleted("review") {
+		t.Error("review phase should be completed")
 	}
 }
 

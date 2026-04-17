@@ -1150,13 +1150,31 @@ func (e *Engine) gatePhase(phase PhaseConfig) error {
 	return nil
 }
 
+// reworkVerdict is a minimal struct for extracting rework-relevant fields
+// from any phase result. Unlike schemas.ReviewOutput, this decouples the
+// rework gate from any specific phase's full output shape — any phase that
+// produces a JSON object with "verdict" (and optionally "findings") can
+// participate in config-driven rework routing.
+type reworkVerdict struct {
+	Verdict  string `json:"verdict"`
+	Findings []struct {
+		Severity string `json:"severity"`
+		Issue    string `json:"issue"`
+	} `json:"findings"`
+}
+
 // gateRework checks for a "rework" verdict in the phase result and either
 // signals rework routing or blocks when max cycles are exceeded. The rework
-// target and feedback sources are read from the phase's ReworkConfig.
+// target is read from the phase's ReworkConfig.
+//
+// The result is unmarshalled into a minimal reworkVerdict struct (verdict +
+// findings) rather than a full phase-specific type, so any phase that emits
+// a verdict field can use config-driven rework. On unmarshal failure, the
+// gate silently skips (returns nil), consistent with all other gating cases.
 func (e *Engine) gateRework(phase PhaseConfig, raw json.RawMessage) error {
-	var result schemas.ReviewOutput
+	var result reworkVerdict
 	if err := json.Unmarshal(raw, &result); err != nil {
-		return fmt.Errorf("engine: %s rework gate: failed to unmarshal result: %w", phase.Name, err)
+		return nil // gracefully skip — consistent with other gating cases
 	}
 	if !strings.EqualFold(result.Verdict, "rework") {
 		return nil
@@ -1188,8 +1206,17 @@ func (e *Engine) gateRework(phase PhaseConfig, raw json.RawMessage) error {
 		return &PhaseGateError{Phase: phase.Name, Reason: reason}
 	}
 
+	// Build findings for the rework signal from the minimal verdict struct.
+	var findings []schemas.ReviewFinding
+	for _, f := range result.Findings {
+		findings = append(findings, schemas.ReviewFinding{
+			Severity: f.Severity,
+			Issue:    f.Issue,
+		})
+	}
+
 	// Signal rework needed — the engine loop will handle routing.
-	return &reworkSignal{target: phase.Rework.Target, findings: result.Findings}
+	return &reworkSignal{target: phase.Rework.Target, findings: findings}
 }
 
 // reviewerResult holds the outcome of a single reviewer subagent.
