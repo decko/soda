@@ -1286,6 +1286,42 @@ func TestEngine_GatePhase_ReviewUnmarshalError(t *testing.T) {
 	}
 }
 
+func TestEngine_GateRework_NilReworkConfig(t *testing.T) {
+	// When gateRework is called on a phase with nil Rework config, it should
+	// return nil immediately without panicking, even if the result contains
+	// a "rework" verdict.
+	phases := []PhaseConfig{
+		{
+			Name:   "review",
+			Prompt: "review.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			// Rework is intentionally nil — no rework config.
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"review": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"verdict":"rework","findings":[{"severity":"critical","issue":"missing tests"}]}`),
+					RawText: "review output",
+					CostUSD: 0.01,
+				},
+			}},
+		},
+	}
+
+	engine, state := setupEngine(t, phases, mock)
+
+	err := engine.Run(context.Background())
+	if err != nil {
+		t.Fatalf("expected nil error when Rework config is nil, got: %v", err)
+	}
+	if !state.IsCompleted("review") {
+		t.Error("review phase should be completed despite rework verdict when Rework config is nil")
+	}
+}
+
 func TestEngineFullLifecycle(t *testing.T) {
 	// A realistic 4-phase pipeline: triage -> plan -> implement -> verify.
 	// Each phase depends on the previous one. Prompt templates reference
