@@ -57,6 +57,9 @@ phases:
       semantic: 0    # don't retry semantic failures — human decides
     depends_on:
       - plan
+    feedback_from:
+      - review
+      - verify
 
   - name: verify
     prompt: prompts/verify.md
@@ -101,6 +104,8 @@ phases:
       - name: ai-harness
         prompt: prompts/review-harness.md
         focus: "prompt engineering, context budget, Claude CLI integration, sandbox, structured output"
+    rework:
+      target: implement
 
   - name: submit
     prompt: prompts/submit.md
