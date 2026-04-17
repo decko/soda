@@ -3098,6 +3098,128 @@ func TestEngine_ReworkFeedbackStalePlanSkipped(t *testing.T) {
 	}
 }
 
+func TestEngine_ExtractVerifyFeedback_SuggestedFix(t *testing.T) {
+	// When the verify result includes a suggested_fix on a code issue,
+	// it should flow through extractVerifyFeedback into ReworkCodeIssue.SuggestedFix
+	// and appear in the implement prompt.
+	phases := []PhaseConfig{
+		{
+			Name:         "implement",
+			Prompt:       "implement.md",
+			DependsOn:    []string{"plan"},
+			Retry:        RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			FeedbackFrom: []string{"verify"},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true}`),
+					RawText: "Fixed",
+					CostUSD: 0.10,
+				},
+			}},
+		},
+	}
+
+	stateDir := t.TempDir()
+	promptDir := t.TempDir()
+	workDir := t.TempDir()
+
+	implTmpl := `Phase: implement
+{{- if .ReworkFeedback}}
+FEEDBACK:yes
+{{- range .ReworkFeedback.CodeIssues}}
+ISSUE:{{.Issue}}
+{{- if .SuggestedFix}}
+SUGGESTEDFIX:{{.SuggestedFix}}
+{{- end}}
+{{- end}}
+{{- end}}
+`
+	if err := os.WriteFile(filepath.Join(promptDir, "implement.md"), []byte(implTmpl), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := LoadOrCreate(stateDir, "SF-1")
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+
+	// Pre-populate plan (dependency).
+	if err := state.MarkRunning("plan"); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.WriteArtifact("plan", []byte("plan content")); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.WriteResult("plan", json.RawMessage(`{"tasks":["t1"]}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.MarkCompleted("plan"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Pre-populate a FAIL verify result with suggested_fix.
+	if err := state.MarkRunning("verify"); err != nil {
+		t.Fatal(err)
+	}
+	verifyResult := `{
+		"verdict": "FAIL",
+		"fixes_required": ["fix the nil deref"],
+		"criteria_results": [],
+		"command_results": [],
+		"code_issues": [
+			{
+				"file": "handler.go",
+				"line": 42,
+				"severity": "critical",
+				"issue": "nil pointer dereference",
+				"suggested_fix": "add nil check before accessing field"
+			}
+		]
+	}`
+	if err := state.WriteResult("verify", json.RawMessage(verifyResult)); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.MarkCompleted("verify"); err != nil {
+		t.Fatal(err)
+	}
+
+	engine := NewEngine(mock, state, EngineConfig{
+		Pipeline:   &PhasePipeline{Phases: phases},
+		Loader:     NewPromptLoader(promptDir),
+		Ticket:     TicketData{Key: "SF-1"},
+		Model:      "test-model",
+		WorkDir:    workDir,
+		MaxCostUSD: 0,
+		Mode:       Autonomous,
+		SleepFunc:  func(time.Duration) {},
+		JitterFunc: func(time.Duration) time.Duration { return 0 },
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	if len(mock.calls) == 0 {
+		t.Fatal("implement phase was not called")
+	}
+
+	prompt := mock.calls[0].SystemPrompt
+	if !strings.Contains(prompt, "FEEDBACK:yes") {
+		t.Errorf("prompt should contain rework feedback, got: %s", prompt[:min(300, len(prompt))])
+	}
+	if !strings.Contains(prompt, "ISSUE:nil pointer dereference") {
+		t.Errorf("prompt should contain code issue, got: %s", prompt[:min(300, len(prompt))])
+	}
+	if !strings.Contains(prompt, "SUGGESTEDFIX:add nil check before accessing field") {
+		t.Errorf("prompt should contain suggested fix, got: %s", prompt[:min(300, len(prompt))])
+	}
+}
+
 func TestEngine_TruncateLines(t *testing.T) {
 	tests := []struct {
 		name     string

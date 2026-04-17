@@ -915,10 +915,11 @@ func (e *Engine) extractVerifyFeedback() *ReworkFeedback {
 			Evidence  string `json:"evidence"`
 		} `json:"criteria_results"`
 		CodeIssues []struct {
-			File     string `json:"file"`
-			Line     int    `json:"line"`
-			Severity string `json:"severity"`
-			Issue    string `json:"issue"`
+			File         string `json:"file"`
+			Line         int    `json:"line"`
+			Severity     string `json:"severity"`
+			Issue        string `json:"issue"`
+			SuggestedFix string `json:"suggested_fix"`
 		} `json:"code_issues"`
 		CommandResults []struct {
 			Command  string `json:"command"`
@@ -971,10 +972,11 @@ func (e *Engine) extractVerifyFeedback() *ReworkFeedback {
 		sev := strings.ToLower(ci.Severity)
 		if sev == "critical" || sev == "major" {
 			fb.CodeIssues = append(fb.CodeIssues, ReworkCodeIssue{
-				File:     ci.File,
-				Line:     ci.Line,
-				Severity: ci.Severity,
-				Issue:    ci.Issue,
+				File:         ci.File,
+				Line:         ci.Line,
+				Severity:     ci.Severity,
+				Issue:        ci.Issue,
+				SuggestedFix: ci.SuggestedFix,
 			})
 		}
 	}
