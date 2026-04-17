@@ -30,6 +30,7 @@ func (r *ClaudeRunner) Run(ctx context.Context, opts RunOpts) (*RunResult, error
 		OutputSchema: opts.OutputSchema,
 		AllowedTools: opts.AllowedTools,
 		Prompt:       opts.UserPrompt,
+		Model:        opts.Model,
 		Timeout:      opts.Timeout,
 	}
 

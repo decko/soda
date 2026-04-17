@@ -12,6 +12,7 @@ type RunOpts struct {
 	AllowedTools     []string      // tool names for --allowed-tools
 	MaxBudgetUSD     *float64      // nil = omit flag; non-nil = emit value
 	Prompt           string        // rendered template piped via stdin
+	Model            string        // per-phase model override; empty uses runner-level default
 	Timeout          time.Duration // fallback timeout if caller's context has no deadline
 }
 

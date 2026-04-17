@@ -3,6 +3,8 @@ package claude
 import "strconv"
 
 // BuildArgs constructs the CLI argument list from RunOpts and model.
+// When opts.Model is non-empty it takes precedence over the runner-level
+// model, enabling per-phase and per-reviewer model overrides.
 func BuildArgs(opts RunOpts, model string) []string {
 	args := []string{
 		"--print",
@@ -17,8 +19,13 @@ func BuildArgs(opts RunOpts, model string) []string {
 	if opts.OutputSchema != "" {
 		args = append(args, "--json-schema", opts.OutputSchema)
 	}
-	if model != "" {
-		args = append(args, "--model", model)
+	// Prefer per-invocation model over runner-level default.
+	effectiveModel := model
+	if opts.Model != "" {
+		effectiveModel = opts.Model
+	}
+	if effectiveModel != "" {
+		args = append(args, "--model", effectiveModel)
 	}
 	if opts.MaxBudgetUSD != nil {
 		args = append(args, "--max-budget-usd", strconv.FormatFloat(*opts.MaxBudgetUSD, 'f', -1, 64))

@@ -63,6 +63,37 @@ func TestBuildArgs(t *testing.T) {
 			},
 			excludes: []string{"--max-budget-usd"},
 		},
+		{
+			name:  "per_invocation_model_overrides_runner_model",
+			model: "runner-default",
+			opts: RunOpts{
+				Model: "phase-specific-model",
+			},
+			contains: []string{
+				"--model", "phase-specific-model",
+			},
+			excludes: []string{
+				"runner-default", // runner-level model must not appear
+			},
+		},
+		{
+			name:  "empty_opts_model_uses_runner_model",
+			model: "runner-default",
+			opts: RunOpts{
+				Model: "",
+			},
+			contains: []string{
+				"--model", "runner-default",
+			},
+		},
+		{
+			name:  "both_empty_omits_model",
+			model: "",
+			opts:  RunOpts{Model: ""},
+			excludes: []string{
+				"--model",
+			},
+		},
 	}
 
 	for _, tt := range tests {
