@@ -1286,6 +1286,28 @@ func TestEngine_GatePhase_ReviewUnmarshalError(t *testing.T) {
 	}
 }
 
+func TestEngine_gateRework_nilReworkConfig(t *testing.T) {
+	// Call gateRework directly with a PhaseConfig where Rework is nil.
+	// This exercises the nil guard inside gateRework itself, bypassing
+	// the caller guard in gatePhase (engine.go:1144).
+	phases := []PhaseConfig{
+		{
+			Name:   "x",
+			Prompt: "x.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	engine, _ := setupEngine(t, phases, &flexMockRunner{})
+
+	phase := PhaseConfig{Name: "review"} // Rework is nil
+	raw := json.RawMessage(`{"verdict":"rework","findings":[{"severity":"critical","issue":"missing tests"}]}`)
+
+	if err := engine.gateRework(phase, raw); err != nil {
+		t.Fatalf("expected nil when Rework config is nil, got: %v", err)
+	}
+}
+
 func TestEngineFullLifecycle(t *testing.T) {
 	// A realistic 4-phase pipeline: triage -> plan -> implement -> verify.
 	// Each phase depends on the previous one. Prompt templates reference

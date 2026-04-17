@@ -1249,6 +1249,10 @@ type reworkVerdict struct {
 // a verdict field can use config-driven rework. On unmarshal failure, the
 // gate silently skips (returns nil), consistent with all other gating cases.
 func (e *Engine) gateRework(phase PhaseConfig, raw json.RawMessage) error {
+	if phase.Rework == nil {
+		return nil
+	}
+
 	var result reworkVerdict
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil // gracefully skip — consistent with other gating cases
