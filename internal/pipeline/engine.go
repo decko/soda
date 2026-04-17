@@ -380,7 +380,7 @@ func (e *Engine) routeRework(phaseName string, sig *reworkSignal) (*reworkRoute,
 
 	e.emit(Event{
 		Phase: phaseName,
-		Kind:  EventReviewReworkRouted,
+		Kind:  EventReworkRouted,
 		Data: map[string]any{
 			"rework_cycle":      cycle,
 			"max_rework_cycles": e.config.maxReworkCycles(),
@@ -1274,7 +1274,7 @@ func (e *Engine) gateRework(phase PhaseConfig, raw json.RawMessage) error {
 		}
 		e.emit(Event{
 			Phase: phase.Name,
-			Kind:  EventReviewReworkMaxCycles,
+			Kind:  EventReworkMaxCycles,
 			Data: map[string]any{
 				"rework_cycles":     e.state.Meta().ReworkCycles,
 				"max_rework_cycles": maxCycles,
