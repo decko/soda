@@ -1296,10 +1296,68 @@ func (e *Engine) gateRework(phase PhaseConfig, raw json.RawMessage) error {
 	return &reworkSignal{target: phase.Rework.Target, findings: findings}
 }
 
+// regressionResult holds the outcome of a regression check between two
+// sets of failing criteria.
+type regressionResult struct {
+	Regressions []string // criteria that were previously passing but now fail
+	HasProgress bool     // true if there are strictly fewer failures now
+}
+
+// detectRegression compares the previous set of failing criteria against the
+// current set. A "regression" is a criterion that was NOT in the previous
+// failures (i.e., it was passing) but IS in the current failures.
+// "Progress" means strictly fewer total failures than before.
+func detectRegression(previous, current []string) regressionResult {
+	prevSet := make(map[string]bool, len(previous))
+	for _, f := range previous {
+		prevSet[f] = true
+	}
+
+	var regressions []string
+	for _, c := range current {
+		if !prevSet[c] {
+			regressions = append(regressions, c)
+		}
+	}
+
+	return regressionResult{
+		Regressions: regressions,
+		HasProgress: len(current) < len(previous),
+	}
+}
+
+// extractFailingCriteria reads the verify result from state and returns
+// the criterion text for each failing criterion. Returns nil if the result
+// cannot be read or parsed.
+func (e *Engine) extractFailingCriteria() []string {
+	raw, err := e.state.ReadResult("verify")
+	if err != nil {
+		return nil
+	}
+
+	var result struct {
+		CriteriaResults []struct {
+			Criterion string `json:"criterion"`
+			Passed    bool   `json:"passed"`
+		} `json:"criteria_results"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil
+	}
+
+	var failures []string
+	for _, cr := range result.CriteriaResults {
+		if !cr.Passed {
+			failures = append(failures, cr.Criterion)
+		}
+	}
+	return failures
+}
+
 // gateVerifyFail handles a verify FAIL verdict. When the phase has a
 // CorrectiveConfig, it routes to the corrective phase (e.g., patch) instead
 // of stopping with a PhaseGateError. Respects max_attempts, on_exhausted
-// policy, and the EscalatedFromPatch one-shot flag.
+// policy, the EscalatedFromPatch one-shot flag, and regression detection.
 func (e *Engine) gateVerifyFail(phase PhaseConfig, fixesRequired []string) error {
 	reason := "verification failed"
 	if len(fixesRequired) > 0 {
@@ -1314,6 +1372,30 @@ func (e *Engine) gateVerifyFail(phase PhaseConfig, fixesRequired []string) error
 	// One-shot escalation flag: once set, subsequent verify FAILs stop.
 	if e.state.Meta().EscalatedFromPatch {
 		return &PhaseGateError{Phase: phase.Name, Reason: reason + " (escalated from patch, no re-entry)"}
+	}
+
+	// Regression detection: when PatchCycles > 0, compare current failures
+	// against PreviousFailures. A regression (previously-passing criterion
+	// now fails) triggers immediate escalation. Note: criterion text from
+	// the ticket's acceptance criteria should be stable across runs; if
+	// criteria are rephrased, this may cause false negatives.
+	currentFailures := e.extractFailingCriteria()
+	if e.state.Meta().PatchCycles > 0 && len(e.state.Meta().PreviousFailures) > 0 {
+		regResult := detectRegression(e.state.Meta().PreviousFailures, currentFailures)
+		if len(regResult.Regressions) > 0 {
+			e.emit(Event{
+				Phase: phase.Name,
+				Kind:  EventPatchRegression,
+				Data: map[string]any{
+					"previously_passed": regResult.Regressions,
+					"now_failed":        currentFailures,
+				},
+			})
+			return &PhaseGateError{
+				Phase:  phase.Name,
+				Reason: reason + " (regression: previously-passing criteria now fail: " + strings.Join(regResult.Regressions, "; ") + ")",
+			}
+		}
 	}
 
 	// Check max_attempts.
@@ -1332,6 +1414,9 @@ func (e *Engine) gateVerifyFail(phase PhaseConfig, fixesRequired []string) error
 		})
 		return e.handlePatchExhausted(phase, cc, reason)
 	}
+
+	// Snapshot current failures for the next regression check.
+	e.state.Meta().PreviousFailures = currentFailures
 
 	// Route to the corrective phase.
 	return &reworkSignal{target: cc.Phase}
