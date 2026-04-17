@@ -496,6 +496,29 @@ func handleEvent(ctx context.Context, cancel context.CancelFunc, engine *pipelin
 	case pipeline.EventMonitorTimeout:
 		duration, _ := event.Data["duration"].(string)
 		prog.Message(fmt.Sprintf("  ⏹  Monitor timeout after %s", duration))
+
+	case pipeline.EventCorrectiveSkipped:
+		prog.PhaseSkipped(event.Phase)
+
+	case pipeline.EventPatchExhausted:
+		patchCycles, _ := event.Data["patch_cycles"].(float64)
+		onExhausted, _ := event.Data["on_exhausted"].(string)
+		prog.Message(fmt.Sprintf("  ⏹  Patch exhausted after %d cycles (policy: %s)", int(patchCycles), onExhausted))
+
+	case pipeline.EventPatchEscalated:
+		escalatingTo, _ := event.Data["escalating_to"].(string)
+		prog.Message(fmt.Sprintf("  ⬆️  Escalating to %s", escalatingTo))
+
+	case pipeline.EventPatchRegression:
+		prog.Message("  ⚠️  Regression detected: previously-passing criteria now fail")
+
+	case pipeline.EventPatchTooComplex:
+		reason, _ := event.Data["reason"].(string)
+		prog.Message(fmt.Sprintf("  ⚠️  Patch too complex: %s", reason))
+
+	case pipeline.EventPatchEscalationSkipped:
+		reason, _ := event.Data["reason"].(string)
+		prog.Message(fmt.Sprintf("  ⏭  Escalation skipped: %s", reason))
 	}
 }
 
@@ -647,6 +670,26 @@ func formatPhaseDetails(state *pipeline.State, phase string) string {
 			return out.Verdict
 		}
 		return fmt.Sprintf("%s — %d findings", out.Verdict, len(out.Findings))
+
+	case "patch":
+		var out schemas.PatchOutput
+		if json.Unmarshal(raw, &out) != nil {
+			return ""
+		}
+		if out.TooComplex {
+			return "too complex"
+		}
+		fixed := 0
+		for _, fr := range out.FixResults {
+			if fr.Status == "fixed" {
+				fixed++
+			}
+		}
+		total := len(out.FixResults)
+		if total == 0 {
+			return ""
+		}
+		return fmt.Sprintf("%d/%d fixed", fixed, total)
 
 	case "submit":
 		var out schemas.SubmitOutput

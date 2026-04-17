@@ -248,6 +248,44 @@ func TestFormatPhaseDetails(t *testing.T) {
 		}
 	})
 
+	t.Run("patch_fixed", func(t *testing.T) {
+		dir := t.TempDir()
+		state, _ := pipeline.LoadOrCreate(dir, "T-1")
+		state.WriteResult("patch", json.RawMessage(`{
+			"ticket_key": "T-1",
+			"fix_results": [
+				{"fix_index": 0, "status": "fixed", "description": "fixed test"},
+				{"fix_index": 1, "status": "cannot_fix", "description": "too complex"}
+			],
+			"files_changed": [],
+			"tests_passed": true,
+			"too_complex": false
+		}`))
+
+		got := formatPhaseDetails(state, "patch")
+		if got != "1/2 fixed" {
+			t.Errorf("expected '1/2 fixed', got %q", got)
+		}
+	})
+
+	t.Run("patch_too_complex", func(t *testing.T) {
+		dir := t.TempDir()
+		state, _ := pipeline.LoadOrCreate(dir, "T-1")
+		state.WriteResult("patch", json.RawMessage(`{
+			"ticket_key": "T-1",
+			"fix_results": [],
+			"files_changed": [],
+			"tests_passed": false,
+			"too_complex": true,
+			"too_complex_reason": "needs refactoring"
+		}`))
+
+		got := formatPhaseDetails(state, "patch")
+		if got != "too complex" {
+			t.Errorf("expected 'too complex', got %q", got)
+		}
+	})
+
 	t.Run("missing_result_returns_empty", func(t *testing.T) {
 		dir := t.TempDir()
 		state, _ := pipeline.LoadOrCreate(dir, "T-1")
