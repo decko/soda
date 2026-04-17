@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -817,7 +818,7 @@ func TestHandleEventPatchExhaustedCycles(t *testing.T) {
 				Kind: pipeline.EventPatchExhausted,
 				Data: tt.data,
 			}
-			handleEvent(nil, nil, nil, state, prog, event)
+			handleEvent(context.Background(), nil, nil, state, prog, event)
 
 			output := buf.String()
 			if !strings.Contains(output, tt.wantCycles) {
