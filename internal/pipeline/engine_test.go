@@ -7052,3 +7052,126 @@ func TestDetectRegression(t *testing.T) {
 		})
 	}
 }
+
+func TestEngine_PatchExhaustedRetry(t *testing.T) {
+	// When on_exhausted is "retry", the engine should allow one extra patch
+	// cycle by resetting PatchCycles. After the retry, if still failing, stop.
+	phases := []PhaseConfig{
+		{
+			Name:   "implement",
+			Prompt: "implement.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:         "patch",
+			Type:         "corrective",
+			Prompt:       "patch.md",
+			DependsOn:    []string{"implement"},
+			FeedbackFrom: []string{"verify"},
+			Retry:        RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "verify",
+			Prompt:    "verify.md",
+			DependsOn: []string{"implement"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Corrective: &CorrectiveConfig{
+				Phase:       "patch",
+				MaxAttempts: 1,
+				OnExhausted: "retry",
+			},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true}`),
+					RawText: "impl",
+					CostUSD: 0.10,
+				},
+			}},
+			"verify": {
+				// First verify: FAIL → routes to patch (cycle 1).
+				{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"verdict":"FAIL","fixes_required":["fix1"],"criteria_results":[{"criterion":"A","passed":false,"evidence":"e"}],"command_results":[]}`),
+						RawText: "fail1",
+						CostUSD: 0.05,
+					},
+				},
+				// Second verify (after first patch): FAIL → exhausted → retry resets cycles.
+				{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"verdict":"FAIL","fixes_required":["fix2"],"criteria_results":[{"criterion":"A","passed":false,"evidence":"e"}],"command_results":[]}`),
+						RawText: "fail2",
+						CostUSD: 0.05,
+					},
+				},
+				// Third verify (after retry patch): FAIL → retry already used → stop.
+				{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"verdict":"FAIL","fixes_required":["fix3"],"criteria_results":[{"criterion":"A","passed":false,"evidence":"e"}],"command_results":[]}`),
+						RawText: "fail3",
+						CostUSD: 0.05,
+					},
+				},
+			},
+			"patch": {
+				// First patch (cycle 1).
+				{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"ticket_key":"TEST-1","fix_results":[],"files_changed":[],"tests_passed":false,"too_complex":false}`),
+						RawText: "patched1",
+						CostUSD: 0.20,
+					},
+				},
+				// Second patch (retry cycle).
+				{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"ticket_key":"TEST-1","fix_results":[],"files_changed":[],"tests_passed":false,"too_complex":false}`),
+						RawText: "patched2",
+						CostUSD: 0.20,
+					},
+				},
+			},
+		},
+	}
+
+	var events []Event
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(ev Event) { events = append(events, ev) }
+	})
+
+	err := engine.Run(context.Background())
+	var gateErr *PhaseGateError
+	if !errors.As(err, &gateErr) {
+		t.Fatalf("expected PhaseGateError, got: %v", err)
+	}
+	if !strings.Contains(gateErr.Reason, "patch retry exhausted") {
+		t.Errorf("gate error reason should mention retry exhausted, got: %q", gateErr.Reason)
+	}
+
+	// PatchRetryUsed should be set.
+	if !state.Meta().PatchRetryUsed {
+		t.Error("PatchRetryUsed should be true after retry")
+	}
+
+	// Should have patch_exhausted event (emitted when first exhausted).
+	hasExhausted := false
+	for _, ev := range events {
+		if ev.Kind == EventPatchExhausted {
+			hasExhausted = true
+		}
+	}
+	if !hasExhausted {
+		t.Error("patch_exhausted event not emitted")
+	}
+
+	// Runner should have been called:
+	// implement, verify(fail), patch, verify(fail), patch(retry), verify(fail) = 6 calls
+	if len(mock.calls) != 6 {
+		t.Errorf("runner called %d times, want 6", len(mock.calls))
+	}
+}

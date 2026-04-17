@@ -1423,8 +1423,10 @@ func (e *Engine) gateVerifyFail(phase PhaseConfig, fixesRequired []string) error
 }
 
 // handlePatchExhausted applies the on_exhausted policy when patch attempts
-// are depleted. "stop" returns a PhaseGateError; "escalate" routes to
-// the escalation target (e.g., implement) with a budget check.
+// are depleted.
+//   - "stop" returns a PhaseGateError.
+//   - "escalate" routes to the escalation target (e.g., implement) with a budget check.
+//   - "retry" allows one extra patch cycle by resetting PatchCycles, then stops.
 func (e *Engine) handlePatchExhausted(phase PhaseConfig, cc *CorrectiveConfig, reason string) error {
 	switch cc.OnExhausted {
 	case "escalate":
@@ -1465,6 +1467,16 @@ func (e *Engine) handlePatchExhausted(phase PhaseConfig, cc *CorrectiveConfig, r
 		})
 
 		return &reworkSignal{target: cc.EscalateTo}
+
+	case "retry":
+		// Allow one extra patch cycle. If already used, stop.
+		if e.state.Meta().PatchRetryUsed {
+			return &PhaseGateError{Phase: phase.Name, Reason: reason + " (patch retry exhausted)"}
+		}
+		e.state.Meta().PatchRetryUsed = true
+		e.state.Meta().PatchCycles = 0
+		e.state.Meta().PreviousFailures = nil
+		return &reworkSignal{target: cc.Phase}
 
 	default: // "stop" or unrecognized
 		return &PhaseGateError{Phase: phase.Name, Reason: reason + " (patch attempts exhausted)"}
