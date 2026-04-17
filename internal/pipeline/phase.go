@@ -27,6 +27,16 @@ type PhaseConfig struct {
 	DependsOn []string         `yaml:"depends_on"`
 	Polling   *PollingConfig   `yaml:"polling,omitempty"`
 	Reviewers []ReviewerConfig `yaml:"reviewers,omitempty"`
+	Rework    *ReworkConfig    `yaml:"rework,omitempty"`
+}
+
+// ReworkConfig configures rework routing for a phase. When a phase with
+// this config produces a rework verdict, the engine routes back to Target
+// and injects feedback extracted from FeedbackFrom sources (in priority
+// order) into the target phase's prompt.
+type ReworkConfig struct {
+	Target       string   `yaml:"target"`        // phase to route back to on rework
+	FeedbackFrom []string `yaml:"feedback_from"` // ordered feedback sources for the target's prompt
 }
 
 // ReviewerConfig holds configuration for a single specialist reviewer
