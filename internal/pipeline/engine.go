@@ -381,7 +381,7 @@ func (e *Engine) executePhases(ctx context.Context, phases []PhaseConfig, forceF
 					// Handle review rework signal on skipped phases — can
 					// occur on Run() re-entry when a prior rework crashed
 					// mid-implement. Route to rework instead of leaking.
-					var reworkSig *reviewReworkSignal
+					var reworkSig *reworkSignal
 					if errors.As(err, &reworkSig) {
 						e.state.Meta().ReworkCycles++
 						cycle := e.state.Meta().ReworkCycles
@@ -471,7 +471,7 @@ func (e *Engine) executePhases(ctx context.Context, phases []PhaseConfig, forceF
 
 			if err := e.runPhase(ctx, phase); err != nil {
 				// Check for review rework signal — route back to implement.
-				var reworkSig *reviewReworkSignal
+				var reworkSig *reworkSignal
 				if errors.As(err, &reworkSig) {
 					e.state.Meta().ReworkCycles++
 					cycle := e.state.Meta().ReworkCycles
@@ -1143,7 +1143,7 @@ func (e *Engine) gatePhase(phase PhaseConfig) error {
 				return &PhaseGateError{Phase: phase.Name, Reason: reason}
 			}
 			// Signal rework needed — the engine loop will handle routing.
-			return &reviewReworkSignal{findings: result.Findings}
+			return &reworkSignal{target: "implement", findings: result.Findings}
 		}
 
 	case "submit":

@@ -40,15 +40,16 @@ func (e *PhaseGateError) Error() string {
 	return fmt.Sprintf("pipeline: phase %s gated: %s", e.Phase, e.Reason)
 }
 
-// reviewReworkSignal is an internal sentinel error used by gatePhase to
-// signal the engine loop that the review phase produced a "rework" verdict
-// and the pipeline should route back to implement. This is NOT a terminal
-// error — the engine loop catches it and handles routing.
-type reviewReworkSignal struct {
-	findings []schemas.ReviewFinding
+// reworkSignal is an internal sentinel error used by gatePhase to signal the
+// engine loop that a phase produced a "rework" verdict and the pipeline should
+// route back to the configured target phase. This is NOT a terminal error —
+// the engine loop catches it and handles routing.
+type reworkSignal struct {
+	target   string                  // phase to route back to
+	findings []schemas.ReviewFinding // findings for error message context
 }
 
-func (e *reviewReworkSignal) Error() string {
+func (e *reworkSignal) Error() string {
 	var issues []string
 	for _, finding := range e.findings {
 		sev := strings.ToLower(finding.Severity)
@@ -57,7 +58,7 @@ func (e *reviewReworkSignal) Error() string {
 		}
 	}
 	if len(issues) > 0 {
-		return "review rework signal: " + strings.Join(issues, "; ")
+		return "rework signal (target " + e.target + "): " + strings.Join(issues, "; ")
 	}
-	return "review rework signal"
+	return "rework signal (target " + e.target + ")"
 }
