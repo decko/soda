@@ -4198,10 +4198,10 @@ func TestEngine_ReviewReworkRouting(t *testing.T) {
 			t.Errorf("ReworkCycles = %d, want 1", state.Meta().ReworkCycles)
 		}
 
-		// Should have review_rework_routed event.
+		// Should have rework_routed event.
 		hasRouted := false
 		for _, e := range events {
-			if e.Kind == EventReviewReworkRouted {
+			if e.Kind == EventReworkRouted {
 				hasRouted = true
 				routingTo, _ := e.Data["routing_to"].(string)
 				if routingTo != "implement" {
@@ -4210,7 +4210,7 @@ func TestEngine_ReviewReworkRouting(t *testing.T) {
 			}
 		}
 		if !hasRouted {
-			t.Error("review_rework_routed event not emitted")
+			t.Error("rework_routed event not emitted")
 		}
 
 		// Implement should have been called twice (original + rework).
@@ -4312,18 +4312,18 @@ func TestEngine_ReviewReworkRouting(t *testing.T) {
 		hasRouted := false
 		hasMaxCycles := false
 		for _, e := range events {
-			if e.Kind == EventReviewReworkRouted {
+			if e.Kind == EventReworkRouted {
 				hasRouted = true
 			}
-			if e.Kind == EventReviewReworkMaxCycles {
+			if e.Kind == EventReworkMaxCycles {
 				hasMaxCycles = true
 			}
 		}
 		if !hasRouted {
-			t.Error("review_rework_routed event not emitted")
+			t.Error("rework_routed event not emitted")
 		}
 		if !hasMaxCycles {
-			t.Error("review_rework_max_cycles event not emitted")
+			t.Error("rework_max_cycles event not emitted")
 		}
 	})
 
@@ -5018,16 +5018,16 @@ func TestEngine_SkippedReviewPhaseReworkSignalRoutesToImplement(t *testing.T) {
 		t.Errorf("ReworkCycles after second run = %d, want 2", state.Meta().ReworkCycles)
 	}
 
-	// Should have emitted a review_rework_routed event.
+	// Should have emitted a rework_routed event.
 	hasRouted := false
 	for _, e := range events {
-		if e.Kind == EventReviewReworkRouted {
+		if e.Kind == EventReworkRouted {
 			hasRouted = true
 			break
 		}
 	}
 	if !hasRouted {
-		t.Error("review_rework_routed event not emitted on skipped-phase gate path")
+		t.Error("rework_routed event not emitted on skipped-phase gate path")
 	}
 
 	// Implement should have been called in the second run (via rework routing).
