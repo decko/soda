@@ -42,6 +42,8 @@ type PipelineMeta struct {
 	ReworkCycles       int                    `json:"rework_cycles,omitempty"`
 	PatchCycles        int                    `json:"patch_cycles,omitempty"`
 	EscalatedFromPatch bool                   `json:"escalated_from_patch,omitempty"`
+	PatchRetryUsed     bool                   `json:"patch_retry_used,omitempty"`
+	PreviousFailures   []string               `json:"previous_failures,omitempty"`
 	Phases             map[string]*PhaseState `json:"phases"`
 }
 

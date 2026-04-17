@@ -74,6 +74,7 @@ const (
 	EventPatchEscalated           = "patch_escalated"
 	EventPatchTooComplex          = "patch_too_complex"
 	EventPatchEscalationSkipped   = "patch_escalation_skipped"
+	EventPatchRegression          = "patch_regression"
 )
 
 // ReadEvents reads and parses all events from the events.jsonl file in dir.

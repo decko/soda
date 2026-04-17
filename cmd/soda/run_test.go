@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/decko/soda/internal/claude"
 	"github.com/decko/soda/internal/pipeline"
+	"github.com/decko/soda/internal/progress"
 )
 
 func TestResolveLastPhase(t *testing.T) {
@@ -245,6 +247,44 @@ func TestFormatPhaseDetails(t *testing.T) {
 		got := formatPhaseDetails(state, "submit")
 		if got != "https://github.com/org/repo/pull/42" {
 			t.Errorf("expected PR URL, got %q", got)
+		}
+	})
+
+	t.Run("patch_fixed", func(t *testing.T) {
+		dir := t.TempDir()
+		state, _ := pipeline.LoadOrCreate(dir, "T-1")
+		state.WriteResult("patch", json.RawMessage(`{
+			"ticket_key": "T-1",
+			"fix_results": [
+				{"fix_index": 0, "status": "fixed", "description": "fixed test"},
+				{"fix_index": 1, "status": "cannot_fix", "description": "too complex"}
+			],
+			"files_changed": [],
+			"tests_passed": true,
+			"too_complex": false
+		}`))
+
+		got := formatPhaseDetails(state, "patch")
+		if got != "1/2 fixed" {
+			t.Errorf("expected '1/2 fixed', got %q", got)
+		}
+	})
+
+	t.Run("patch_too_complex", func(t *testing.T) {
+		dir := t.TempDir()
+		state, _ := pipeline.LoadOrCreate(dir, "T-1")
+		state.WriteResult("patch", json.RawMessage(`{
+			"ticket_key": "T-1",
+			"fix_results": [],
+			"files_changed": [],
+			"tests_passed": false,
+			"too_complex": true,
+			"too_complex_reason": "needs refactoring"
+		}`))
+
+		got := formatPhaseDetails(state, "patch")
+		if got != "too complex" {
+			t.Errorf("expected 'too complex', got %q", got)
 		}
 	})
 
@@ -738,5 +778,52 @@ func TestPrintSummaryGenericError(t *testing.T) {
 	}
 	if !strings.Contains(output, "cd /tmp/worktrees/PROJ-60") {
 		t.Error("expected cd to worktree path")
+	}
+}
+
+func TestHandleEventPatchExhaustedCycles(t *testing.T) {
+	// Verify that handleEvent correctly extracts patch_cycles as int
+	// (native Go type from the engine) and falls back to float64 (JSON).
+	tests := []struct {
+		name       string
+		data       map[string]any
+		wantCycles string
+	}{
+		{
+			name:       "int value from engine",
+			data:       map[string]any{"patch_cycles": 3, "on_exhausted": "stop"},
+			wantCycles: "3 cycles",
+		},
+		{
+			name:       "float64 value from JSON",
+			data:       map[string]any{"patch_cycles": float64(5), "on_exhausted": "escalate"},
+			wantCycles: "5 cycles",
+		},
+		{
+			name:       "zero value",
+			data:       map[string]any{"patch_cycles": 0, "on_exhausted": "stop"},
+			wantCycles: "0 cycles",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			state, _ := pipeline.LoadOrCreate(dir, "T-1")
+
+			var buf bytes.Buffer
+			prog := progress.New(&buf, false)
+
+			event := pipeline.Event{
+				Kind: pipeline.EventPatchExhausted,
+				Data: tt.data,
+			}
+			handleEvent(context.Background(), nil, nil, state, prog, event)
+
+			output := buf.String()
+			if !strings.Contains(output, tt.wantCycles) {
+				t.Errorf("expected output to contain %q, got %q", tt.wantCycles, output)
+			}
+		})
 	}
 }
