@@ -384,15 +384,17 @@ func handleEvent(ctx context.Context, cancel context.CancelFunc, engine *pipelin
 		prog.PhaseStarted(event.Phase)
 
 	case pipeline.EventPhaseCompleted:
-		durationMs, _ := event.Data["duration_ms"].(int64)
-		if durationMs == 0 {
-			// Try float64 (JSON numbers default to float64)
-			if dFloat, ok := event.Data["duration_ms"].(float64); ok {
-				durationMs = int64(dFloat)
-			}
+		var durationMs int64
+		if dMs, ok := event.Data["duration_ms"].(int64); ok {
+			durationMs = dMs
+		} else if dFloat, ok := event.Data["duration_ms"].(float64); ok {
+			durationMs = int64(dFloat)
 		}
 		elapsed := time.Duration(durationMs) * time.Millisecond
-		cost, _ := event.Data["cost"].(float64)
+		var cost float64
+		if c, ok := event.Data["cost"].(float64); ok {
+			cost = c
+		}
 
 		// Extract summary from structured output
 		summary := ""
@@ -403,12 +405,15 @@ func handleEvent(ctx context.Context, cancel context.CancelFunc, engine *pipelin
 		prog.PhaseCompleted(event.Phase, summary, elapsed, cost)
 
 	case pipeline.EventPhaseFailed:
-		errMsg, _ := event.Data["error"].(string)
-		durationMs, _ := event.Data["duration_ms"].(int64)
-		if durationMs == 0 {
-			if dFloat, ok := event.Data["duration_ms"].(float64); ok {
-				durationMs = int64(dFloat)
-			}
+		var errMsg string
+		if e, ok := event.Data["error"].(string); ok {
+			errMsg = e
+		}
+		var durationMs int64
+		if dMs, ok := event.Data["duration_ms"].(int64); ok {
+			durationMs = dMs
+		} else if dFloat, ok := event.Data["duration_ms"].(float64); ok {
+			durationMs = int64(dFloat)
 		}
 		elapsed := time.Duration(durationMs) * time.Millisecond
 		prog.PhaseFailed(event.Phase, errMsg, elapsed)
@@ -417,18 +422,27 @@ func handleEvent(ctx context.Context, cancel context.CancelFunc, engine *pipelin
 		prog.PhaseSkipped(event.Phase)
 
 	case pipeline.EventPhaseRetrying:
-		category, _ := event.Data["category"].(string)
-		attempt, _ := event.Data["attempt"].(int)
-		if attempt == 0 {
-			if aFloat, ok := event.Data["attempt"].(float64); ok {
-				attempt = int(aFloat)
-			}
+		var category string
+		if c, ok := event.Data["category"].(string); ok {
+			category = c
+		}
+		var attempt int
+		if a, ok := event.Data["attempt"].(int); ok {
+			attempt = a
+		} else if aFloat, ok := event.Data["attempt"].(float64); ok {
+			attempt = int(aFloat)
 		}
 		prog.PhaseRetrying(event.Phase, category, attempt)
 
 	case pipeline.EventBudgetWarning:
-		total, _ := event.Data["total_cost"].(float64)
-		limit, _ := event.Data["limit"].(float64)
+		var total float64
+		if t, ok := event.Data["total_cost"].(float64); ok {
+			total = t
+		}
+		var limit float64
+		if l, ok := event.Data["limit"].(float64); ok {
+			limit = l
+		}
 		prog.BudgetWarning(total, limit)
 
 	case pipeline.EventCheckpointPause:
@@ -440,61 +454,102 @@ func handleEvent(ctx context.Context, cancel context.CancelFunc, engine *pipelin
 		}
 
 	case pipeline.EventWorktreeCreated:
-		wt, _ := event.Data["worktree"].(string)
-		branch, _ := event.Data["branch"].(string)
+		var wt string
+		if w, ok := event.Data["worktree"].(string); ok {
+			wt = w
+		}
+		var branch string
+		if b, ok := event.Data["branch"].(string); ok {
+			branch = b
+		}
 		prog.Message(fmt.Sprintf("Created worktree: %s (%s)", wt, branch))
 
 	case pipeline.EventMonitorSkipped:
 		prog.PhaseSkipped("monitor")
 
 	case pipeline.EventMonitorPolling:
-		pollCount, _ := event.Data["poll_count"].(int)
-		rounds, _ := event.Data["response_rounds"].(int)
+		var pollCount int
+		if pc, ok := event.Data["poll_count"].(int); ok {
+			pollCount = pc
+		}
+		var rounds int
+		if r, ok := event.Data["response_rounds"].(int); ok {
+			rounds = r
+		}
 		prog.Message(fmt.Sprintf("  📡 poll #%d (rounds: %d)", pollCount, rounds))
 
 	case pipeline.EventMonitorNewComments:
-		count, _ := event.Data["count"].(int)
-		rounds, _ := event.Data["response_rounds"].(int)
+		var count int
+		if c, ok := event.Data["count"].(int); ok {
+			count = c
+		}
+		var rounds int
+		if r, ok := event.Data["response_rounds"].(int); ok {
+			rounds = r
+		}
 		prog.Message(fmt.Sprintf("  💬 %d new comment(s) — round %d", count, rounds))
 
 	case pipeline.EventMonitorCIChange:
-		prev, _ := event.Data["previous"].(string)
-		curr, _ := event.Data["current"].(string)
+		var prev string
+		if p, ok := event.Data["previous"].(string); ok {
+			prev = p
+		}
+		var curr string
+		if c, ok := event.Data["current"].(string); ok {
+			curr = c
+		}
 		prog.Message(fmt.Sprintf("  🔄 CI status: %s → %s", prev, curr))
 
 	case pipeline.EventMonitorCIFailure:
-		failedJobs, _ := event.Data["failed_jobs"].([]string)
-		if len(failedJobs) > 0 {
+		if failedJobs, ok := event.Data["failed_jobs"].([]string); ok && len(failedJobs) > 0 {
 			prog.Message(fmt.Sprintf("  ❌ CI failed: %s", strings.Join(failedJobs, ", ")))
 		} else {
 			prog.Message("  ❌ CI failed")
 		}
 
 	case pipeline.EventMonitorConflict:
-		baseBranch, _ := event.Data["base_branch"].(string)
+		var baseBranch string
+		if b, ok := event.Data["base_branch"].(string); ok {
+			baseBranch = b
+		}
 		prog.Message(fmt.Sprintf("  ⚠️  Merge conflict detected with %s", baseBranch))
 
 	case pipeline.EventMonitorRebaseOK:
 		prog.Message("  ✅ Auto-rebase succeeded, pushed")
 
 	case pipeline.EventMonitorRebaseFailed:
-		errMsg, _ := event.Data["error"].(string)
+		var errMsg string
+		if e, ok := event.Data["error"].(string); ok {
+			errMsg = e
+		}
 		prog.Message(fmt.Sprintf("  ❌ Auto-rebase failed: %s", errMsg))
 
 	case pipeline.EventMonitorPRApproved:
-		state, _ := event.Data["state"].(string)
-		prog.Message(fmt.Sprintf("  ✅ PR %s — pipeline complete", state))
+		var prState string
+		if s, ok := event.Data["state"].(string); ok {
+			prState = s
+		}
+		prog.Message(fmt.Sprintf("  ✅ PR %s — pipeline complete", prState))
 
 	case pipeline.EventMonitorPRClosed:
 		prog.Message("  ❌ PR closed/rejected — pipeline failed")
 
 	case pipeline.EventMonitorMaxRounds:
-		rounds, _ := event.Data["response_rounds"].(int)
-		maxRounds, _ := event.Data["max_response_rounds"].(int)
+		var rounds int
+		if r, ok := event.Data["response_rounds"].(int); ok {
+			rounds = r
+		}
+		var maxRounds int
+		if mr, ok := event.Data["max_response_rounds"].(int); ok {
+			maxRounds = mr
+		}
 		prog.Message(fmt.Sprintf("  ⏹  Max response rounds reached (%d/%d)", rounds, maxRounds))
 
 	case pipeline.EventMonitorTimeout:
-		duration, _ := event.Data["duration"].(string)
+		var duration string
+		if d, ok := event.Data["duration"].(string); ok {
+			duration = d
+		}
 		prog.Message(fmt.Sprintf("  ⏹  Monitor timeout after %s", duration))
 
 	case pipeline.EventCorrectiveSkipped:
