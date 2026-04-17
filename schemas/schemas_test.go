@@ -16,6 +16,7 @@ func TestSchemaFor_KnownPhases(t *testing.T) {
 		{"verify", VerifySchema},
 		{"review", ReviewSchema},
 		{"submit", SubmitSchema},
+		{"patch", PatchSchema},
 		{"monitor", MonitorSchema},
 	}
 
@@ -54,6 +55,7 @@ func TestGeneratedSchemas_ValidJSON(t *testing.T) {
 		"verify":    VerifySchema,
 		"review":    ReviewSchema,
 		"submit":    SubmitSchema,
+		"patch":     PatchSchema,
 		"monitor":   MonitorSchema,
 	}
 
@@ -132,6 +134,49 @@ func TestTriageSchema_MatchesStruct(t *testing.T) {
 	wantProps := []string{
 		"ticket_key", "repo", "code_area", "files", "complexity",
 		"approach", "risks", "automatable", "block_reason", "skip_plan",
+	}
+	for _, prop := range wantProps {
+		if _, ok := parsed.Properties[prop]; !ok {
+			t.Errorf("missing property %q", prop)
+		}
+	}
+}
+
+func TestPatchSchema_MatchesStruct(t *testing.T) {
+	var parsed struct {
+		Properties map[string]interface{} `json:"properties"`
+		Required   []string               `json:"required"`
+	}
+	if err := json.Unmarshal([]byte(PatchSchema), &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	// PatchOutput has these non-omitempty fields.
+	wantRequired := []string{
+		"files_changed", "fix_results", "tests_passed", "ticket_key", "too_complex",
+	}
+	if len(parsed.Required) != len(wantRequired) {
+		t.Fatalf("required count = %d, want %d: %v", len(parsed.Required), len(wantRequired), parsed.Required)
+	}
+	reqSet := make(map[string]bool)
+	for _, field := range parsed.Required {
+		reqSet[field] = true
+	}
+	for _, want := range wantRequired {
+		if !reqSet[want] {
+			t.Errorf("required missing %q", want)
+		}
+	}
+
+	// too_complex_reason is omitempty, so NOT required.
+	if reqSet["too_complex_reason"] {
+		t.Error("too_complex_reason should not be required (omitempty)")
+	}
+
+	// All properties should exist.
+	wantProps := []string{
+		"ticket_key", "fix_results", "files_changed", "tests_passed",
+		"too_complex", "too_complex_reason",
 	}
 	for _, prop := range wantProps {
 		if _, ok := parsed.Properties[prop]; !ok {
