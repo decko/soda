@@ -378,9 +378,9 @@ func (e *Engine) executePhases(ctx context.Context, phases []PhaseConfig, forceF
 			skipCheck := !(forceFirst && idx == 0)
 			if skipCheck && e.shouldSkip(phase) {
 				if err := e.gatePhase(phase); err != nil {
-					// Handle review rework signal on skipped phases — can
-					// occur on Run() re-entry when a prior rework crashed
-					// mid-implement. Route to rework instead of leaking.
+					// Handle rework signal on skipped phases — can occur on
+					// Run() re-entry when a prior rework crashed mid-cycle.
+					// Route to the configured target instead of leaking.
 					var reworkSig *reworkSignal
 					if errors.As(err, &reworkSig) {
 						e.state.Meta().ReworkCycles++
@@ -392,7 +392,7 @@ func (e *Engine) executePhases(ctx context.Context, phases []PhaseConfig, forceF
 							Data: map[string]any{
 								"rework_cycle":      cycle,
 								"max_rework_cycles": e.config.maxReworkCycles(),
-								"routing_to":        "implement",
+								"routing_to":        reworkSig.target,
 							},
 						})
 
@@ -400,18 +400,18 @@ func (e *Engine) executePhases(ctx context.Context, phases []PhaseConfig, forceF
 							return fmt.Errorf("engine: flush meta after rework routing: %w", err)
 						}
 
-						implIdx := -1
+						targetIdx := -1
 						for i, p := range e.config.Pipeline.Phases {
-							if p.Name == "implement" {
-								implIdx = i
+							if p.Name == reworkSig.target {
+								targetIdx = i
 								break
 							}
 						}
-						if implIdx < 0 {
-							return fmt.Errorf("engine: review rework routing requires an implement phase in the pipeline")
+						if targetIdx < 0 {
+							return fmt.Errorf("engine: rework routing requires phase %q in the pipeline", reworkSig.target)
 						}
 
-						phases = e.config.Pipeline.Phases[implIdx:]
+						phases = e.config.Pipeline.Phases[targetIdx:]
 						forceFirst = true
 						rework = true
 						break
@@ -470,7 +470,7 @@ func (e *Engine) executePhases(ctx context.Context, phases []PhaseConfig, forceF
 			}
 
 			if err := e.runPhase(ctx, phase); err != nil {
-				// Check for review rework signal — route back to implement.
+				// Check for rework signal — route to configured target.
 				var reworkSig *reworkSignal
 				if errors.As(err, &reworkSig) {
 					e.state.Meta().ReworkCycles++
@@ -482,7 +482,7 @@ func (e *Engine) executePhases(ctx context.Context, phases []PhaseConfig, forceF
 						Data: map[string]any{
 							"rework_cycle":      cycle,
 							"max_rework_cycles": e.config.maxReworkCycles(),
-							"routing_to":        "implement",
+							"routing_to":        reworkSig.target,
 						},
 					})
 
@@ -491,19 +491,19 @@ func (e *Engine) executePhases(ctx context.Context, phases []PhaseConfig, forceF
 						return fmt.Errorf("engine: flush meta after rework routing: %w", err)
 					}
 
-					// Find implement's index and re-slice from there.
-					implIdx := -1
+					// Find target's index and re-slice from there.
+					targetIdx := -1
 					for i, p := range e.config.Pipeline.Phases {
-						if p.Name == "implement" {
-							implIdx = i
+						if p.Name == reworkSig.target {
+							targetIdx = i
 							break
 						}
 					}
-					if implIdx < 0 {
-						return fmt.Errorf("engine: review rework routing requires an implement phase in the pipeline")
+					if targetIdx < 0 {
+						return fmt.Errorf("engine: rework routing requires phase %q in the pipeline", reworkSig.target)
 					}
 
-					phases = e.config.Pipeline.Phases[implIdx:]
+					phases = e.config.Pipeline.Phases[targetIdx:]
 					forceFirst = true
 					rework = true
 					break
@@ -1111,41 +1111,6 @@ func (e *Engine) gatePhase(phase PhaseConfig) error {
 			return &PhaseGateError{Phase: phase.Name, Reason: reason}
 		}
 
-	case "review":
-		var result schemas.ReviewOutput
-		if err := json.Unmarshal(raw, &result); err != nil {
-			return fmt.Errorf("engine: review gate: failed to unmarshal result: %w", err)
-		}
-		if strings.EqualFold(result.Verdict, "rework") {
-			// Rework routing is handled by the engine loop, not the gate.
-			// The gate only blocks when max rework cycles are exceeded.
-			maxCycles := e.config.maxReworkCycles()
-			if e.state.Meta().ReworkCycles >= maxCycles {
-				var issues []string
-				for _, finding := range result.Findings {
-					sev := strings.ToLower(finding.Severity)
-					if sev == "critical" || sev == "major" {
-						issues = append(issues, finding.Issue)
-					}
-				}
-				reason := fmt.Sprintf("review requires rework but max cycles (%d) reached", maxCycles)
-				if len(issues) > 0 {
-					reason += ": " + strings.Join(issues, "; ")
-				}
-				e.emit(Event{
-					Phase: phase.Name,
-					Kind:  EventReviewReworkMaxCycles,
-					Data: map[string]any{
-						"rework_cycles":     e.state.Meta().ReworkCycles,
-						"max_rework_cycles": maxCycles,
-					},
-				})
-				return &PhaseGateError{Phase: phase.Name, Reason: reason}
-			}
-			// Signal rework needed — the engine loop will handle routing.
-			return &reworkSignal{target: "implement", findings: result.Findings}
-		}
-
 	case "submit":
 		var result struct {
 			PRURL string `json:"pr_url"`
@@ -1158,7 +1123,57 @@ func (e *Engine) gatePhase(phase PhaseConfig) error {
 		}
 	}
 
+	// Config-driven rework gating: when a phase has a Rework config, check
+	// for a "rework" verdict and signal the engine loop accordingly.
+	if phase.Rework != nil {
+		if err := e.gateRework(phase, raw); err != nil {
+			return err
+		}
+	}
+
 	return nil
+}
+
+// gateRework checks for a "rework" verdict in the phase result and either
+// signals rework routing or blocks when max cycles are exceeded. The rework
+// target and feedback sources are read from the phase's ReworkConfig.
+func (e *Engine) gateRework(phase PhaseConfig, raw json.RawMessage) error {
+	var result schemas.ReviewOutput
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return fmt.Errorf("engine: %s rework gate: failed to unmarshal result: %w", phase.Name, err)
+	}
+	if !strings.EqualFold(result.Verdict, "rework") {
+		return nil
+	}
+
+	// Rework routing is handled by the engine loop, not the gate.
+	// The gate only blocks when max rework cycles are exceeded.
+	maxCycles := e.config.maxReworkCycles()
+	if e.state.Meta().ReworkCycles >= maxCycles {
+		var issues []string
+		for _, finding := range result.Findings {
+			sev := strings.ToLower(finding.Severity)
+			if sev == "critical" || sev == "major" {
+				issues = append(issues, finding.Issue)
+			}
+		}
+		reason := fmt.Sprintf("review requires rework but max cycles (%d) reached", maxCycles)
+		if len(issues) > 0 {
+			reason += ": " + strings.Join(issues, "; ")
+		}
+		e.emit(Event{
+			Phase: phase.Name,
+			Kind:  EventReviewReworkMaxCycles,
+			Data: map[string]any{
+				"rework_cycles":     e.state.Meta().ReworkCycles,
+				"max_rework_cycles": maxCycles,
+			},
+		})
+		return &PhaseGateError{Phase: phase.Name, Reason: reason}
+	}
+
+	// Signal rework needed — the engine loop will handle routing.
+	return &reworkSignal{target: phase.Rework.Target, findings: result.Findings}
 }
 
 // reviewerResult holds the outcome of a single reviewer subagent.

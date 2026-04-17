@@ -1255,6 +1255,7 @@ func TestEngine_GatePhase_ReviewUnmarshalError(t *testing.T) {
 			Name:   "review",
 			Prompt: "review.md",
 			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Rework: &ReworkConfig{Target: "implement", FeedbackFrom: []string{"review"}},
 		},
 	}
 
@@ -1276,8 +1277,8 @@ func TestEngine_GatePhase_ReviewUnmarshalError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for corrupt review result, got nil")
 	}
-	if !strings.Contains(err.Error(), "review gate") {
-		t.Errorf("error should mention review gate, got: %v", err)
+	if !strings.Contains(err.Error(), "review rework gate") {
+		t.Errorf("error should mention review rework gate, got: %v", err)
 	}
 }
 
@@ -3427,9 +3428,10 @@ func TestEngine_ParallelReview_MergedFindings(t *testing.T) {
 	// critical/major findings should gate with a PhaseGateError.
 	phases := []PhaseConfig{
 		{
-			Name:  "review",
-			Type:  "parallel-review",
-			Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Name:   "review",
+			Type:   "parallel-review",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Rework: &ReworkConfig{Target: "implement", FeedbackFrom: []string{"review"}},
 			Reviewers: []ReviewerConfig{
 				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
 				{Name: "ai-harness", Prompt: "prompts/review-harness.md", Focus: "AI harness"},
@@ -3989,6 +3991,7 @@ func TestEngine_ReviewReworkRouting(t *testing.T) {
 				Type:      "parallel-review",
 				DependsOn: []string{"implement", "verify"},
 				Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+				Rework:    &ReworkConfig{Target: "implement", FeedbackFrom: []string{"review", "verify"}},
 				Reviewers: []ReviewerConfig{
 					{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
 				},
@@ -4119,6 +4122,7 @@ func TestEngine_ReviewReworkRouting(t *testing.T) {
 				Type:      "parallel-review",
 				DependsOn: []string{"implement"},
 				Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+				Rework:    &ReworkConfig{Target: "implement", FeedbackFrom: []string{"review"}},
 				Reviewers: []ReviewerConfig{
 					{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
 				},
@@ -4217,6 +4221,7 @@ func TestEngine_ReviewReworkRouting(t *testing.T) {
 				Type:      "parallel-review",
 				DependsOn: []string{"implement"},
 				Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+				Rework:    &ReworkConfig{Target: "implement", FeedbackFrom: []string{"review"}},
 				Reviewers: []ReviewerConfig{
 					{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
 				},
@@ -4302,6 +4307,7 @@ func TestEngine_ReviewReworkRouting(t *testing.T) {
 				Type:      "parallel-review",
 				DependsOn: []string{"implement"},
 				Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+				Rework:    &ReworkConfig{Target: "implement", FeedbackFrom: []string{"review"}},
 				Reviewers: []ReviewerConfig{
 					{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
 				},
@@ -4372,6 +4378,7 @@ func TestEngine_ReviewReworkFeedbackInjected(t *testing.T) {
 			Type:      "parallel-review",
 			DependsOn: []string{"implement"},
 			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Rework:    &ReworkConfig{Target: "implement", FeedbackFrom: []string{"review"}},
 			Reviewers: []ReviewerConfig{
 				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
 				{Name: "ai-harness", Prompt: "prompts/review-harness.md", Focus: "AI harness"},
@@ -4647,7 +4654,7 @@ func TestEngine_SkippedReviewPhaseReworkSignalRoutesToImplement(t *testing.T) {
 	// Scenario: review phase completed with "rework" verdict in a prior run.
 	// On re-run, review is skipped (deps unchanged), but its stored gate
 	// result still contains the rework verdict. The engine should handle the
-	// reviewReworkSignal by routing back to implement, NOT returning a
+	// reworkSignal by routing back to implement, NOT returning a
 	// terminal error.
 	phases := []PhaseConfig{
 		{
@@ -4666,6 +4673,7 @@ func TestEngine_SkippedReviewPhaseReworkSignalRoutesToImplement(t *testing.T) {
 			Type:      "parallel-review",
 			DependsOn: []string{"implement", "verify"},
 			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Rework:    &ReworkConfig{Target: "implement", FeedbackFrom: []string{"review", "verify"}},
 			Reviewers: []ReviewerConfig{
 				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
 			},
