@@ -44,7 +44,7 @@ type ReworkConfig struct {
 type CorrectiveConfig struct {
 	Phase       string `yaml:"phase"`        // corrective phase to route to on failure
 	MaxAttempts int    `yaml:"max_attempts"` // max corrective cycles before exhaustion
-	OnExhausted string `yaml:"on_exhausted"` // "stop" | "escalate"
+	OnExhausted string `yaml:"on_exhausted"` // "stop" | "escalate" | "retry"
 	EscalateTo  string `yaml:"escalate_to"`  // target for "escalate" policy
 }
 
