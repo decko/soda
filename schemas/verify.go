@@ -27,8 +27,9 @@ type CommandResult struct {
 
 // CodeIssue is a problem found during code review.
 type CodeIssue struct {
-	File     string `json:"file"`
-	Line     int    `json:"line,omitempty"`
-	Severity string `json:"severity"` // critical, major, minor
-	Issue    string `json:"issue"`
+	File         string `json:"file"`
+	Line         int    `json:"line,omitempty"`
+	Severity     string `json:"severity"` // critical, major, minor
+	Issue        string `json:"issue"`
+	SuggestedFix string `json:"suggested_fix,omitempty"`
 }
