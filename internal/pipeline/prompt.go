@@ -48,10 +48,11 @@ type FailedCriterion struct {
 
 // ReworkCodeIssue is a critical or major code issue found during verification.
 type ReworkCodeIssue struct {
-	File     string
-	Line     int
-	Severity string
-	Issue    string
+	File         string
+	Line         int
+	Severity     string
+	Issue        string
+	SuggestedFix string
 }
 
 // FailedCommand is a verification command that failed, with truncated output.
