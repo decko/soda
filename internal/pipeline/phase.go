@@ -35,6 +35,7 @@ type ReviewerConfig struct {
 	Name   string `yaml:"name"`
 	Prompt string `yaml:"prompt"`
 	Focus  string `yaml:"focus"`
+	Model  string `yaml:"model,omitempty"`
 }
 
 // RetryConfig holds per-category retry limits.

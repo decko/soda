@@ -3365,6 +3365,63 @@ func TestEngine_ParallelReview_HappyPath(t *testing.T) {
 	}
 }
 
+func TestEngine_ParallelReview_PerReviewerModel(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:  "review",
+			Type:  "parallel-review",
+			Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Reviewers: []ReviewerConfig{
+				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms", Model: "claude-sonnet-4-6"},
+				{Name: "ai-harness", Prompt: "prompts/review-harness.md", Focus: "AI harness"}, // no model — should use global
+			},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"review/go-specialist": {{
+				result: &runner.RunResult{
+					Output: json.RawMessage(`{"findings":[],"verdict":"pass"}`),
+				},
+			}},
+			"review/ai-harness": {{
+				result: &runner.RunResult{
+					Output: json.RawMessage(`{"findings":[],"verdict":"pass"}`),
+				},
+			}},
+		},
+	}
+
+	engine, _ := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.Model = "claude-opus-4-6"
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+
+	if len(mock.calls) != 2 {
+		t.Fatalf("runner called %d times, want 2", len(mock.calls))
+	}
+
+	// Find each reviewer's call by phase name.
+	models := map[string]string{}
+	for _, c := range mock.calls {
+		models[c.Phase] = c.Model
+	}
+
+	if models["review/go-specialist"] != "claude-sonnet-4-6" {
+		t.Errorf("go-specialist model = %q, want %q", models["review/go-specialist"], "claude-sonnet-4-6")
+	}
+	if models["review/ai-harness"] != "claude-opus-4-6" {
+		t.Errorf("ai-harness model = %q, want %q (global fallback)", models["review/ai-harness"], "claude-opus-4-6")
+	}
+}
+
 func TestEngine_ParallelReview_MergedFindings(t *testing.T) {
 	// When max rework cycles is reached (set to 0), review with
 	// critical/major findings should gate with a PhaseGateError.
