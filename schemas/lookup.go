@@ -18,5 +18,6 @@ var phaseSchemas = map[string]string{
 	"verify":    VerifySchema,
 	"review":    ReviewSchema,
 	"submit":    SubmitSchema,
+	"follow-up": FollowUpSchema,
 	"monitor":   MonitorSchema,
 }
