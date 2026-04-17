@@ -103,6 +103,11 @@ func (s *State) IsCompleted(phase string) bool {
 }
 
 // MarkRunning marks a phase as running, archives previous artifacts, and increments generation.
+// Previous result and artifact files are renamed to <phase>.json.<gen> and <phase>.md.<gen>,
+// preserving them for history/debugging while clearing the current slot for new output.
+// This archival is what enables the ReworkFeedback reset on patch retry: when implement
+// re-runs, its old result is archived, but the verify/review results that SOURCE the
+// feedback remain current until those phases re-run and overwrite them.
 func (s *State) MarkRunning(phase string) error {
 	ps := s.meta.Phases[phase]
 	if ps == nil {

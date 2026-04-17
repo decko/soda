@@ -30,6 +30,17 @@ type PromptData struct {
 
 // ReworkFeedback holds selective feedback from a failed verify phase
 // or a review-rework verdict, injected into implement's prompt on resume.
+//
+// Reset behavior on patch retry: ReworkFeedback is rebuilt from scratch
+// on every rework cycle — it is never accumulated across cycles. When
+// the engine routes back to implement (patch retry), buildPromptData
+// calls extractVerifyFeedback / extractReviewFeedback which read the
+// CURRENT verify.json or review.json result on disk. After implement
+// re-runs, verify and review re-run too (they depend on implement),
+// overwriting the previous result files. So on the next rework cycle,
+// implement sees only the latest failures, not a union of all prior
+// failures. This ensures the LLM focuses on remaining issues rather
+// than re-fixing already-resolved ones.
 type ReworkFeedback struct {
 	Verdict        string
 	Source         string // "verify" or "review"

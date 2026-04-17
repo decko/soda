@@ -363,6 +363,14 @@ type reworkRoute struct {
 // routeRework handles a reworkSignal by incrementing the rework cycle counter,
 // emitting a routed event, flushing meta, and re-slicing the pipeline phases
 // to start from the rework target. Returns the new route or an error.
+//
+// When the rework target re-runs (e.g. implement), its downstream
+// dependents (verify, review) also re-run because they detect a re-ran
+// dependency via reranPhases. Those re-runs overwrite the previous
+// verify.json / review.json result files. Consequently, on the NEXT
+// rework cycle the ReworkFeedback extracted for implement will reflect
+// only the latest failures — previous failures are implicitly reset.
+// See ReworkFeedback doc comment for the full reset lifecycle.
 func (e *Engine) routeRework(phaseName string, sig *reworkSignal) (*reworkRoute, error) {
 	e.state.Meta().ReworkCycles++
 	cycle := e.state.Meta().ReworkCycles
@@ -845,6 +853,13 @@ func (e *Engine) buildPromptData(phase PhaseConfig) (PromptData, error) {
 	// Inject rework feedback from configured sources. The FeedbackFrom
 	// list is read from the phase's own config. Sources are tried in
 	// priority order; the first one that produces feedback wins.
+	//
+	// On patch retry (rework cycle), this block re-extracts feedback
+	// from the latest verify/review result on disk — previous feedback
+	// is NOT carried over. Each extractor reads the current result file,
+	// so after verify/review re-run and overwrite their results, the
+	// next rework cycle sees only the new failures. See ReworkFeedback
+	// doc comment for the full reset lifecycle.
 	if sources := e.feedbackSourcesFor(phase); len(sources) > 0 {
 		for _, source := range sources {
 			if fb := e.extractFeedbackFrom(source); fb != nil {
@@ -898,6 +913,15 @@ func (e *Engine) extractFeedbackFrom(source string) *ReworkFeedback {
 // feedback when the verdict is FAIL. Returns nil if no verify result
 // exists, the verdict is not FAIL, or the plan has changed since verify
 // ran (staleness guard).
+//
+// This function always reads the current verify.json, not archived
+// generations. On each rework cycle (patch retry), verify re-runs after
+// implement (because verify depends on implement), overwriting
+// verify.json with the latest results. The next call to
+// extractVerifyFeedback therefore returns only the most recent
+// failures — previous failures that were fixed are no longer present.
+// Only critical/major code issues and failed criteria/commands are
+// included to keep prompt context focused.
 func (e *Engine) extractVerifyFeedback() *ReworkFeedback {
 	raw, err := e.state.ReadResult("verify")
 	if err != nil {
@@ -994,6 +1018,13 @@ func (e *Engine) extractVerifyFeedback() *ReworkFeedback {
 // extractReviewFeedback reads the review result and returns structured
 // feedback when the verdict is "rework". Returns nil if no review result
 // exists or the verdict is not "rework".
+//
+// Like extractVerifyFeedback, this reads the current review.json which
+// is overwritten each time the review phase re-runs. On a patch retry
+// (rework cycle), review re-runs after implement, so the next
+// extraction sees only the latest findings — previously reported issues
+// that were fixed will not appear. Only critical/major findings are
+// included to keep prompt context focused.
 func (e *Engine) extractReviewFeedback() *ReworkFeedback {
 	raw, err := e.state.ReadResult("review")
 	if err != nil {
