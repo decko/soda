@@ -713,6 +713,243 @@ Verdict: {{.ReworkFeedback.Verdict}}
 		}
 	})
 
+	t.Run("renders_patch_prompt_with_verify_feedback", func(t *testing.T) {
+		tmplBytes, err := os.ReadFile(filepath.Join("..", "..", "cmd", "soda", "embeds", "prompts", "patch.md"))
+		if err != nil {
+			t.Skipf("skipping: cannot read embedded patch.md: %v", err)
+		}
+		tmpl := string(tmplBytes)
+
+		data := PromptData{
+			Ticket:       TicketData{Key: "TEST-186", Summary: "patch test"},
+			WorktreePath: "/tmp/wt",
+			Branch:       "soda/TEST-186",
+			BaseBranch:   "main",
+			Config:       PromptConfigData{Formatter: "gofmt -w .", TestCommand: "go test ./..."},
+			DiffContext:  "--- a/file.go\n+++ b/file.go\n@@ -1,3 +1,3 @@\n-old\n+new",
+			ReworkFeedback: &ReworkFeedback{
+				Source:        "verify",
+				Verdict:       "FAIL",
+				FixesRequired: []string{"fix the test assertion"},
+				FailedCriteria: []FailedCriterion{
+					{Criterion: "tests pass", Evidence: "exit code 1"},
+				},
+				CodeIssues: []ReworkCodeIssue{
+					{File: "x.go", Line: 10, Severity: "major", Issue: "missing nil check", SuggestedFix: "add nil check before deref"},
+				},
+				FailedCommands: []FailedCommand{
+					{Command: "go test ./...", ExitCode: 1, Output: "FAIL x_test.go"},
+				},
+			},
+		}
+
+		result, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+
+		// Should contain key sections.
+		checks := []struct {
+			desc string
+			want string
+		}{
+			{"ticket key", "TEST-186"},
+			{"fix required", "fix the test assertion"},
+			{"failed criterion", "tests pass"},
+			{"code issue", "missing nil check"},
+			{"suggested fix", "add nil check before deref"},
+			{"failed command", "go test ./..."},
+			{"diff context", "--- a/file.go"},
+			{"anti-drift rule", "Do NOT modify files"},
+			{"complexity escape", "too_complex"},
+			{"formatter rule", "Run the formatter"},
+			{"test rule", "Run the tests"},
+		}
+		for _, check := range checks {
+			if !strings.Contains(result, check.want) {
+				t.Errorf("patch prompt should contain %s (%q);\ngot: %s", check.desc, check.want, result)
+			}
+		}
+
+		// Should NOT contain plan artifact (anti-drift).
+		if strings.Contains(result, "Implementation Plan") {
+			t.Error("patch prompt should NOT contain Implementation Plan section")
+		}
+	})
+
+	t.Run("renders_patch_prompt_without_feedback", func(t *testing.T) {
+		tmplBytes, err := os.ReadFile(filepath.Join("..", "..", "cmd", "soda", "embeds", "prompts", "patch.md"))
+		if err != nil {
+			t.Skipf("skipping: cannot read embedded patch.md: %v", err)
+		}
+		tmpl := string(tmplBytes)
+
+		data := PromptData{
+			Ticket:       TicketData{Key: "TEST-186", Summary: "patch test"},
+			WorktreePath: "/tmp/wt",
+			Branch:       "soda/TEST-186",
+			BaseBranch:   "main",
+			Config:       PromptConfigData{Formatter: "gofmt -w .", TestCommand: "go test ./..."},
+		}
+
+		result, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+
+		// Without feedback, should not have FIXES REQUIRED section.
+		if strings.Contains(result, "FIXES REQUIRED") {
+			t.Error("patch prompt should NOT contain FIXES REQUIRED when no feedback")
+		}
+
+		// Should still have core structure.
+		if !strings.Contains(result, "TEST-186") {
+			t.Errorf("patch prompt should contain ticket key, got: %s", result)
+		}
+	})
+
+	t.Run("patch_prompt_omits_formatter_and_test_when_empty", func(t *testing.T) {
+		tmplBytes, err := os.ReadFile(filepath.Join("..", "..", "cmd", "soda", "embeds", "prompts", "patch.md"))
+		if err != nil {
+			t.Skipf("skipping: cannot read embedded patch.md: %v", err)
+		}
+		tmpl := string(tmplBytes)
+
+		data := PromptData{
+			Ticket:       TicketData{Key: "TEST-186", Summary: "no tools"},
+			WorktreePath: "/tmp/wt",
+			Branch:       "soda/TEST-186",
+			BaseBranch:   "main",
+			Config:       PromptConfigData{}, // no Formatter or TestCommand
+		}
+
+		result, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+
+		if strings.Contains(result, "Run the formatter") {
+			t.Error("patch prompt should NOT contain formatter rule when Config.Formatter is empty")
+		}
+		if strings.Contains(result, "Run the tests") {
+			t.Error("patch prompt should NOT contain test rule when Config.TestCommand is empty")
+		}
+	})
+
+	t.Run("patch_prompt_omits_optional_context_sections_when_empty", func(t *testing.T) {
+		tmplBytes, err := os.ReadFile(filepath.Join("..", "..", "cmd", "soda", "embeds", "prompts", "patch.md"))
+		if err != nil {
+			t.Skipf("skipping: cannot read embedded patch.md: %v", err)
+		}
+		tmpl := string(tmplBytes)
+
+		data := PromptData{
+			Ticket:       TicketData{Key: "TEST-186", Summary: "minimal"},
+			WorktreePath: "/tmp/wt",
+			Branch:       "soda/TEST-186",
+			BaseBranch:   "main",
+			Config:       PromptConfigData{Formatter: "gofmt -w .", TestCommand: "go test ./..."},
+		}
+
+		result, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+
+		if strings.Contains(result, "Repo Conventions") {
+			t.Error("patch prompt should NOT contain Repo Conventions when Context.RepoConventions is empty")
+		}
+		if strings.Contains(result, "Known Gotchas") {
+			t.Error("patch prompt should NOT contain Known Gotchas when Context.Gotchas is empty")
+		}
+		if strings.Contains(result, "Acceptance Criteria") {
+			t.Error("patch prompt should NOT contain Acceptance Criteria when empty")
+		}
+		if strings.Contains(result, "Current Implementation Diff") {
+			t.Error("patch prompt should NOT contain diff section when DiffContext is empty")
+		}
+	})
+
+	t.Run("patch_prompt_renders_optional_context_sections", func(t *testing.T) {
+		tmplBytes, err := os.ReadFile(filepath.Join("..", "..", "cmd", "soda", "embeds", "prompts", "patch.md"))
+		if err != nil {
+			t.Skipf("skipping: cannot read embedded patch.md: %v", err)
+		}
+		tmpl := string(tmplBytes)
+
+		data := PromptData{
+			Ticket: TicketData{
+				Key:                "TEST-186",
+				Summary:            "full context",
+				AcceptanceCriteria: []string{"AC1", "AC2"},
+			},
+			WorktreePath: "/tmp/wt",
+			Branch:       "soda/TEST-186",
+			BaseBranch:   "main",
+			Config:       PromptConfigData{Formatter: "gofmt -w .", TestCommand: "go test ./..."},
+			Context: ContextData{
+				RepoConventions: "use table-driven tests",
+				Gotchas:         "beware of nil maps",
+			},
+			DiffContext: "diff --git a/foo.go b/foo.go",
+		}
+
+		result, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+
+		checks := []struct {
+			desc string
+			want string
+		}{
+			{"repo conventions", "use table-driven tests"},
+			{"gotchas", "beware of nil maps"},
+			{"acceptance criteria", "AC1"},
+			{"diff context", "diff --git a/foo.go b/foo.go"},
+		}
+		for _, check := range checks {
+			if !strings.Contains(result, check.want) {
+				t.Errorf("patch prompt should contain %s (%q);\ngot: %s", check.desc, check.want, result)
+			}
+		}
+	})
+
+	t.Run("patch_prompt_code_issue_without_suggested_fix", func(t *testing.T) {
+		tmplBytes, err := os.ReadFile(filepath.Join("..", "..", "cmd", "soda", "embeds", "prompts", "patch.md"))
+		if err != nil {
+			t.Skipf("skipping: cannot read embedded patch.md: %v", err)
+		}
+		tmpl := string(tmplBytes)
+
+		data := PromptData{
+			Ticket:       TicketData{Key: "TEST-186", Summary: "no suggested fix"},
+			WorktreePath: "/tmp/wt",
+			Branch:       "soda/TEST-186",
+			BaseBranch:   "main",
+			Config:       PromptConfigData{Formatter: "gofmt -w .", TestCommand: "go test ./..."},
+			ReworkFeedback: &ReworkFeedback{
+				Source:  "verify",
+				Verdict: "FAIL",
+				CodeIssues: []ReworkCodeIssue{
+					{File: "y.go", Line: 5, Severity: "critical", Issue: "data race"},
+				},
+			},
+		}
+
+		result, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+
+		if !strings.Contains(result, "data race") {
+			t.Errorf("patch prompt should contain code issue, got: %s", result)
+		}
+		if strings.Contains(result, "Suggested fix") {
+			t.Error("patch prompt should NOT contain 'Suggested fix' when SuggestedFix is empty")
+		}
+	})
+
 	t.Run("errors_on_nonexistent_field", func(t *testing.T) {
 		_, err := RenderPrompt("{{.NonExistentField}}", PromptData{})
 		if err == nil {
