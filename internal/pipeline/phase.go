@@ -20,6 +20,7 @@ type PhaseConfig struct {
 	Name         string           `yaml:"name"`
 	Prompt       string           `yaml:"prompt"`
 	Schema       string           `yaml:"schema"`
+	Model        string           `yaml:"model,omitempty"` // per-phase model override; empty uses global EngineConfig.Model
 	Tools        []string         `yaml:"tools"`
 	Timeout      Duration         `yaml:"timeout"`
 	Type         string           `yaml:"type"`

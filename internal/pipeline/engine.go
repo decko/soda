@@ -624,6 +624,11 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 	if e.config.MaxCostUSD <= 0 {
 		remaining = 0 // no budget enforcement
 	}
+	// Prefer per-phase model if set, otherwise use the global model.
+	model := e.config.Model
+	if phase.Model != "" {
+		model = phase.Model
+	}
 	opts := runner.RunOpts{
 		Phase:        phase.Name,
 		SystemPrompt: rendered,
@@ -632,7 +637,7 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 		AllowedTools: phase.Tools,
 		MaxBudgetUSD: remaining,
 		WorkDir:      e.workDir(phase),
-		Model:        e.config.Model,
+		Model:        model,
 		Timeout:      phase.Timeout.Duration,
 		OnChunk:      e.makeOnChunk(ctx, phase.Name),
 	}
