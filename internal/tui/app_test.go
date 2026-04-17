@@ -47,11 +47,11 @@ func TestPhaseCompletedSetsDone(t *testing.T) {
 		Kind:  pipeline.EventPhaseCompleted,
 		Phase: "triage",
 		Data: map[string]any{
-			"summary":    "small, my-service",
+			"summary":     "small, my-service",
 			"duration_ms": float64(8000),
-			"cost":       0.12,
-			"tokens_in":  3200.0,
-			"tokens_out": 850.0,
+			"cost":        0.12,
+			"tokens_in":   3200.0,
+			"tokens_out":  850.0,
 		},
 	})
 	if m.pipeline.info["triage"].status != pipeline.PhaseCompleted {

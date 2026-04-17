@@ -2,7 +2,10 @@ package pipeline
 
 import (
 	"errors"
+	"strings"
 	"testing"
+
+	"github.com/decko/soda/schemas"
 )
 
 func TestBudgetExceededError(t *testing.T) {
@@ -45,4 +48,48 @@ func TestPhaseGateError(t *testing.T) {
 	if !errors.As(err, &target) {
 		t.Error("errors.As should match PhaseGateError")
 	}
+}
+
+func TestReworkSignal(t *testing.T) {
+	t.Run("with_findings", func(t *testing.T) {
+		err := &reworkSignal{
+			target: "implement",
+			findings: []schemas.ReviewFinding{
+				{Severity: "critical", Issue: "nil deref"},
+				{Severity: "minor", Issue: "naming"},
+				{Severity: "major", Issue: "missing error check"},
+			},
+		}
+
+		msg := err.Error()
+		if !strings.Contains(msg, "target implement") {
+			t.Errorf("Error() should contain target, got: %s", msg)
+		}
+		// Only critical and major issues should appear.
+		if !strings.Contains(msg, "nil deref") {
+			t.Errorf("Error() should contain critical issue, got: %s", msg)
+		}
+		if !strings.Contains(msg, "missing error check") {
+			t.Errorf("Error() should contain major issue, got: %s", msg)
+		}
+		if strings.Contains(msg, "naming") {
+			t.Errorf("Error() should NOT contain minor issue, got: %s", msg)
+		}
+
+		var target *reworkSignal
+		if !errors.As(err, &target) {
+			t.Error("errors.As should match reworkSignal")
+		}
+		if target.target != "implement" {
+			t.Errorf("target = %q, want %q", target.target, "implement")
+		}
+	})
+
+	t.Run("without_findings", func(t *testing.T) {
+		err := &reworkSignal{target: "plan"}
+		msg := err.Error()
+		if !strings.Contains(msg, "target plan") {
+			t.Errorf("Error() should contain target, got: %s", msg)
+		}
+	})
 }

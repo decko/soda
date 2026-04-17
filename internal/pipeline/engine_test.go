@@ -1250,11 +1250,15 @@ func TestEngine_SkipPlanRouting_PlanArtifactAvailableToImplement(t *testing.T) {
 }
 
 func TestEngine_GatePhase_ReviewUnmarshalError(t *testing.T) {
+	// When a phase with Rework config produces output that doesn't unmarshal
+	// as valid JSON, gateRework should gracefully skip (return nil), consistent
+	// with all other gating cases in gatePhase.
 	phases := []PhaseConfig{
 		{
 			Name:   "review",
 			Prompt: "review.md",
 			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Rework: &ReworkConfig{Target: "implement"},
 		},
 	}
 
@@ -1270,14 +1274,15 @@ func TestEngine_GatePhase_ReviewUnmarshalError(t *testing.T) {
 		},
 	}
 
-	engine, _ := setupEngine(t, phases, mock)
+	engine, state := setupEngine(t, phases, mock)
 
 	err := engine.Run(context.Background())
-	if err == nil {
-		t.Fatal("expected error for corrupt review result, got nil")
+	if err != nil {
+		t.Fatalf("expected nil (graceful skip) for corrupt review result, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "review gate") {
-		t.Errorf("error should mention review gate, got: %v", err)
+	// Phase should still complete — the rework gate is skipped on unmarshal failure.
+	if !state.IsCompleted("review") {
+		t.Error("review phase should be completed")
 	}
 }
 
@@ -2523,9 +2528,10 @@ func TestEngine_ResumeImplementInjectsReworkFeedback(t *testing.T) {
 	// should contain structured rework feedback with selective extraction.
 	phases := []PhaseConfig{
 		{
-			Name:   "implement",
-			Prompt: "implement.md",
-			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Name:         "implement",
+			Prompt:       "implement.md",
+			Retry:        RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			FeedbackFrom: []string{"review", "verify"},
 		},
 		{
 			Name:      "verify",
@@ -2726,9 +2732,10 @@ func TestEngine_ImplementPromptNoReworkFeedbackOnFirstRun(t *testing.T) {
 	// On the very first run (no verify result exists), ReworkFeedback should be nil.
 	phases := []PhaseConfig{
 		{
-			Name:   "implement",
-			Prompt: "implement.md",
-			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Name:         "implement",
+			Prompt:       "implement.md",
+			Retry:        RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			FeedbackFrom: []string{"review", "verify"},
 		},
 	}
 
@@ -2790,9 +2797,10 @@ func TestEngine_ImplementPromptNoReworkFeedbackOnPass(t *testing.T) {
 	// When verify passed previously, ReworkFeedback should be nil on resume.
 	phases := []PhaseConfig{
 		{
-			Name:   "implement",
-			Prompt: "implement.md",
-			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Name:         "implement",
+			Prompt:       "implement.md",
+			Retry:        RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			FeedbackFrom: []string{"review", "verify"},
 		},
 	}
 
@@ -2869,10 +2877,11 @@ func TestEngine_ReworkFeedbackStalePlanSkipped(t *testing.T) {
 	// be skipped and a warning event emitted.
 	phases := []PhaseConfig{
 		{
-			Name:      "implement",
-			Prompt:    "implement.md",
-			DependsOn: []string{"plan"},
-			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Name:         "implement",
+			Prompt:       "implement.md",
+			DependsOn:    []string{"plan"},
+			Retry:        RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			FeedbackFrom: []string{"review", "verify"},
 		},
 		{
 			Name:      "verify",
@@ -3422,14 +3431,124 @@ func TestEngine_ParallelReview_PerReviewerModel(t *testing.T) {
 	}
 }
 
+func TestEngine_PerPhaseModel(t *testing.T) {
+	t.Run("phase_model_overrides_global", func(t *testing.T) {
+		phases := []PhaseConfig{
+			{
+				Name:   "triage",
+				Prompt: "triage.md",
+				Model:  "claude-sonnet-4-6", // per-phase override
+				Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+			{
+				Name:      "plan",
+				Prompt:    "plan.md",
+				DependsOn: []string{"triage"},
+				Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+				// no per-phase model — should use global
+			},
+		}
+
+		mock := &flexMockRunner{
+			responses: map[string][]flexResponse{
+				"triage": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"automatable":true}`),
+						RawText: "Triage output",
+						CostUSD: 0.10,
+					},
+				}},
+				"plan": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"tasks":["task1"]}`),
+						RawText: "Plan output",
+						CostUSD: 0.20,
+					},
+				}},
+			},
+		}
+
+		engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+			cfg.Model = "claude-opus-4-6"
+		})
+
+		if err := engine.Run(context.Background()); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+
+		mock.mu.Lock()
+		defer mock.mu.Unlock()
+
+		if len(mock.calls) != 2 {
+			t.Fatalf("runner called %d times, want 2", len(mock.calls))
+		}
+
+		models := map[string]string{}
+		for _, c := range mock.calls {
+			models[c.Phase] = c.Model
+		}
+
+		// triage has per-phase model override.
+		if models["triage"] != "claude-sonnet-4-6" {
+			t.Errorf("triage model = %q, want %q", models["triage"], "claude-sonnet-4-6")
+		}
+		// plan has no per-phase model — should fall back to global.
+		if models["plan"] != "claude-opus-4-6" {
+			t.Errorf("plan model = %q, want %q (global fallback)", models["plan"], "claude-opus-4-6")
+		}
+	})
+
+	t.Run("empty_phase_model_uses_global", func(t *testing.T) {
+		phases := []PhaseConfig{
+			{
+				Name:   "triage",
+				Prompt: "triage.md",
+				Model:  "", // explicitly empty
+				Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+		}
+
+		mock := &flexMockRunner{
+			responses: map[string][]flexResponse{
+				"triage": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"automatable":true}`),
+						RawText: "Triage output",
+						CostUSD: 0.10,
+					},
+				}},
+			},
+		}
+
+		engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+			cfg.Model = "claude-opus-4-6"
+		})
+
+		if err := engine.Run(context.Background()); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+
+		mock.mu.Lock()
+		defer mock.mu.Unlock()
+
+		if len(mock.calls) != 1 {
+			t.Fatalf("runner called %d times, want 1", len(mock.calls))
+		}
+		if mock.calls[0].Model != "claude-opus-4-6" {
+			t.Errorf("model = %q, want %q (global)", mock.calls[0].Model, "claude-opus-4-6")
+		}
+	})
+}
+
 func TestEngine_ParallelReview_MergedFindings(t *testing.T) {
 	// When max rework cycles is reached (set to 0), review with
 	// critical/major findings should gate with a PhaseGateError.
 	phases := []PhaseConfig{
 		{
-			Name:  "review",
-			Type:  "parallel-review",
-			Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Name:   "review",
+			Type:   "parallel-review",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Rework: &ReworkConfig{Target: "implement"},
 			Reviewers: []ReviewerConfig{
 				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
 				{Name: "ai-harness", Prompt: "prompts/review-harness.md", Focus: "AI harness"},
@@ -3974,9 +4093,10 @@ func TestEngine_ReviewReworkRouting(t *testing.T) {
 		// Second cycle: review passes → submit proceeds.
 		phases := []PhaseConfig{
 			{
-				Name:   "implement",
-				Prompt: "implement.md",
-				Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+				Name:         "implement",
+				Prompt:       "implement.md",
+				Retry:        RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+				FeedbackFrom: []string{"review", "verify"},
 			},
 			{
 				Name:      "verify",
@@ -3989,6 +4109,7 @@ func TestEngine_ReviewReworkRouting(t *testing.T) {
 				Type:      "parallel-review",
 				DependsOn: []string{"implement", "verify"},
 				Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+				Rework:    &ReworkConfig{Target: "implement"},
 				Reviewers: []ReviewerConfig{
 					{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
 				},
@@ -4110,15 +4231,17 @@ func TestEngine_ReviewReworkRouting(t *testing.T) {
 		// First cycle routes back, second cycle gates.
 		phases := []PhaseConfig{
 			{
-				Name:   "implement",
-				Prompt: "implement.md",
-				Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+				Name:         "implement",
+				Prompt:       "implement.md",
+				Retry:        RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+				FeedbackFrom: []string{"review"},
 			},
 			{
 				Name:      "review",
 				Type:      "parallel-review",
 				DependsOn: []string{"implement"},
 				Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+				Rework:    &ReworkConfig{Target: "implement"},
 				Reviewers: []ReviewerConfig{
 					{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
 				},
@@ -4217,6 +4340,7 @@ func TestEngine_ReviewReworkRouting(t *testing.T) {
 				Type:      "parallel-review",
 				DependsOn: []string{"implement"},
 				Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+				Rework:    &ReworkConfig{Target: "implement"},
 				Reviewers: []ReviewerConfig{
 					{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
 				},
@@ -4302,6 +4426,7 @@ func TestEngine_ReviewReworkRouting(t *testing.T) {
 				Type:      "parallel-review",
 				DependsOn: []string{"implement"},
 				Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+				Rework:    &ReworkConfig{Target: "implement"},
 				Reviewers: []ReviewerConfig{
 					{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
 				},
@@ -4363,15 +4488,17 @@ func TestEngine_ReviewReworkFeedbackInjected(t *testing.T) {
 	// should contain the review findings.
 	phases := []PhaseConfig{
 		{
-			Name:   "implement",
-			Prompt: "implement.md",
-			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Name:         "implement",
+			Prompt:       "implement.md",
+			Retry:        RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			FeedbackFrom: []string{"review", "verify"},
 		},
 		{
 			Name:      "review",
 			Type:      "parallel-review",
 			DependsOn: []string{"implement"},
 			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Rework:    &ReworkConfig{Target: "implement"},
 			Reviewers: []ReviewerConfig{
 				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
 				{Name: "ai-harness", Prompt: "prompts/review-harness.md", Focus: "AI harness"},
@@ -4564,13 +4691,13 @@ func TestEngine_ReviewReworkCyclesPersisted(t *testing.T) {
 	}
 }
 
-func TestExtractReviewReworkFeedback(t *testing.T) {
+func TestExtractReviewFeedback(t *testing.T) {
 	t.Run("returns_nil_when_no_review_result", func(t *testing.T) {
 		stateDir := t.TempDir()
 		state, _ := LoadOrCreate(stateDir, "TEST-1")
 
 		engine := &Engine{state: state, config: EngineConfig{}}
-		if fb := engine.extractReviewReworkFeedback(); fb != nil {
+		if fb := engine.extractReviewFeedback(); fb != nil {
 			t.Error("expected nil when no review result exists")
 		}
 	})
@@ -4583,7 +4710,7 @@ func TestExtractReviewReworkFeedback(t *testing.T) {
 		_ = state.MarkCompleted("review")
 
 		engine := &Engine{state: state, config: EngineConfig{}}
-		if fb := engine.extractReviewReworkFeedback(); fb != nil {
+		if fb := engine.extractReviewFeedback(); fb != nil {
 			t.Error("expected nil when verdict is pass")
 		}
 	})
@@ -4596,7 +4723,7 @@ func TestExtractReviewReworkFeedback(t *testing.T) {
 		_ = state.MarkCompleted("review")
 
 		engine := &Engine{state: state, config: EngineConfig{}}
-		if fb := engine.extractReviewReworkFeedback(); fb != nil {
+		if fb := engine.extractReviewFeedback(); fb != nil {
 			t.Error("expected nil when verdict is pass-with-follow-ups")
 		}
 	})
@@ -4617,7 +4744,7 @@ func TestExtractReviewReworkFeedback(t *testing.T) {
 		_ = state.MarkCompleted("review")
 
 		engine := &Engine{state: state, config: EngineConfig{}}
-		fb := engine.extractReviewReworkFeedback()
+		fb := engine.extractReviewFeedback()
 		if fb == nil {
 			t.Fatal("expected non-nil feedback for rework verdict")
 		}
@@ -4643,17 +4770,96 @@ func TestExtractReviewReworkFeedback(t *testing.T) {
 	})
 }
 
+func TestFeedbackSourcesFor(t *testing.T) {
+	t.Run("returns_sources_from_phase_config", func(t *testing.T) {
+		pipeline := &PhasePipeline{
+			Phases: []PhaseConfig{
+				{Name: "implement", FeedbackFrom: []string{"review", "verify"}},
+				{Name: "review", Rework: &ReworkConfig{Target: "implement"}},
+			},
+		}
+		engine := &Engine{config: EngineConfig{Pipeline: pipeline}}
+
+		sources := engine.feedbackSourcesFor(pipeline.Phases[0])
+		if len(sources) != 2 {
+			t.Fatalf("sources = %v, want [review verify]", sources)
+		}
+		if sources[0] != "review" || sources[1] != "verify" {
+			t.Errorf("sources = %v, want [review verify]", sources)
+		}
+	})
+
+	t.Run("returns_nil_for_phase_without_config", func(t *testing.T) {
+		pipeline := &PhasePipeline{
+			Phases: []PhaseConfig{
+				{Name: "triage"},
+			},
+		}
+		engine := &Engine{config: EngineConfig{Pipeline: pipeline}}
+
+		sources := engine.feedbackSourcesFor(pipeline.Phases[0])
+		if sources != nil {
+			t.Errorf("sources = %v, want nil", sources)
+		}
+	})
+}
+
+func TestExtractFeedbackFrom(t *testing.T) {
+	t.Run("review_source", func(t *testing.T) {
+		stateDir := t.TempDir()
+		state, _ := LoadOrCreate(stateDir, "TEST-1")
+		_ = state.MarkRunning("review")
+		_ = state.WriteResult("review", json.RawMessage(`{"verdict":"rework","findings":[{"severity":"critical","issue":"nil deref"}]}`))
+		_ = state.MarkCompleted("review")
+
+		engine := &Engine{state: state, config: EngineConfig{}}
+		fb := engine.extractFeedbackFrom("review")
+		if fb == nil {
+			t.Fatal("expected non-nil feedback from review source")
+		}
+		if fb.Source != "review" {
+			t.Errorf("Source = %q, want %q", fb.Source, "review")
+		}
+	})
+
+	t.Run("verify_source", func(t *testing.T) {
+		stateDir := t.TempDir()
+		state, _ := LoadOrCreate(stateDir, "TEST-1")
+		_ = state.MarkRunning("verify")
+		_ = state.WriteResult("verify", json.RawMessage(`{"verdict":"FAIL","fixes_required":["fix it"]}`))
+		_ = state.MarkCompleted("verify")
+
+		engine := &Engine{state: state, config: EngineConfig{}}
+		fb := engine.extractFeedbackFrom("verify")
+		if fb == nil {
+			t.Fatal("expected non-nil feedback from verify source")
+		}
+		if fb.Source != "verify" {
+			t.Errorf("Source = %q, want %q", fb.Source, "verify")
+		}
+	})
+
+	t.Run("unknown_source_returns_nil", func(t *testing.T) {
+		engine := &Engine{config: EngineConfig{}}
+		fb := engine.extractFeedbackFrom("unknown")
+		if fb != nil {
+			t.Errorf("expected nil for unknown source, got %+v", fb)
+		}
+	})
+}
+
 func TestEngine_SkippedReviewPhaseReworkSignalRoutesToImplement(t *testing.T) {
 	// Scenario: review phase completed with "rework" verdict in a prior run.
 	// On re-run, review is skipped (deps unchanged), but its stored gate
 	// result still contains the rework verdict. The engine should handle the
-	// reviewReworkSignal by routing back to implement, NOT returning a
+	// reworkSignal by routing back to implement, NOT returning a
 	// terminal error.
 	phases := []PhaseConfig{
 		{
-			Name:   "implement",
-			Prompt: "implement.md",
-			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Name:         "implement",
+			Prompt:       "implement.md",
+			Retry:        RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			FeedbackFrom: []string{"review", "verify"},
 		},
 		{
 			Name:      "verify",
@@ -4666,6 +4872,7 @@ func TestEngine_SkippedReviewPhaseReworkSignalRoutesToImplement(t *testing.T) {
 			Type:      "parallel-review",
 			DependsOn: []string{"implement", "verify"},
 			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Rework:    &ReworkConfig{Target: "implement"},
 			Reviewers: []ReviewerConfig{
 				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
 			},

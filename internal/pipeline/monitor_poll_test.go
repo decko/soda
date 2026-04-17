@@ -93,12 +93,6 @@ func (m *mockPRPoller) PostComment(ctx context.Context, prURL string, body strin
 	return m.postCommentErr
 }
 
-// monitorEngineSetup holds the options for setupMonitorEngine.
-// The runner field allows tests to provide a runner for response execution.
-type monitorEngineSetup struct {
-	runner runner.Runner
-}
-
 // setupMonitorEngine creates an engine configured for monitor testing.
 // The submit phase is pre-completed with a PR URL.
 func setupMonitorEngine(t *testing.T, poller PRPoller, pollingConfig *PollingConfig, opts ...func(*EngineConfig)) (*Engine, *State, *[]Event) {

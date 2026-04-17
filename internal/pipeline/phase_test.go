@@ -95,6 +95,29 @@ func TestLoadPipeline(t *testing.T) {
 			}
 		}
 
+		// Verify review phase has rework config
+		if review.Rework == nil {
+			t.Fatal("review rework config should not be nil")
+		}
+		if review.Rework.Target != "implement" {
+			t.Errorf("review rework target = %q, want %q", review.Rework.Target, "implement")
+		}
+
+		// Verify implement phase has feedback_from config
+		implement := pipeline.Phases[2]
+		if implement.Name != "implement" {
+			t.Errorf("third phase = %q, want %q", implement.Name, "implement")
+		}
+		if len(implement.FeedbackFrom) != 2 {
+			t.Fatalf("implement feedback_from has %d entries, want 2", len(implement.FeedbackFrom))
+		}
+		if implement.FeedbackFrom[0] != "review" {
+			t.Errorf("implement feedback_from[0] = %q, want %q", implement.FeedbackFrom[0], "review")
+		}
+		if implement.FeedbackFrom[1] != "verify" {
+			t.Errorf("implement feedback_from[1] = %q, want %q", implement.FeedbackFrom[1], "verify")
+		}
+
 		// Verify monitor phase has polling config
 		monitor := pipeline.Phases[6]
 		if monitor.Name != "monitor" {

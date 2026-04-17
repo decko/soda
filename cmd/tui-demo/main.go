@@ -191,11 +191,11 @@ func simulatePhases(ch chan<- pipeline.Event, phases []string, gate *pauseGate) 
 			Phase:     name,
 			Kind:      pipeline.EventPhaseCompleted,
 			Data: map[string]any{
-				"summary":    sc.summary,
+				"summary":     sc.summary,
 				"duration_ms": sc.duration.Milliseconds(),
-				"cost":       sc.cost,
-				"tokens_in":  float64(sc.tokensIn),
-				"tokens_out": float64(sc.tokensOut),
+				"cost":        sc.cost,
+				"tokens_in":   float64(sc.tokensIn),
+				"tokens_out":  float64(sc.tokensOut),
 			},
 		})
 	}

@@ -353,14 +353,59 @@ func (e *Engine) Resume(ctx context.Context, fromPhase string) error {
 	return nil
 }
 
+// reworkRoute holds the result of a successful routeRework call, providing
+// the re-sliced phases and forceFirst flag for the outer executePhases loop.
+type reworkRoute struct {
+	phases     []PhaseConfig
+	forceFirst bool
+}
+
+// routeRework handles a reworkSignal by incrementing the rework cycle counter,
+// emitting a routed event, flushing meta, and re-slicing the pipeline phases
+// to start from the rework target. Returns the new route or an error.
+func (e *Engine) routeRework(phaseName string, sig *reworkSignal) (*reworkRoute, error) {
+	e.state.Meta().ReworkCycles++
+	cycle := e.state.Meta().ReworkCycles
+
+	e.emit(Event{
+		Phase: phaseName,
+		Kind:  EventReviewReworkRouted,
+		Data: map[string]any{
+			"rework_cycle":      cycle,
+			"max_rework_cycles": e.config.maxReworkCycles(),
+			"routing_to":        sig.target,
+		},
+	})
+
+	if err := e.state.flushMeta(); err != nil {
+		return nil, fmt.Errorf("engine: flush meta after rework routing: %w", err)
+	}
+
+	targetIdx := -1
+	for i, p := range e.config.Pipeline.Phases {
+		if p.Name == sig.target {
+			targetIdx = i
+			break
+		}
+	}
+	if targetIdx < 0 {
+		return nil, fmt.Errorf("engine: rework routing requires phase %q in the pipeline", sig.target)
+	}
+
+	return &reworkRoute{
+		phases:     e.config.Pipeline.Phases[targetIdx:],
+		forceFirst: true,
+	}, nil
+}
+
 // executePhases runs a slice of phases, handling skip logic, checkpoint
 // pauses, and review rework routing. When forceFirst is true, the first
 // phase in the slice is always re-run regardless of completion status.
 //
 // Rework routing is handled iteratively: when a review phase produces a
-// "rework" verdict, the outer loop increments the rework cycle counter,
-// re-slices the phases from "implement", sets forceFirst, and restarts
-// the inner range loop — avoiding recursion entirely.
+// "rework" verdict, the outer loop calls routeRework to increment the
+// rework cycle counter, re-slice the phases from the target, set
+// forceFirst, and restart the inner range loop — avoiding recursion.
 func (e *Engine) executePhases(ctx context.Context, phases []PhaseConfig, forceFirst bool) error {
 	for {
 		rework := false
@@ -378,41 +423,17 @@ func (e *Engine) executePhases(ctx context.Context, phases []PhaseConfig, forceF
 			skipCheck := !(forceFirst && idx == 0)
 			if skipCheck && e.shouldSkip(phase) {
 				if err := e.gatePhase(phase); err != nil {
-					// Handle review rework signal on skipped phases — can
-					// occur on Run() re-entry when a prior rework crashed
-					// mid-implement. Route to rework instead of leaking.
-					var reworkSig *reviewReworkSignal
+					// Handle rework signal on skipped phases — can occur on
+					// Run() re-entry when a prior rework crashed mid-cycle.
+					// Route to the configured target instead of leaking.
+					var reworkSig *reworkSignal
 					if errors.As(err, &reworkSig) {
-						e.state.Meta().ReworkCycles++
-						cycle := e.state.Meta().ReworkCycles
-
-						e.emit(Event{
-							Phase: phase.Name,
-							Kind:  EventReviewReworkRouted,
-							Data: map[string]any{
-								"rework_cycle":      cycle,
-								"max_rework_cycles": e.config.maxReworkCycles(),
-								"routing_to":        "implement",
-							},
-						})
-
-						if err := e.state.flushMeta(); err != nil {
-							return fmt.Errorf("engine: flush meta after rework routing: %w", err)
+						route, routeErr := e.routeRework(phase.Name, reworkSig)
+						if routeErr != nil {
+							return routeErr
 						}
-
-						implIdx := -1
-						for i, p := range e.config.Pipeline.Phases {
-							if p.Name == "implement" {
-								implIdx = i
-								break
-							}
-						}
-						if implIdx < 0 {
-							return fmt.Errorf("engine: review rework routing requires an implement phase in the pipeline")
-						}
-
-						phases = e.config.Pipeline.Phases[implIdx:]
-						forceFirst = true
+						phases = route.phases
+						forceFirst = route.forceFirst
 						rework = true
 						break
 					}
@@ -470,41 +491,15 @@ func (e *Engine) executePhases(ctx context.Context, phases []PhaseConfig, forceF
 			}
 
 			if err := e.runPhase(ctx, phase); err != nil {
-				// Check for review rework signal — route back to implement.
-				var reworkSig *reviewReworkSignal
+				// Check for rework signal — route to configured target.
+				var reworkSig *reworkSignal
 				if errors.As(err, &reworkSig) {
-					e.state.Meta().ReworkCycles++
-					cycle := e.state.Meta().ReworkCycles
-
-					e.emit(Event{
-						Phase: phase.Name,
-						Kind:  EventReviewReworkRouted,
-						Data: map[string]any{
-							"rework_cycle":      cycle,
-							"max_rework_cycles": e.config.maxReworkCycles(),
-							"routing_to":        "implement",
-						},
-					})
-
-					// Flush meta to persist the rework cycle count.
-					if err := e.state.flushMeta(); err != nil {
-						return fmt.Errorf("engine: flush meta after rework routing: %w", err)
+					route, routeErr := e.routeRework(phase.Name, reworkSig)
+					if routeErr != nil {
+						return routeErr
 					}
-
-					// Find implement's index and re-slice from there.
-					implIdx := -1
-					for i, p := range e.config.Pipeline.Phases {
-						if p.Name == "implement" {
-							implIdx = i
-							break
-						}
-					}
-					if implIdx < 0 {
-						return fmt.Errorf("engine: review rework routing requires an implement phase in the pipeline")
-					}
-
-					phases = e.config.Pipeline.Phases[implIdx:]
-					forceFirst = true
+					phases = route.phases
+					forceFirst = route.forceFirst
 					rework = true
 					break
 				}
@@ -629,6 +624,11 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 	if e.config.MaxCostUSD <= 0 {
 		remaining = 0 // no budget enforcement
 	}
+	// Prefer per-phase model if set, otherwise use the global model.
+	model := e.config.Model
+	if phase.Model != "" {
+		model = phase.Model
+	}
 	opts := runner.RunOpts{
 		Phase:        phase.Name,
 		SystemPrompt: rendered,
@@ -637,7 +637,7 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 		AllowedTools: phase.Tools,
 		MaxBudgetUSD: remaining,
 		WorkDir:      e.workDir(phase),
-		Model:        e.config.Model,
+		Model:        model,
 		Timeout:      phase.Timeout.Duration,
 		OnChunk:      e.makeOnChunk(ctx, phase.Name),
 	}
@@ -842,47 +842,63 @@ func (e *Engine) buildPromptData(phase PhaseConfig) (PromptData, error) {
 		}
 	}
 
-	// When building the implement prompt, inject rework feedback from
-	// either a failed verify or a review-rework verdict. Review feedback
-	// takes precedence since it comes later in the pipeline and is more
-	// specific.
-	if phase.Name == "implement" {
-		if fb := e.extractReviewReworkFeedback(); fb != nil {
-			data.ReworkFeedback = fb
-			e.emit(Event{
-				Phase: phase.Name,
-				Kind:  EventReworkFeedbackInjected,
-				Data: map[string]any{
-					"source":          fb.Source,
-					"verdict":         fb.Verdict,
-					"review_findings": len(fb.ReviewFindings),
-				},
-			})
-		} else if fb := e.extractReworkFeedback(); fb != nil {
-			data.ReworkFeedback = fb
-			e.emit(Event{
-				Phase: phase.Name,
-				Kind:  EventReworkFeedbackInjected,
-				Data: map[string]any{
-					"source":          fb.Source,
-					"verdict":         fb.Verdict,
-					"fixes_count":     len(fb.FixesRequired),
-					"failed_criteria": len(fb.FailedCriteria),
-					"code_issues":     len(fb.CodeIssues),
-					"failed_commands": len(fb.FailedCommands),
-				},
-			})
+	// Inject rework feedback from configured sources. The FeedbackFrom
+	// list is read from the phase's own config. Sources are tried in
+	// priority order; the first one that produces feedback wins.
+	if sources := e.feedbackSourcesFor(phase); len(sources) > 0 {
+		for _, source := range sources {
+			if fb := e.extractFeedbackFrom(source); fb != nil {
+				data.ReworkFeedback = fb
+				eventData := map[string]any{
+					"source":  fb.Source,
+					"verdict": fb.Verdict,
+				}
+				switch fb.Source {
+				case "review":
+					eventData["review_findings"] = len(fb.ReviewFindings)
+				case "verify":
+					eventData["fixes_count"] = len(fb.FixesRequired)
+					eventData["failed_criteria"] = len(fb.FailedCriteria)
+					eventData["code_issues"] = len(fb.CodeIssues)
+					eventData["failed_commands"] = len(fb.FailedCommands)
+				}
+				e.emit(Event{
+					Phase: phase.Name,
+					Kind:  EventReworkFeedbackInjected,
+					Data:  eventData,
+				})
+				break
+			}
 		}
 	}
 
 	return data, nil
 }
 
-// extractReworkFeedback reads the verify result and returns structured
+// feedbackSourcesFor returns the ordered list of feedback sources for a phase.
+// Sources are read from the phase's own FeedbackFrom config.
+func (e *Engine) feedbackSourcesFor(phase PhaseConfig) []string {
+	return phase.FeedbackFrom
+}
+
+// extractFeedbackFrom dispatches to the appropriate source-specific feedback
+// extractor. Returns nil for unknown sources.
+func (e *Engine) extractFeedbackFrom(source string) *ReworkFeedback {
+	switch source {
+	case "review":
+		return e.extractReviewFeedback()
+	case "verify":
+		return e.extractVerifyFeedback()
+	default:
+		return nil
+	}
+}
+
+// extractVerifyFeedback reads the verify result and returns structured
 // feedback when the verdict is FAIL. Returns nil if no verify result
 // exists, the verdict is not FAIL, or the plan has changed since verify
 // ran (staleness guard).
-func (e *Engine) extractReworkFeedback() *ReworkFeedback {
+func (e *Engine) extractVerifyFeedback() *ReworkFeedback {
 	raw, err := e.state.ReadResult("verify")
 	if err != nil {
 		return nil
@@ -920,7 +936,7 @@ func (e *Engine) extractReworkFeedback() *ReworkFeedback {
 	if verifyPS := e.state.Meta().Phases["verify"]; verifyPS != nil && verifyPS.PlanHash != "" {
 		if currentHash := e.computePlanHash(); currentHash != "" && currentHash != verifyPS.PlanHash {
 			e.emit(Event{
-				Phase: "implement",
+				Phase: "verify",
 				Kind:  EventReworkFeedbackSkipped,
 				Data: map[string]any{
 					"reason":            "plan changed since verify ran",
@@ -975,10 +991,10 @@ func (e *Engine) extractReworkFeedback() *ReworkFeedback {
 	return fb
 }
 
-// extractReviewReworkFeedback reads the review result and returns
-// structured feedback when the verdict is "rework". Returns nil if no
-// review result exists or the verdict is not "rework".
-func (e *Engine) extractReviewReworkFeedback() *ReworkFeedback {
+// extractReviewFeedback reads the review result and returns structured
+// feedback when the verdict is "rework". Returns nil if no review result
+// exists or the verdict is not "rework".
+func (e *Engine) extractReviewFeedback() *ReworkFeedback {
 	raw, err := e.state.ReadResult("review")
 	if err != nil {
 		return nil
@@ -1111,41 +1127,6 @@ func (e *Engine) gatePhase(phase PhaseConfig) error {
 			return &PhaseGateError{Phase: phase.Name, Reason: reason}
 		}
 
-	case "review":
-		var result schemas.ReviewOutput
-		if err := json.Unmarshal(raw, &result); err != nil {
-			return fmt.Errorf("engine: review gate: failed to unmarshal result: %w", err)
-		}
-		if strings.EqualFold(result.Verdict, "rework") {
-			// Rework routing is handled by the engine loop, not the gate.
-			// The gate only blocks when max rework cycles are exceeded.
-			maxCycles := e.config.maxReworkCycles()
-			if e.state.Meta().ReworkCycles >= maxCycles {
-				var issues []string
-				for _, finding := range result.Findings {
-					sev := strings.ToLower(finding.Severity)
-					if sev == "critical" || sev == "major" {
-						issues = append(issues, finding.Issue)
-					}
-				}
-				reason := fmt.Sprintf("review requires rework but max cycles (%d) reached", maxCycles)
-				if len(issues) > 0 {
-					reason += ": " + strings.Join(issues, "; ")
-				}
-				e.emit(Event{
-					Phase: phase.Name,
-					Kind:  EventReviewReworkMaxCycles,
-					Data: map[string]any{
-						"rework_cycles":     e.state.Meta().ReworkCycles,
-						"max_rework_cycles": maxCycles,
-					},
-				})
-				return &PhaseGateError{Phase: phase.Name, Reason: reason}
-			}
-			// Signal rework needed — the engine loop will handle routing.
-			return &reviewReworkSignal{findings: result.Findings}
-		}
-
 	case "submit":
 		var result struct {
 			PRURL string `json:"pr_url"`
@@ -1158,7 +1139,84 @@ func (e *Engine) gatePhase(phase PhaseConfig) error {
 		}
 	}
 
+	// Config-driven rework gating: when a phase has a Rework config, check
+	// for a "rework" verdict and signal the engine loop accordingly.
+	if phase.Rework != nil {
+		if err := e.gateRework(phase, raw); err != nil {
+			return err
+		}
+	}
+
 	return nil
+}
+
+// reworkVerdict is a minimal struct for extracting rework-relevant fields
+// from any phase result. Unlike schemas.ReviewOutput, this decouples the
+// rework gate from any specific phase's full output shape — any phase that
+// produces a JSON object with "verdict" (and optionally "findings") can
+// participate in config-driven rework routing.
+type reworkVerdict struct {
+	Verdict  string `json:"verdict"`
+	Findings []struct {
+		Severity string `json:"severity"`
+		Issue    string `json:"issue"`
+	} `json:"findings"`
+}
+
+// gateRework checks for a "rework" verdict in the phase result and either
+// signals rework routing or blocks when max cycles are exceeded. The rework
+// target is read from the phase's ReworkConfig.
+//
+// The result is unmarshalled into a minimal reworkVerdict struct (verdict +
+// findings) rather than a full phase-specific type, so any phase that emits
+// a verdict field can use config-driven rework. On unmarshal failure, the
+// gate silently skips (returns nil), consistent with all other gating cases.
+func (e *Engine) gateRework(phase PhaseConfig, raw json.RawMessage) error {
+	var result reworkVerdict
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil // gracefully skip — consistent with other gating cases
+	}
+	if !strings.EqualFold(result.Verdict, "rework") {
+		return nil
+	}
+
+	// Rework routing is handled by the engine loop, not the gate.
+	// The gate only blocks when max rework cycles are exceeded.
+	maxCycles := e.config.maxReworkCycles()
+	if e.state.Meta().ReworkCycles >= maxCycles {
+		var issues []string
+		for _, finding := range result.Findings {
+			sev := strings.ToLower(finding.Severity)
+			if sev == "critical" || sev == "major" {
+				issues = append(issues, finding.Issue)
+			}
+		}
+		reason := fmt.Sprintf("%s requires rework but max cycles (%d) reached", phase.Name, maxCycles)
+		if len(issues) > 0 {
+			reason += ": " + strings.Join(issues, "; ")
+		}
+		e.emit(Event{
+			Phase: phase.Name,
+			Kind:  EventReviewReworkMaxCycles,
+			Data: map[string]any{
+				"rework_cycles":     e.state.Meta().ReworkCycles,
+				"max_rework_cycles": maxCycles,
+			},
+		})
+		return &PhaseGateError{Phase: phase.Name, Reason: reason}
+	}
+
+	// Build findings for the rework signal from the minimal verdict struct.
+	var findings []schemas.ReviewFinding
+	for _, f := range result.Findings {
+		findings = append(findings, schemas.ReviewFinding{
+			Severity: f.Severity,
+			Issue:    f.Issue,
+		})
+	}
+
+	// Signal rework needed — the engine loop will handle routing.
+	return &reworkSignal{target: phase.Rework.Target, findings: findings}
 }
 
 // reviewerResult holds the outcome of a single reviewer subagent.
