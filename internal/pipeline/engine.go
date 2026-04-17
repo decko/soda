@@ -842,47 +842,64 @@ func (e *Engine) buildPromptData(phase PhaseConfig) (PromptData, error) {
 		}
 	}
 
-	// When building the implement prompt, inject rework feedback from
-	// either a failed verify or a review-rework verdict. Review feedback
-	// takes precedence since it comes later in the pipeline and is more
-	// specific.
-	if phase.Name == "implement" {
-		if fb := e.extractReviewReworkFeedback(); fb != nil {
-			data.ReworkFeedback = fb
-			e.emit(Event{
-				Phase: phase.Name,
-				Kind:  EventReworkFeedbackInjected,
-				Data: map[string]any{
-					"source":          fb.Source,
-					"verdict":         fb.Verdict,
-					"review_findings": len(fb.ReviewFindings),
-				},
-			})
-		} else if fb := e.extractReworkFeedback(); fb != nil {
-			data.ReworkFeedback = fb
-			e.emit(Event{
-				Phase: phase.Name,
-				Kind:  EventReworkFeedbackInjected,
-				Data: map[string]any{
-					"source":          fb.Source,
-					"verdict":         fb.Verdict,
-					"fixes_count":     len(fb.FixesRequired),
-					"failed_criteria": len(fb.FailedCriteria),
-					"code_issues":     len(fb.CodeIssues),
-					"failed_commands": len(fb.FailedCommands),
-				},
-			})
+	// Inject rework feedback from configured sources. The FeedbackFrom
+	// list is read from the ReworkConfig of any phase whose Target matches
+	// this phase. Sources are tried in priority order; the first one that
+	// produces feedback wins.
+	if sources := e.feedbackSourcesFor(phase); len(sources) > 0 {
+		for _, source := range sources {
+			if fb := e.extractFeedbackFrom(source); fb != nil {
+				data.ReworkFeedback = fb
+				eventData := map[string]any{
+					"source":  fb.Source,
+					"verdict": fb.Verdict,
+				}
+				switch fb.Source {
+				case "review":
+					eventData["review_findings"] = len(fb.ReviewFindings)
+				case "verify":
+					eventData["fixes_count"] = len(fb.FixesRequired)
+					eventData["failed_criteria"] = len(fb.FailedCriteria)
+					eventData["code_issues"] = len(fb.CodeIssues)
+					eventData["failed_commands"] = len(fb.FailedCommands)
+				}
+				e.emit(Event{
+					Phase: phase.Name,
+					Kind:  EventReworkFeedbackInjected,
+					Data:  eventData,
+				})
+				break
+			}
 		}
 	}
 
 	return data, nil
 }
 
-// extractReworkFeedback reads the verify result and returns structured
+// feedbackSourcesFor returns the ordered list of feedback sources for a phase.
+// Sources are read from the phase's own FeedbackFrom config.
+func (e *Engine) feedbackSourcesFor(phase PhaseConfig) []string {
+	return phase.FeedbackFrom
+}
+
+// extractFeedbackFrom dispatches to the appropriate source-specific feedback
+// extractor. Returns nil for unknown sources.
+func (e *Engine) extractFeedbackFrom(source string) *ReworkFeedback {
+	switch source {
+	case "review":
+		return e.extractReviewFeedback()
+	case "verify":
+		return e.extractVerifyFeedback()
+	default:
+		return nil
+	}
+}
+
+// extractVerifyFeedback reads the verify result and returns structured
 // feedback when the verdict is FAIL. Returns nil if no verify result
 // exists, the verdict is not FAIL, or the plan has changed since verify
 // ran (staleness guard).
-func (e *Engine) extractReworkFeedback() *ReworkFeedback {
+func (e *Engine) extractVerifyFeedback() *ReworkFeedback {
 	raw, err := e.state.ReadResult("verify")
 	if err != nil {
 		return nil
@@ -920,7 +937,7 @@ func (e *Engine) extractReworkFeedback() *ReworkFeedback {
 	if verifyPS := e.state.Meta().Phases["verify"]; verifyPS != nil && verifyPS.PlanHash != "" {
 		if currentHash := e.computePlanHash(); currentHash != "" && currentHash != verifyPS.PlanHash {
 			e.emit(Event{
-				Phase: "implement",
+				Phase: "verify",
 				Kind:  EventReworkFeedbackSkipped,
 				Data: map[string]any{
 					"reason":            "plan changed since verify ran",
@@ -975,10 +992,10 @@ func (e *Engine) extractReworkFeedback() *ReworkFeedback {
 	return fb
 }
 
-// extractReviewReworkFeedback reads the review result and returns
-// structured feedback when the verdict is "rework". Returns nil if no
-// review result exists or the verdict is not "rework".
-func (e *Engine) extractReviewReworkFeedback() *ReworkFeedback {
+// extractReviewFeedback reads the review result and returns structured
+// feedback when the verdict is "rework". Returns nil if no review result
+// exists or the verdict is not "rework".
+func (e *Engine) extractReviewFeedback() *ReworkFeedback {
 	raw, err := e.state.ReadResult("review")
 	if err != nil {
 		return nil

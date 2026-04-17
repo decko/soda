@@ -54,6 +54,9 @@ phases:
       semantic: 0    # don't retry semantic failures — human decides
     depends_on:
       - plan
+    feedback_from:
+      - review
+      - verify
 
   - name: verify
     prompt: prompts/verify.md
@@ -98,9 +101,6 @@ phases:
         focus: "prompt engineering, context budget, Claude CLI integration, sandbox, structured output"
     rework:
       target: implement
-      feedback_from:
-        - review
-        - verify
     # Routing: critical/major → rework (route back to target),
     # minor → follow-up (proceed to submit, queue follow-up phase),
     # none → pass (proceed to submit).

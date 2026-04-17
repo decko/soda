@@ -17,26 +17,24 @@ type PhasePipeline struct {
 
 // PhaseConfig holds the configuration for a single phase.
 type PhaseConfig struct {
-	Name      string           `yaml:"name"`
-	Prompt    string           `yaml:"prompt"`
-	Schema    string           `yaml:"schema"`
-	Tools     []string         `yaml:"tools"`
-	Timeout   Duration         `yaml:"timeout"`
-	Type      string           `yaml:"type"`
-	Retry     RetryConfig      `yaml:"retry"`
-	DependsOn []string         `yaml:"depends_on"`
-	Polling   *PollingConfig   `yaml:"polling,omitempty"`
-	Reviewers []ReviewerConfig `yaml:"reviewers,omitempty"`
-	Rework    *ReworkConfig    `yaml:"rework,omitempty"`
+	Name         string           `yaml:"name"`
+	Prompt       string           `yaml:"prompt"`
+	Schema       string           `yaml:"schema"`
+	Tools        []string         `yaml:"tools"`
+	Timeout      Duration         `yaml:"timeout"`
+	Type         string           `yaml:"type"`
+	Retry        RetryConfig      `yaml:"retry"`
+	DependsOn    []string         `yaml:"depends_on"`
+	Polling      *PollingConfig   `yaml:"polling,omitempty"`
+	Reviewers    []ReviewerConfig `yaml:"reviewers,omitempty"`
+	Rework       *ReworkConfig    `yaml:"rework,omitempty"`
+	FeedbackFrom []string         `yaml:"feedback_from,omitempty"` // ordered feedback sources injected into prompt
 }
 
 // ReworkConfig configures rework routing for a phase. When a phase with
-// this config produces a rework verdict, the engine routes back to Target
-// and injects feedback extracted from FeedbackFrom sources (in priority
-// order) into the target phase's prompt.
+// this config produces a rework verdict, the engine routes back to Target.
 type ReworkConfig struct {
-	Target       string   `yaml:"target"`        // phase to route back to on rework
-	FeedbackFrom []string `yaml:"feedback_from"` // ordered feedback sources for the target's prompt
+	Target string `yaml:"target"` // phase to route back to on rework
 }
 
 // ReviewerConfig holds configuration for a single specialist reviewer
