@@ -25,7 +25,7 @@ type PromptData struct {
 	BaseBranch     string
 	ReviewComments string
 	ReworkFeedback *ReworkFeedback
-	DiffContext    string // git diff of current branch vs base, injected for monitor
+	DiffContext    string // git diff of current branch vs base, injected for monitor and corrective phases
 }
 
 // ReworkFeedback holds selective feedback from a failed verify phase

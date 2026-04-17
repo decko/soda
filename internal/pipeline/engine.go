@@ -607,6 +607,12 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 		return fmt.Errorf("engine: build prompt data for %s: %w", phase.Name, err)
 	}
 
+	// Inject diff context for corrective phases so the patch prompt
+	// can see what was implemented without reading the plan artifact.
+	if phase.Type == "corrective" {
+		promptData.DiffContext = e.computeDiffContext(ctx)
+	}
+
 	// Store plan hash for staleness guard on phases that depend on plan.
 	for _, dep := range phase.DependsOn {
 		if dep == "plan" {
@@ -1055,6 +1061,23 @@ func (e *Engine) extractReviewFeedback() *ReworkFeedback {
 	}
 
 	return fb
+}
+
+// computeDiffContext returns the git diff of the current branch against the
+// base branch. Used by corrective phases to see what was implemented.
+// Returns an empty string on error (non-fatal).
+func (e *Engine) computeDiffContext(ctx context.Context) string {
+	workDir := e.workDir(PhaseConfig{})
+	baseBranch := e.config.BaseBranch
+	if baseBranch == "" {
+		baseBranch = "main"
+	}
+
+	diffCtx, err := git.Diff(ctx, workDir, "origin/"+baseBranch, 50000)
+	if err != nil {
+		return ""
+	}
+	return diffCtx
 }
 
 // computePlanHash returns the SHA-256 hex digest of the plan artifact.
