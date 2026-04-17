@@ -153,6 +153,53 @@ func TestVerifySummary(t *testing.T) {
 	}
 }
 
+func TestPatchSummary(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "multiple fixes with mixed statuses",
+			input: `{"fix_results":[{"status":"fixed"},{"status":"failed"},{"status":"fixed"}]}`,
+			want:  "2/3 fixed",
+		},
+		{
+			name:  "single fix",
+			input: `{"fix_results":[{"status":"fixed"}]}`,
+			want:  "1/1 fixed",
+		},
+		{
+			name:  "too complex",
+			input: `{"too_complex":true,"fix_results":[{"status":"failed"}]}`,
+			want:  "too complex",
+		},
+		{
+			name:  "empty fix_results",
+			input: `{"fix_results":[]}`,
+			want:  "",
+		},
+		{
+			name:  "missing fix_results field",
+			input: `{}`,
+			want:  "",
+		},
+		{
+			name:  "invalid json",
+			input: `{broken`,
+			want:  "",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := PhaseSummary("patch", json.RawMessage(tc.input))
+			if got != tc.want {
+				t.Errorf("PhaseSummary(patch, %s) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestSubmitSummary(t *testing.T) {
 	tests := []struct {
 		name  string

@@ -62,6 +62,9 @@ You MUST address every item below. Do not repeat the same mistakes.
 {{- if .ReworkFeedback.CodeIssues}}
 ### Code Issues
 {{range .ReworkFeedback.CodeIssues}}- **{{.Severity}}** {{.File}}{{if .Line}}:{{.Line}}{{end}}: {{.Issue}}
+{{- if .SuggestedFix}}
+  Suggested fix: {{.SuggestedFix}}
+{{- end}}
 {{end}}
 {{- end}}
 

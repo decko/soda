@@ -61,10 +61,33 @@ phases:
       - review
       - verify
 
+  - name: patch
+    type: corrective
+    prompt: prompts/patch.md
+    model: claude-sonnet-4-6
+    schema: |
+      {"type":"object","properties":{"ticket_key":{"type":"string"},"fix_results":{"type":"array","items":{"type":"object","properties":{"fix_index":{"type":"integer"},"status":{"type":"string"},"description":{"type":"string"},"reason":{"type":"string"}},"required":["fix_index","status","description"]}},"files_changed":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"action":{"type":"string"}},"required":["path","action"]}},"tests_passed":{"type":"boolean"},"too_complex":{"type":"boolean"},"too_complex_reason":{"type":"string"}},"required":["ticket_key","fix_results","files_changed","tests_passed","too_complex"]}
+    tools:
+      - Read
+      - Write
+      - Edit
+      - Glob
+      - Grep
+      - Bash
+    timeout: 8m
+    retry:
+      transient: 2
+      parse: 1
+      semantic: 0
+    depends_on:
+      - implement
+    feedback_from:
+      - verify
+
   - name: verify
     prompt: prompts/verify.md
     schema: |
-      {"type":"object","properties":{"ticket_key":{"type":"string"},"verdict":{"type":"string"},"criteria_results":{"type":"array","items":{"type":"object","properties":{"criterion":{"type":"string"},"passed":{"type":"boolean"},"evidence":{"type":"string"}},"required":["criterion","passed","evidence"]}},"command_results":{"type":"array","items":{"type":"object","properties":{"command":{"type":"string"},"exit_code":{"type":"integer"},"output":{"type":"string"},"passed":{"type":"boolean"}},"required":["command","exit_code","output","passed"]}},"code_issues":{"type":"array","items":{"type":"object","properties":{"file":{"type":"string"},"line":{"type":"integer"},"severity":{"type":"string"},"issue":{"type":"string"}},"required":["file","severity","issue"]}},"fixes_required":{"type":"array","items":{"type":"string"}}},"required":["ticket_key","verdict","criteria_results","command_results"]}
+      {"type":"object","properties":{"ticket_key":{"type":"string"},"verdict":{"type":"string"},"criteria_results":{"type":"array","items":{"type":"object","properties":{"criterion":{"type":"string"},"passed":{"type":"boolean"},"evidence":{"type":"string"}},"required":["criterion","passed","evidence"]}},"command_results":{"type":"array","items":{"type":"object","properties":{"command":{"type":"string"},"exit_code":{"type":"integer"},"output":{"type":"string"},"passed":{"type":"boolean"}},"required":["command","exit_code","output","passed"]}},"code_issues":{"type":"array","items":{"type":"object","properties":{"file":{"type":"string"},"line":{"type":"integer"},"severity":{"type":"string"},"issue":{"type":"string"},"suggested_fix":{"type":"string"}},"required":["file","severity","issue"]}},"fixes_required":{"type":"array","items":{"type":"string"}}},"required":["ticket_key","verdict","criteria_results","command_results"]}
     tools:
       - Read
       - Glob
@@ -75,6 +98,11 @@ phases:
       transient: 2
       parse: 1
       semantic: 1
+    corrective:
+      phase: patch
+      max_attempts: 2
+      on_exhausted: stop
+      escalate_to: implement
     depends_on:
       - plan
       - implement

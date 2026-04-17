@@ -17,25 +17,35 @@ type PhasePipeline struct {
 
 // PhaseConfig holds the configuration for a single phase.
 type PhaseConfig struct {
-	Name         string           `yaml:"name"`
-	Prompt       string           `yaml:"prompt"`
-	Schema       string           `yaml:"schema"`
-	Model        string           `yaml:"model,omitempty"` // per-phase model override; empty uses global EngineConfig.Model
-	Tools        []string         `yaml:"tools"`
-	Timeout      Duration         `yaml:"timeout"`
-	Type         string           `yaml:"type"`
-	Retry        RetryConfig      `yaml:"retry"`
-	DependsOn    []string         `yaml:"depends_on"`
-	Polling      *PollingConfig   `yaml:"polling,omitempty"`
-	Reviewers    []ReviewerConfig `yaml:"reviewers,omitempty"`
-	Rework       *ReworkConfig    `yaml:"rework,omitempty"`
-	FeedbackFrom []string         `yaml:"feedback_from,omitempty"` // ordered feedback sources injected into prompt
+	Name         string            `yaml:"name"`
+	Prompt       string            `yaml:"prompt"`
+	Schema       string            `yaml:"schema"`
+	Model        string            `yaml:"model,omitempty"` // per-phase model override; empty uses global EngineConfig.Model
+	Tools        []string          `yaml:"tools"`
+	Timeout      Duration          `yaml:"timeout"`
+	Type         string            `yaml:"type"`
+	Retry        RetryConfig       `yaml:"retry"`
+	DependsOn    []string          `yaml:"depends_on"`
+	Polling      *PollingConfig    `yaml:"polling,omitempty"`
+	Reviewers    []ReviewerConfig  `yaml:"reviewers,omitempty"`
+	Rework       *ReworkConfig     `yaml:"rework,omitempty"`
+	Corrective   *CorrectiveConfig `yaml:"corrective,omitempty"`
+	FeedbackFrom []string          `yaml:"feedback_from,omitempty"` // ordered feedback sources injected into prompt
 }
 
 // ReworkConfig configures rework routing for a phase. When a phase with
 // this config produces a rework verdict, the engine routes back to Target.
 type ReworkConfig struct {
 	Target string `yaml:"target"` // phase to route back to on rework
+}
+
+// CorrectiveConfig configures corrective phase routing. Lives on the
+// triggering phase (e.g., verify), not on the corrective phase (e.g., patch).
+type CorrectiveConfig struct {
+	Phase       string `yaml:"phase"`        // corrective phase to route to on failure
+	MaxAttempts int    `yaml:"max_attempts"` // max corrective cycles before exhaustion
+	OnExhausted string `yaml:"on_exhausted"` // "stop" | "escalate"
+	EscalateTo  string `yaml:"escalate_to"`  // target for "escalate" policy
 }
 
 // ReviewerConfig holds configuration for a single specialist reviewer

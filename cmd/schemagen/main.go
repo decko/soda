@@ -33,6 +33,7 @@ var registry = []struct {
 	{"review", reflect.TypeOf(schemas.ReviewOutput{})},
 	{"submit", reflect.TypeOf(schemas.SubmitOutput{})},
 	{"follow-up", reflect.TypeOf(schemas.FollowUpOutput{})},
+	{"patch", reflect.TypeOf(schemas.PatchOutput{})},
 	{"monitor", reflect.TypeOf(schemas.MonitorOutput{})},
 }
 

@@ -46,6 +46,7 @@ For each acceptance criterion, verify it is met. Read the actual code, not just 
 - Are there obvious bugs, edge cases, or security issues?
 - Are tests adequate? Do they cover the acceptance criteria?
 - Does it match the plan? If deviations exist, are they justified?
+- For each code issue found, include a `suggested_fix` describing the concrete change needed (e.g., "add nil check before dereferencing", "rename variable X to Y"). This helps the patch phase apply targeted fixes.
 
 ### 4. Check for regressions
 - Do existing tests still pass?

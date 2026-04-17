@@ -69,6 +69,11 @@ const (
 	EventReviewerParseWarning     = "reviewer_parse_warning"
 	EventFollowUpSkipped          = "follow_up_skipped"
 	EventFollowUpFailed           = "follow_up_failed"
+	EventCorrectiveSkipped        = "corrective_skipped"
+	EventPatchExhausted           = "patch_exhausted"
+	EventPatchEscalated           = "patch_escalated"
+	EventPatchTooComplex          = "patch_too_complex"
+	EventPatchEscalationSkipped   = "patch_escalation_skipped"
 )
 
 // ReadEvents reads and parses all events from the events.jsonl file in dir.
