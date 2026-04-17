@@ -843,9 +843,8 @@ func (e *Engine) buildPromptData(phase PhaseConfig) (PromptData, error) {
 	}
 
 	// Inject rework feedback from configured sources. The FeedbackFrom
-	// list is read from the ReworkConfig of any phase whose Target matches
-	// this phase. Sources are tried in priority order; the first one that
-	// produces feedback wins.
+	// list is read from the phase's own config. Sources are tried in
+	// priority order; the first one that produces feedback wins.
 	if sources := e.feedbackSourcesFor(phase); len(sources) > 0 {
 		for _, source := range sources {
 			if fb := e.extractFeedbackFrom(source); fb != nil {
