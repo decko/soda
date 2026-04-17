@@ -67,6 +67,8 @@ const (
 	EventReviewReworkRouted       = "review_rework_routed"
 	EventReviewReworkMaxCycles    = "review_rework_max_cycles"
 	EventReviewerParseWarning     = "reviewer_parse_warning"
+	EventFollowUpSkipped          = "follow_up_skipped"
+	EventFollowUpFailed           = "follow_up_failed"
 )
 
 // ReadEvents reads and parses all events from the events.jsonl file in dir.

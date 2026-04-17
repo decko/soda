@@ -260,6 +260,20 @@ func (e *Engine) skipPlanFromTriage() error {
 
 // shouldSkip returns true if a completed phase can be skipped because none
 // of its dependencies were re-run in this execution.
+// shouldSkipPostSubmit returns true if a post-submit phase should be skipped.
+// Follow-up only runs when the review verdict is "pass-with-follow-ups".
+func (e *Engine) shouldSkipPostSubmit(phase PhaseConfig) bool {
+	raw, err := e.state.ReadResult("review")
+	if err != nil {
+		return true // no review result → nothing to follow up
+	}
+	var review schemas.ReviewOutput
+	if err := json.Unmarshal(raw, &review); err != nil {
+		return true
+	}
+	return review.Verdict != "pass-with-follow-ups"
+}
+
 func (e *Engine) shouldSkip(phase PhaseConfig) bool {
 	if !e.state.IsCompleted(phase.Name) {
 		return false
@@ -434,6 +448,24 @@ func (e *Engine) executePhases(ctx context.Context, phases []PhaseConfig, forceF
 					e.inCheckpoint = false
 					e.pauseMu.Unlock()
 				}
+				continue
+			}
+
+			// Post-submit phases are best-effort: skip if not needed,
+			// swallow errors on failure.
+			if phase.Type == "post-submit" {
+				if e.shouldSkipPostSubmit(phase) {
+					e.emit(Event{Phase: phase.Name, Kind: EventFollowUpSkipped, Data: map[string]any{"reason": "no minor findings"}})
+					continue
+				}
+				if err := e.runPhase(ctx, phase); err != nil {
+					e.emit(Event{Phase: phase.Name, Kind: EventFollowUpFailed, Data: map[string]any{"error": err.Error()}})
+					// Mark completed despite failure — best-effort.
+					_ = e.state.MarkCompleted(phase.Name)
+					e.reranPhases[phase.Name] = true
+					continue
+				}
+				e.reranPhases[phase.Name] = true
 				continue
 			}
 

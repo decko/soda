@@ -120,6 +120,20 @@ phases:
       - verify
       - review
 
+  - name: follow-up
+    type: post-submit
+    prompt: prompts/follow-up.md
+    tools:
+      - Bash(gh:*)
+    timeout: 3m
+    retry:
+      transient: 2
+      parse: 1
+      semantic: 0
+    depends_on:
+      - review
+      - submit
+
   - name: monitor
     prompt: prompts/monitor.md
     type: polling

@@ -5806,3 +5806,159 @@ func TestEngine_CheckpointWithPauseSignal_PauseResumeBeforeCheckpoint(t *testing
 		t.Error("checkpoint was never reached")
 	}
 }
+
+// --- Follow-up phase (post-submit) tests ---
+
+func TestEngine_FollowUpPhase_RunsOnMinorFindings(t *testing.T) {
+	phases := []PhaseConfig{
+		{Name: "review", Type: "parallel-review", Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Reviewers: []ReviewerConfig{
+				{Name: "test-reviewer", Prompt: "prompts/review-test.md", Focus: "test"},
+			},
+		},
+		{Name: "submit", Prompt: "prompts/submit.md", DependsOn: []string{"review"}},
+		{Name: "follow-up", Type: "post-submit", Prompt: "prompts/follow-up.md", DependsOn: []string{"review", "submit"}, Tools: []string{"Bash(gh:*)"}},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"review/test-reviewer": {{result: &runner.RunResult{
+				Output: json.RawMessage(`{"ticket_key":"TEST-1","findings":[{"severity":"minor","file":"main.go","issue":"nit","suggestion":"fix","source":"test-reviewer"}],"verdict":"pass-with-follow-ups"}`),
+			}}},
+			"submit": {{result: &runner.RunResult{
+				Output: json.RawMessage(`{"ticket_key":"TEST-1","pr_url":"https://github.com/test/repo/pull/1","pr_number":1,"title":"test","branch":"test","target":"main","forge":"github"}`),
+			}}},
+			"follow-up": {{result: &runner.RunResult{
+				Output: json.RawMessage(`{"ticket_key":"TEST-1","actions":[{"finding":"nit","action":"created","ticket_url":"https://github.com/test/repo/issues/99","ticket_number":99}]}`),
+			}}},
+		},
+	}
+
+	var events []Event
+	engine, state := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(e Event) { events = append(events, e) }
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !state.IsCompleted("follow-up") {
+		t.Error("follow-up should be completed")
+	}
+
+	// Verify runner was called for follow-up.
+	mock.mu.Lock()
+	var followUpCalled bool
+	for _, c := range mock.calls {
+		if c.Phase == "follow-up" {
+			followUpCalled = true
+		}
+	}
+	mock.mu.Unlock()
+	if !followUpCalled {
+		t.Error("runner should have been called for follow-up phase")
+	}
+}
+
+func TestEngine_FollowUpPhase_SkippedOnPass(t *testing.T) {
+	phases := []PhaseConfig{
+		{Name: "review", Type: "parallel-review", Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Reviewers: []ReviewerConfig{
+				{Name: "test-reviewer", Prompt: "prompts/review-test.md", Focus: "test"},
+			},
+		},
+		{Name: "submit", Prompt: "prompts/submit.md", DependsOn: []string{"review"}},
+		{Name: "follow-up", Type: "post-submit", Prompt: "prompts/follow-up.md", DependsOn: []string{"review", "submit"}, Tools: []string{"Bash(gh:*)"}},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"review/test-reviewer": {{result: &runner.RunResult{
+				Output: json.RawMessage(`{"ticket_key":"TEST-1","findings":[],"verdict":"pass"}`),
+			}}},
+			"submit": {{result: &runner.RunResult{
+				Output: json.RawMessage(`{"ticket_key":"TEST-1","pr_url":"https://github.com/test/repo/pull/1","pr_number":1,"title":"test","branch":"test","target":"main","forge":"github"}`),
+			}}},
+		},
+	}
+
+	var events []Event
+	engine, _ := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(e Event) { events = append(events, e) }
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Follow-up should have been skipped.
+	skipped := false
+	for _, ev := range events {
+		if ev.Kind == EventFollowUpSkipped {
+			skipped = true
+		}
+	}
+	if !skipped {
+		t.Error("follow-up should emit follow_up_skipped event when review verdict is 'pass'")
+	}
+
+	// Runner should NOT have been called for follow-up.
+	mock.mu.Lock()
+	for _, c := range mock.calls {
+		if c.Phase == "follow-up" {
+			t.Error("runner should not be called for skipped follow-up phase")
+		}
+	}
+	mock.mu.Unlock()
+}
+
+func TestEngine_FollowUpPhase_FailureIsNonFatal(t *testing.T) {
+	phases := []PhaseConfig{
+		{Name: "review", Type: "parallel-review", Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Reviewers: []ReviewerConfig{
+				{Name: "test-reviewer", Prompt: "prompts/review-test.md", Focus: "test"},
+			},
+		},
+		{Name: "submit", Prompt: "prompts/submit.md", DependsOn: []string{"review"}},
+		{Name: "follow-up", Type: "post-submit", Prompt: "prompts/follow-up.md", DependsOn: []string{"review", "submit"}, Tools: []string{"Bash(gh:*)"}},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"review/test-reviewer": {{result: &runner.RunResult{
+				Output: json.RawMessage(`{"ticket_key":"TEST-1","findings":[{"severity":"minor","file":"main.go","issue":"nit","suggestion":"fix","source":"test-reviewer"}],"verdict":"pass-with-follow-ups"}`),
+			}}},
+			"submit": {{result: &runner.RunResult{
+				Output: json.RawMessage(`{"ticket_key":"TEST-1","pr_url":"https://github.com/test/repo/pull/1","pr_number":1,"title":"test","branch":"test","target":"main","forge":"github"}`),
+			}}},
+			"follow-up": {{err: fmt.Errorf("gh: rate limit exceeded")}},
+		},
+	}
+
+	var events []Event
+	engine, state := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(e Event) { events = append(events, e) }
+	})
+
+	// Pipeline should succeed despite follow-up failure.
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run should succeed despite follow-up failure: %v", err)
+	}
+
+	// Follow-up should be marked completed (best-effort).
+	if !state.IsCompleted("follow-up") {
+		t.Error("follow-up should be marked completed even on failure")
+	}
+
+	// Should have follow_up_failed event.
+	hasFailed := false
+	for _, ev := range events {
+		if ev.Kind == EventFollowUpFailed {
+			hasFailed = true
+		}
+	}
+	if !hasFailed {
+		t.Error("follow_up_failed event should be emitted on failure")
+	}
+}
