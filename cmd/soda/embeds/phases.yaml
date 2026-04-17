@@ -61,6 +61,29 @@ phases:
       - review
       - verify
 
+  - name: patch
+    type: corrective
+    prompt: prompts/patch.md
+    model: claude-sonnet-4-6
+    schema: |
+      {"type":"object","properties":{"ticket_key":{"type":"string"},"fix_results":{"type":"array","items":{"type":"object","properties":{"fix_index":{"type":"integer"},"status":{"type":"string"},"description":{"type":"string"},"reason":{"type":"string"}},"required":["fix_index","status","description"]}},"files_changed":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"action":{"type":"string"}},"required":["path","action"]}},"tests_passed":{"type":"boolean"},"too_complex":{"type":"boolean"},"too_complex_reason":{"type":"string"}},"required":["ticket_key","fix_results","files_changed","tests_passed","too_complex"]}
+    tools:
+      - Read
+      - Write
+      - Edit
+      - Glob
+      - Grep
+      - Bash
+    timeout: 8m
+    retry:
+      transient: 2
+      parse: 1
+      semantic: 0
+    depends_on:
+      - implement
+    feedback_from:
+      - verify
+
   - name: verify
     prompt: prompts/verify.md
     schema: |
@@ -75,6 +98,11 @@ phases:
       transient: 2
       parse: 1
       semantic: 1
+    corrective:
+      phase: patch
+      max_attempts: 2
+      on_exhausted: stop
+      escalate_to: implement
     depends_on:
       - plan
       - implement

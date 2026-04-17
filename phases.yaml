@@ -58,6 +58,28 @@ phases:
       - review
       - verify
 
+  - name: patch
+    type: corrective
+    prompt: prompts/patch.md
+    model: claude-sonnet-4-6
+    # schema: generated from schemas.PatchOutput (go generate ./schemas/...)
+    tools:
+      - Read
+      - Write
+      - Edit
+      - Glob
+      - Grep
+      - Bash
+    timeout: 8m
+    retry:
+      transient: 2
+      parse: 1
+      semantic: 0
+    depends_on:
+      - implement
+    feedback_from:
+      - verify
+
   - name: verify
     prompt: prompts/verify.md
     # schema: generated from schemas.VerifyOutput (go generate ./schemas/...)
@@ -71,6 +93,11 @@ phases:
       transient: 2
       parse: 1
       semantic: 1
+    corrective:
+      phase: patch
+      max_attempts: 2
+      on_exhausted: stop
+      escalate_to: implement
     depends_on:
       - plan
       - implement

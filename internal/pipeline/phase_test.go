@@ -50,8 +50,8 @@ func TestLoadPipeline(t *testing.T) {
 			t.Fatalf("LoadPipeline: %v", err)
 		}
 
-		if len(pipeline.Phases) != 7 {
-			t.Fatalf("got %d phases, want 7", len(pipeline.Phases))
+		if len(pipeline.Phases) != 8 {
+			t.Fatalf("got %d phases, want 8", len(pipeline.Phases))
 		}
 
 		// Verify first phase
@@ -75,8 +75,38 @@ func TestLoadPipeline(t *testing.T) {
 			t.Errorf("plan depends_on = %v, want [triage]", plan.DependsOn)
 		}
 
+		// Verify patch phase
+		patch := pipeline.Phases[3]
+		if patch.Name != "patch" {
+			t.Errorf("fourth phase = %q, want %q", patch.Name, "patch")
+		}
+		if patch.Type != "corrective" {
+			t.Errorf("patch type = %q, want %q", patch.Type, "corrective")
+		}
+		if len(patch.FeedbackFrom) != 1 || patch.FeedbackFrom[0] != "verify" {
+			t.Errorf("patch feedback_from = %v, want [verify]", patch.FeedbackFrom)
+		}
+
+		// Verify verify phase has corrective config
+		verify := pipeline.Phases[4]
+		if verify.Name != "verify" {
+			t.Errorf("fifth phase = %q, want %q", verify.Name, "verify")
+		}
+		if verify.Corrective == nil {
+			t.Fatal("verify corrective config should not be nil")
+		}
+		if verify.Corrective.Phase != "patch" {
+			t.Errorf("verify corrective.phase = %q, want %q", verify.Corrective.Phase, "patch")
+		}
+		if verify.Corrective.MaxAttempts != 2 {
+			t.Errorf("verify corrective.max_attempts = %d, want 2", verify.Corrective.MaxAttempts)
+		}
+		if verify.Corrective.OnExhausted != "stop" {
+			t.Errorf("verify corrective.on_exhausted = %q, want %q", verify.Corrective.OnExhausted, "stop")
+		}
+
 		// Verify review phase
-		review := pipeline.Phases[4]
+		review := pipeline.Phases[5]
 		if review.Name != "review" {
 			t.Errorf("fifth phase = %q, want %q", review.Name, "review")
 		}
@@ -119,7 +149,7 @@ func TestLoadPipeline(t *testing.T) {
 		}
 
 		// Verify monitor phase has polling config
-		monitor := pipeline.Phases[6]
+		monitor := pipeline.Phases[7]
 		if monitor.Name != "monitor" {
 			t.Errorf("last phase = %q, want %q", monitor.Name, "monitor")
 		}
