@@ -1249,6 +1249,97 @@ func TestEngine_SkipPlanRouting_PlanArtifactAvailableToImplement(t *testing.T) {
 	}
 }
 
+func TestEngine_BuildPromptData_PatchArtifact(t *testing.T) {
+	// When a phase depends on "patch", the buildPromptData switch should
+	// populate Artifacts.Patch from the stored artifact.
+	patchContent := "patched code changes"
+
+	phases := []PhaseConfig{
+		{
+			Name:   "patch",
+			Prompt: "patch.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "downstream",
+			Prompt:    "downstream.md",
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			DependsOn: []string{"patch"},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"patch": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"ok":true}`),
+					RawText: patchContent,
+					CostUSD: 0.01,
+				},
+			}},
+			"downstream": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"ok":true}`),
+					RawText: "downstream done",
+					CostUSD: 0.01,
+				},
+			}},
+		},
+	}
+
+	stateDir := t.TempDir()
+	promptDir := t.TempDir()
+	workDir := t.TempDir()
+
+	templates := map[string]string{
+		"patch.md":      "Phase: patch\nTicket: {{.Ticket.Key}}\n",
+		"downstream.md": "Phase: downstream\nPatch:\n{{.Artifacts.Patch}}\n",
+	}
+	for name, content := range templates {
+		if err := os.WriteFile(filepath.Join(promptDir, name), []byte(content), 0644); err != nil {
+			t.Fatalf("write template %s: %v", name, err)
+		}
+	}
+
+	state, err := LoadOrCreate(stateDir, "TEST-1")
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+
+	engine := NewEngine(mock, state, EngineConfig{
+		Pipeline:   &PhasePipeline{Phases: phases},
+		Loader:     NewPromptLoader(promptDir),
+		Ticket:     TicketData{Key: "TEST-1", Summary: "Test ticket"},
+		Model:      "test-model",
+		WorkDir:    workDir,
+		MaxCostUSD: 0,
+		Mode:       Autonomous,
+		SleepFunc:  func(time.Duration) {},
+		JitterFunc: func(time.Duration) time.Duration { return 0 },
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	// The downstream phase should have received a prompt containing the patch artifact.
+	var downstreamOpts *runner.RunOpts
+	for i, call := range mock.calls {
+		if call.Phase == "downstream" {
+			downstreamOpts = &mock.calls[i]
+			break
+		}
+	}
+	if downstreamOpts == nil {
+		t.Fatal("downstream phase was not called")
+	}
+
+	if !strings.Contains(downstreamOpts.SystemPrompt, patchContent) {
+		t.Errorf("downstream prompt should contain patch artifact %q, got: %s",
+			patchContent, downstreamOpts.SystemPrompt[:min(200, len(downstreamOpts.SystemPrompt))])
+	}
+}
+
 func TestEngine_GatePhase_ReviewUnmarshalError(t *testing.T) {
 	// When a phase with Rework config produces output that doesn't unmarshal
 	// as valid JSON, gateRework should gracefully skip (return nil), consistent

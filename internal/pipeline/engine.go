@@ -837,6 +837,8 @@ func (e *Engine) buildPromptData(phase PhaseConfig) (PromptData, error) {
 			data.Artifacts.Verify = content
 		case "review":
 			data.Artifacts.Review = content
+		case "patch":
+			data.Artifacts.Patch = content
 		case "submit":
 			data.Artifacts.Submit.PRURL = e.extractPRURL()
 		}
