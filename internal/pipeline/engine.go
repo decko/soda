@@ -1191,7 +1191,7 @@ func (e *Engine) gateRework(phase PhaseConfig, raw json.RawMessage) error {
 				issues = append(issues, finding.Issue)
 			}
 		}
-		reason := fmt.Sprintf("review requires rework but max cycles (%d) reached", maxCycles)
+		reason := fmt.Sprintf("%s requires rework but max cycles (%d) reached", phase.Name, maxCycles)
 		if len(issues) > 0 {
 			reason += ": " + strings.Join(issues, "; ")
 		}
