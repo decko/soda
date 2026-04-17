@@ -353,14 +353,59 @@ func (e *Engine) Resume(ctx context.Context, fromPhase string) error {
 	return nil
 }
 
+// reworkRoute holds the result of a successful routeRework call, providing
+// the re-sliced phases and forceFirst flag for the outer executePhases loop.
+type reworkRoute struct {
+	phases     []PhaseConfig
+	forceFirst bool
+}
+
+// routeRework handles a reworkSignal by incrementing the rework cycle counter,
+// emitting a routed event, flushing meta, and re-slicing the pipeline phases
+// to start from the rework target. Returns the new route or an error.
+func (e *Engine) routeRework(phaseName string, sig *reworkSignal) (*reworkRoute, error) {
+	e.state.Meta().ReworkCycles++
+	cycle := e.state.Meta().ReworkCycles
+
+	e.emit(Event{
+		Phase: phaseName,
+		Kind:  EventReviewReworkRouted,
+		Data: map[string]any{
+			"rework_cycle":      cycle,
+			"max_rework_cycles": e.config.maxReworkCycles(),
+			"routing_to":        sig.target,
+		},
+	})
+
+	if err := e.state.flushMeta(); err != nil {
+		return nil, fmt.Errorf("engine: flush meta after rework routing: %w", err)
+	}
+
+	targetIdx := -1
+	for i, p := range e.config.Pipeline.Phases {
+		if p.Name == sig.target {
+			targetIdx = i
+			break
+		}
+	}
+	if targetIdx < 0 {
+		return nil, fmt.Errorf("engine: rework routing requires phase %q in the pipeline", sig.target)
+	}
+
+	return &reworkRoute{
+		phases:     e.config.Pipeline.Phases[targetIdx:],
+		forceFirst: true,
+	}, nil
+}
+
 // executePhases runs a slice of phases, handling skip logic, checkpoint
 // pauses, and review rework routing. When forceFirst is true, the first
 // phase in the slice is always re-run regardless of completion status.
 //
 // Rework routing is handled iteratively: when a review phase produces a
-// "rework" verdict, the outer loop increments the rework cycle counter,
-// re-slices the phases from "implement", sets forceFirst, and restarts
-// the inner range loop — avoiding recursion entirely.
+// "rework" verdict, the outer loop calls routeRework to increment the
+// rework cycle counter, re-slice the phases from the target, set
+// forceFirst, and restart the inner range loop — avoiding recursion.
 func (e *Engine) executePhases(ctx context.Context, phases []PhaseConfig, forceFirst bool) error {
 	for {
 		rework := false
@@ -383,36 +428,12 @@ func (e *Engine) executePhases(ctx context.Context, phases []PhaseConfig, forceF
 					// Route to the configured target instead of leaking.
 					var reworkSig *reworkSignal
 					if errors.As(err, &reworkSig) {
-						e.state.Meta().ReworkCycles++
-						cycle := e.state.Meta().ReworkCycles
-
-						e.emit(Event{
-							Phase: phase.Name,
-							Kind:  EventReviewReworkRouted,
-							Data: map[string]any{
-								"rework_cycle":      cycle,
-								"max_rework_cycles": e.config.maxReworkCycles(),
-								"routing_to":        reworkSig.target,
-							},
-						})
-
-						if err := e.state.flushMeta(); err != nil {
-							return fmt.Errorf("engine: flush meta after rework routing: %w", err)
+						route, routeErr := e.routeRework(phase.Name, reworkSig)
+						if routeErr != nil {
+							return routeErr
 						}
-
-						targetIdx := -1
-						for i, p := range e.config.Pipeline.Phases {
-							if p.Name == reworkSig.target {
-								targetIdx = i
-								break
-							}
-						}
-						if targetIdx < 0 {
-							return fmt.Errorf("engine: rework routing requires phase %q in the pipeline", reworkSig.target)
-						}
-
-						phases = e.config.Pipeline.Phases[targetIdx:]
-						forceFirst = true
+						phases = route.phases
+						forceFirst = route.forceFirst
 						rework = true
 						break
 					}
@@ -473,38 +494,12 @@ func (e *Engine) executePhases(ctx context.Context, phases []PhaseConfig, forceF
 				// Check for rework signal — route to configured target.
 				var reworkSig *reworkSignal
 				if errors.As(err, &reworkSig) {
-					e.state.Meta().ReworkCycles++
-					cycle := e.state.Meta().ReworkCycles
-
-					e.emit(Event{
-						Phase: phase.Name,
-						Kind:  EventReviewReworkRouted,
-						Data: map[string]any{
-							"rework_cycle":      cycle,
-							"max_rework_cycles": e.config.maxReworkCycles(),
-							"routing_to":        reworkSig.target,
-						},
-					})
-
-					// Flush meta to persist the rework cycle count.
-					if err := e.state.flushMeta(); err != nil {
-						return fmt.Errorf("engine: flush meta after rework routing: %w", err)
+					route, routeErr := e.routeRework(phase.Name, reworkSig)
+					if routeErr != nil {
+						return routeErr
 					}
-
-					// Find target's index and re-slice from there.
-					targetIdx := -1
-					for i, p := range e.config.Pipeline.Phases {
-						if p.Name == reworkSig.target {
-							targetIdx = i
-							break
-						}
-					}
-					if targetIdx < 0 {
-						return fmt.Errorf("engine: rework routing requires phase %q in the pipeline", reworkSig.target)
-					}
-
-					phases = e.config.Pipeline.Phases[targetIdx:]
-					forceFirst = true
+					phases = route.phases
+					forceFirst = route.forceFirst
 					rework = true
 					break
 				}
