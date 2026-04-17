@@ -27,7 +27,7 @@ The following diff shows what was implemented (base...HEAD):
 
 ## FIXES REQUIRED
 
-You will fix EXACTLY {{len .ReworkFeedback.FixesRequired}}{{if .ReworkFeedback.CodeIssues}} issue(s) plus {{len .ReworkFeedback.CodeIssues}} code issue(s){{end}}.
+You will address the issues listed below. Report one fix_result per item in the Fixes section (use fix_index matching the number shown).
 
 ### Verdict: {{.ReworkFeedback.Verdict}}
 
@@ -85,5 +85,5 @@ Base: {{.BaseBranch}}
 4. **If a fix requires more than 50 lines of changes**, STOP and set `too_complex: true` with a reason. Do not attempt the fix.
 5. **Run the formatter** after changes: `{{.Config.Formatter}}`
 6. **Run the tests** after changes: `{{.Config.TestCommand}}`
-7. **Each fix_result must map 1:1** to the fixes listed above. Use the same index.
+7. **Each fix_result must map 1:1** to the numbered items in the **Fixes** section only. Use the same 0-based index. Code Issues provide additional context but do not need separate fix_results.
 8. **Commit** the fix with a message referencing the ticket key and fix number.
