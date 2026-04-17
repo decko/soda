@@ -3427,6 +3427,115 @@ func TestEngine_ParallelReview_PerReviewerModel(t *testing.T) {
 	}
 }
 
+func TestEngine_PerPhaseModel(t *testing.T) {
+	t.Run("phase_model_overrides_global", func(t *testing.T) {
+		phases := []PhaseConfig{
+			{
+				Name:   "triage",
+				Prompt: "triage.md",
+				Model:  "claude-sonnet-4-6", // per-phase override
+				Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+			{
+				Name:      "plan",
+				Prompt:    "plan.md",
+				DependsOn: []string{"triage"},
+				Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+				// no per-phase model — should use global
+			},
+		}
+
+		mock := &flexMockRunner{
+			responses: map[string][]flexResponse{
+				"triage": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"automatable":true}`),
+						RawText: "Triage output",
+						CostUSD: 0.10,
+					},
+				}},
+				"plan": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"tasks":["task1"]}`),
+						RawText: "Plan output",
+						CostUSD: 0.20,
+					},
+				}},
+			},
+		}
+
+		engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+			cfg.Model = "claude-opus-4-6"
+		})
+
+		if err := engine.Run(context.Background()); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+
+		mock.mu.Lock()
+		defer mock.mu.Unlock()
+
+		if len(mock.calls) != 2 {
+			t.Fatalf("runner called %d times, want 2", len(mock.calls))
+		}
+
+		models := map[string]string{}
+		for _, c := range mock.calls {
+			models[c.Phase] = c.Model
+		}
+
+		// triage has per-phase model override.
+		if models["triage"] != "claude-sonnet-4-6" {
+			t.Errorf("triage model = %q, want %q", models["triage"], "claude-sonnet-4-6")
+		}
+		// plan has no per-phase model — should fall back to global.
+		if models["plan"] != "claude-opus-4-6" {
+			t.Errorf("plan model = %q, want %q (global fallback)", models["plan"], "claude-opus-4-6")
+		}
+	})
+
+	t.Run("empty_phase_model_uses_global", func(t *testing.T) {
+		phases := []PhaseConfig{
+			{
+				Name:   "triage",
+				Prompt: "triage.md",
+				Model:  "", // explicitly empty
+				Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+		}
+
+		mock := &flexMockRunner{
+			responses: map[string][]flexResponse{
+				"triage": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"automatable":true}`),
+						RawText: "Triage output",
+						CostUSD: 0.10,
+					},
+				}},
+			},
+		}
+
+		engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+			cfg.Model = "claude-opus-4-6"
+		})
+
+		if err := engine.Run(context.Background()); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+
+		mock.mu.Lock()
+		defer mock.mu.Unlock()
+
+		if len(mock.calls) != 1 {
+			t.Fatalf("runner called %d times, want 1", len(mock.calls))
+		}
+		if mock.calls[0].Model != "claude-opus-4-6" {
+			t.Errorf("model = %q, want %q (global)", mock.calls[0].Model, "claude-opus-4-6")
+		}
+	})
+}
+
 func TestEngine_ParallelReview_MergedFindings(t *testing.T) {
 	// When max rework cycles is reached (set to 0), review with
 	// critical/major findings should gate with a PhaseGateError.
