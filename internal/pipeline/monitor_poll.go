@@ -28,6 +28,18 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 		return e.runMonitorStub(phase)
 	}
 
+	// Require SelfUser so the classifier can filter out the bot's own comments.
+	if e.config.SelfUser == "" {
+		e.emit(Event{
+			Phase: phase.Name,
+			Kind:  EventMonitorWarning,
+			Data: map[string]any{
+				"warning": "self_user not configured; falling back to stub (required for comment classification)",
+			},
+		})
+		return e.runMonitorStub(phase)
+	}
+
 	polling := phase.Polling
 
 	// Apply monitor profile if configured (profile on PollingConfig or EngineConfig).

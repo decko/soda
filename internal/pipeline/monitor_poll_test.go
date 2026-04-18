@@ -173,6 +173,7 @@ func setupMonitorEngineWithRunner(t *testing.T, r runner.Runner, poller PRPoller
 		SleepFunc:  func(time.Duration) {}, // no-op for tests
 		JitterFunc: func(time.Duration) time.Duration { return 0 },
 		PRPoller:   poller,
+		SelfUser:   "soda-bot", // required for comment classification
 		OnEvent: func(e Event) {
 			events = append(events, e)
 		},
@@ -529,6 +530,52 @@ func TestMonitor_PollCountIncremented(t *testing.T) {
 	}
 	if monState.PollCount != 3 {
 		t.Errorf("PollCount = %d, want 3", monState.PollCount)
+	}
+}
+
+func TestMonitor_FallbackToStubWithoutSelfUser(t *testing.T) {
+	// When SelfUser is empty, should emit a warning and fall back to stub.
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "open", Approved: true}},
+		},
+	}
+
+	engine, state, events := setupMonitorEngine(t, poller, nil, func(cfg *EngineConfig) {
+		cfg.SelfUser = "" // override the default set by helper
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !state.IsCompleted("monitor") {
+		t.Error("monitor should be completed via stub fallback")
+	}
+
+	hasWarning := false
+	hasMonitorSkipped := false
+	for _, e := range *events {
+		if e.Kind == EventMonitorWarning {
+			if w, _ := e.Data["warning"].(string); strings.Contains(w, "self_user not configured") {
+				hasWarning = true
+			}
+		}
+		if e.Kind == EventMonitorSkipped {
+			hasMonitorSkipped = true
+		}
+	}
+	if !hasWarning {
+		t.Error("monitor_warning event about self_user not emitted")
+	}
+	if !hasMonitorSkipped {
+		t.Error("monitor_skipped event not emitted for stub fallback")
+	}
+
+	// Should NOT have entered the polling loop.
+	_, err := state.ReadMonitorState()
+	if err == nil {
+		t.Error("monitor state should not exist (stub does not write it)")
 	}
 }
 
