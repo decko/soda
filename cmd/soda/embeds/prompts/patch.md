@@ -71,11 +71,19 @@ You will address the issues listed below. Report one fix_result per item in the 
 {{.Context.RepoConventions}}
 {{- end}}
 
-## Working Directory
+{{- if or .WorktreePath .Branch .BaseBranch}}
 
+## Working Directory
+{{if .WorktreePath}}
 Worktree: {{.WorktreePath}}
+{{- end}}
+{{- if .Branch}}
 Branch: {{.Branch}}
+{{- end}}
+{{- if .BaseBranch}}
 Base: {{.BaseBranch}}
+{{- end}}
+{{- end}}
 
 ## Rules
 
@@ -83,7 +91,11 @@ Base: {{.BaseBranch}}
 2. **Do NOT modify files** not mentioned in the feedback above.
 3. **Do NOT add new features** or refactor beyond what the fixes require.
 4. **If a fix requires more than 50 lines of changes**, STOP and set `too_complex: true` with a reason. Do not attempt the fix.
+{{- if .Config.Formatter}}
 5. **Run the formatter** after changes: `{{.Config.Formatter}}`
+{{- end}}
+{{- if .Config.TestCommand}}
 6. **Run the tests** after changes: `{{.Config.TestCommand}}`
+{{- end}}
 7. **Each fix_result must map 1:1** to the numbered items in the **Fixes** section only. Use the same 0-based index. Code Issues provide additional context but do not need separate fix_results.
 8. **Commit** the fix with a message referencing the ticket key and fix number.
