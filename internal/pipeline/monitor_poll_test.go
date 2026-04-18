@@ -579,6 +579,54 @@ func TestMonitor_FallbackToStubWithoutSelfUser(t *testing.T) {
 	}
 }
 
+func TestMonitor_FallbackToStubWithWhitespaceSelfUser(t *testing.T) {
+	// Whitespace-only SelfUser should be treated the same as empty —
+	// fall back to stub rather than entering the polling loop where
+	// every classifier construction would fail.
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "open", Approved: true}},
+		},
+	}
+
+	engine, state, events := setupMonitorEngine(t, poller, nil, func(cfg *EngineConfig) {
+		cfg.SelfUser = "   " // whitespace-only
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !state.IsCompleted("monitor") {
+		t.Error("monitor should be completed via stub fallback")
+	}
+
+	hasWarning := false
+	hasMonitorSkipped := false
+	for _, e := range *events {
+		if e.Kind == EventMonitorWarning {
+			if w, _ := e.Data["warning"].(string); strings.Contains(w, "self_user not configured") {
+				hasWarning = true
+			}
+		}
+		if e.Kind == EventMonitorSkipped {
+			hasMonitorSkipped = true
+		}
+	}
+	if !hasWarning {
+		t.Error("monitor_warning event about self_user not emitted")
+	}
+	if !hasMonitorSkipped {
+		t.Error("monitor_skipped event not emitted for stub fallback")
+	}
+
+	// Should NOT have entered the polling loop.
+	_, err := state.ReadMonitorState()
+	if err == nil {
+		t.Error("monitor state should not exist (stub does not write it)")
+	}
+}
+
 func TestMonitor_FallbackToStubWithoutPoller(t *testing.T) {
 	// When PRPoller is nil, should fall back to stub behavior.
 	phases := []PhaseConfig{

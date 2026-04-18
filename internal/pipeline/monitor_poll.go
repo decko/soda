@@ -29,7 +29,11 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 	}
 
 	// Require SelfUser so the classifier can filter out the bot's own comments.
-	if e.config.SelfUser == "" {
+	// Use TrimSpace to be consistent with NewCommentClassifier, which also
+	// rejects whitespace-only values. Without this, a whitespace-only SelfUser
+	// would pass this guard but fail classifier construction on every poll,
+	// causing comments to be silently dropped.
+	if strings.TrimSpace(e.config.SelfUser) == "" {
 		e.emit(Event{
 			Phase: phase.Name,
 			Kind:  EventMonitorWarning,
