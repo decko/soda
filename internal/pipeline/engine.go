@@ -64,6 +64,15 @@ func (c *EngineConfig) maxReworkCycles() int {
 	return DefaultMaxReworkCycles
 }
 
+// remoteName returns the configured git remote name from PromptConfig.Repo.PushTo,
+// defaulting to "origin" when not set.
+func (e *Engine) remoteName() string {
+	if r := e.config.PromptConfig.Repo.PushTo; r != "" {
+		return r
+	}
+	return "origin"
+}
+
 // Engine orchestrates a pipeline run, tying together the runner,
 // state management, prompt rendering, and retry logic.
 type Engine struct {
@@ -1118,7 +1127,7 @@ func (e *Engine) computeDiffContext(ctx context.Context) string {
 		baseBranch = "main"
 	}
 
-	diffCtx, err := git.Diff(ctx, workDir, "origin/"+baseBranch, 50000)
+	diffCtx, err := git.Diff(ctx, workDir, e.remoteName()+"/"+baseBranch, 50000)
 	if err != nil {
 		return ""
 	}
