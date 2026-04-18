@@ -2159,3 +2159,63 @@ func TestMonitor_CorruptStateReturnsError(t *testing.T) {
 		t.Errorf("expected 'read monitor state' error, got: %v", err)
 	}
 }
+
+func TestCheckNewComments_ClassifierFailureDoesNotAdvanceLastCommentID(t *testing.T) {
+	// When the classifier fails to construct (e.g., invalid selfUser),
+	// LastCommentID must NOT be advanced. Otherwise, comments are
+	// permanently skipped — they won't be re-fetched on the next poll.
+	poller := &mockPRPoller{
+		commentResponses: []mockCommentResponse{
+			{comments: []PRComment{
+				{ID: "IC_1", Author: "reviewer", Body: "Fix this."},
+				{ID: "IC_2", Author: "reviewer", Body: "Fix that."},
+			}},
+		},
+	}
+
+	stateDir := t.TempDir()
+	state, err := LoadOrCreate(stateDir, "TEST-CLASSIFY")
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+
+	var events []Event
+	engine := &Engine{
+		state: state,
+		config: EngineConfig{
+			SelfUser: "", // empty → classifier will fail
+			PRPoller: poller,
+			OnEvent:  func(e Event) { events = append(events, e) },
+		},
+	}
+
+	monState := &MonitorState{
+		PRURL:         "https://github.com/decko/soda/pull/49",
+		LastCommentID: "", // no previous comments
+	}
+
+	classified := engine.checkNewComments(context.Background(), "monitor", monState)
+
+	// Classifier should have failed → nil result.
+	if classified != nil {
+		t.Errorf("expected nil classified, got %d items", len(classified))
+	}
+
+	// LastCommentID must NOT have been advanced.
+	if monState.LastCommentID != "" {
+		t.Errorf("LastCommentID = %q, want %q (should not advance on classifier failure)", monState.LastCommentID, "")
+	}
+
+	// Should have emitted a warning about classifier creation.
+	hasClassifierWarning := false
+	for _, evt := range events {
+		if evt.Kind == EventMonitorWarning {
+			if w, _ := evt.Data["warning"].(string); strings.Contains(w, "create classifier") {
+				hasClassifierWarning = true
+			}
+		}
+	}
+	if !hasClassifierWarning {
+		t.Error("monitor_warning event about classifier creation not emitted")
+	}
+}

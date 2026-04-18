@@ -370,11 +370,9 @@ func (e *Engine) checkNewComments(ctx context.Context, phaseName string, monStat
 		return nil
 	}
 
-	// Update last comment ID to the latest one.
-	lastComment := comments[len(comments)-1]
-	monState.LastCommentID = lastComment.ID
-
-	// Build classifier using engine config.
+	// Build classifier using engine config. This must happen BEFORE
+	// advancing LastCommentID so that a classifier failure does not
+	// cause fetched comments to be permanently skipped.
 	classifier, err := NewCommentClassifier(
 		e.config.SelfUser,
 		e.config.BotUsers,
@@ -390,6 +388,11 @@ func (e *Engine) checkNewComments(ctx context.Context, phaseName string, monStat
 	}
 
 	classified := classifier.ClassifyAll(comments)
+
+	// Only advance LastCommentID after classification succeeds, so
+	// comments are not lost if the classifier fails to initialize.
+	lastComment := comments[len(comments)-1]
+	monState.LastCommentID = lastComment.ID
 
 	// Emit per-comment classification events.
 	for _, cc := range classified {
