@@ -4,8 +4,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-
-	"github.com/decko/soda/schemas"
 )
 
 func TestBudgetExceededError(t *testing.T) {
@@ -54,7 +52,7 @@ func TestReworkSignal(t *testing.T) {
 	t.Run("with_findings", func(t *testing.T) {
 		err := &reworkSignal{
 			target: "implement",
-			findings: []schemas.ReviewFinding{
+			findings: []reworkFinding{
 				{Severity: "critical", Issue: "nil deref"},
 				{Severity: "minor", Issue: "naming"},
 				{Severity: "major", Issue: "missing error check"},

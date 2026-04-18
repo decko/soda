@@ -1318,9 +1318,9 @@ func (e *Engine) gateRework(phase PhaseConfig, raw json.RawMessage) error {
 	}
 
 	// Build findings for the rework signal from the minimal verdict struct.
-	var findings []schemas.ReviewFinding
+	var findings []reworkFinding
 	for _, f := range result.Findings {
-		findings = append(findings, schemas.ReviewFinding{
+		findings = append(findings, reworkFinding{
 			Severity: f.Severity,
 			Issue:    f.Issue,
 		})
