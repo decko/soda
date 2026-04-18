@@ -199,18 +199,19 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 	}
 
 	engineCfg := pipeline.EngineConfig{
-		Pipeline:      pl,
-		Loader:        loader,
-		Ticket:        ticketData,
-		PromptConfig:  promptConfig,
-		PromptContext: promptContext,
-		Model:         cfg.Model,
-		WorkDir:       workDir,
-		WorktreeBase:  filepath.Join(workDir, cfg.WorktreeDir),
-		BaseBranch:    "main",
-		MaxCostUSD:    cfg.Limits.MaxCostPerTicket,
-		Mode:          mode,
-		PRPoller:      prPoller,
+		Pipeline:        pl,
+		Loader:          loader,
+		Ticket:          ticketData,
+		PromptConfig:    promptConfig,
+		PromptContext:   promptContext,
+		Model:           cfg.Model,
+		WorkDir:         workDir,
+		WorktreeBase:    filepath.Join(workDir, cfg.WorktreeDir),
+		BaseBranch:      "main",
+		MaxCostUSD:      cfg.Limits.MaxCostPerTicket,
+		MaxCostPerPhase: cfg.Limits.MaxCostPerPhase,
+		Mode:            mode,
+		PRPoller:        prPoller,
 		OnEvent: func(event pipeline.Event) {
 			if event.Kind == pipeline.EventPhaseSkipped || event.Kind == pipeline.EventMonitorSkipped {
 				skippedPhases[event.Phase] = true
@@ -579,6 +580,28 @@ func handleEvent(ctx context.Context, cancel context.CancelFunc, engine *pipelin
 	case pipeline.EventPatchEscalationSkipped:
 		reason, _ := event.Data["reason"].(string)
 		prog.Message(fmt.Sprintf("  ⏭  Escalation skipped: %s", reason))
+
+	case pipeline.EventPhaseBudgetWarning:
+		var phaseCost float64
+		if c, ok := event.Data["phase_cost"].(float64); ok {
+			phaseCost = c
+		}
+		var limit float64
+		if l, ok := event.Data["limit"].(float64); ok {
+			limit = l
+		}
+		prog.BudgetWarning(phaseCost, limit)
+
+	case pipeline.EventPhaseBudgetExceeded:
+		var phaseCost float64
+		if c, ok := event.Data["phase_cost"].(float64); ok {
+			phaseCost = c
+		}
+		var limit float64
+		if l, ok := event.Data["limit"].(float64); ok {
+			limit = l
+		}
+		prog.Message(fmt.Sprintf("  ❌ Phase budget exceeded: $%.2f / $%.2f", phaseCost, limit))
 	}
 }
 
@@ -909,6 +932,13 @@ func formatNextSteps(w io.Writer, meta *pipeline.PipelineMeta, phases []pipeline
 		fmt.Fprintf(w, "  • Re-run from that phase after addressing the issue:\n")
 		fmt.Fprintf(w, "    soda run %s --from %s  (retry after fixing the gate condition)\n", ticket, ge.Phase)
 
+	case isPhaseBudgetExceededError(runErr):
+		var pbe *pipeline.PhaseBudgetExceededError
+		errors.As(runErr, &pbe)
+		fmt.Fprintf(w, "  Per-phase budget limit ($%.2f) reached at $%.2f in phase %q.\n", pbe.Limit, pbe.Actual, pbe.Phase)
+		fmt.Fprintf(w, "  • Increase the limit in soda.yaml (limits.max_cost_per_phase) and resume:\n")
+		fmt.Fprintf(w, "    soda run %s --from %s  (resume with higher per-phase budget)\n", ticket, pbe.Phase)
+
 	case isBudgetExceededError(runErr):
 		var be *pipeline.BudgetExceededError
 		errors.As(runErr, &be)
@@ -962,6 +992,11 @@ func isVerifyGateError(err error) bool {
 func isPhaseGateError(err error) bool {
 	var ge *pipeline.PhaseGateError
 	return errors.As(err, &ge)
+}
+
+func isPhaseBudgetExceededError(err error) bool {
+	var pbe *pipeline.PhaseBudgetExceededError
+	return errors.As(err, &pbe)
 }
 
 func isBudgetExceededError(err error) bool {

@@ -19,6 +19,19 @@ func (e *BudgetExceededError) Error() string {
 		e.Phase, e.Limit, e.Actual)
 }
 
+// PhaseBudgetExceededError is returned when a single phase's cost exceeds the
+// configured per-phase limit (MaxCostPerPhase).
+type PhaseBudgetExceededError struct {
+	Limit  float64
+	Actual float64
+	Phase  string
+}
+
+func (e *PhaseBudgetExceededError) Error() string {
+	return fmt.Sprintf("pipeline: phase budget exceeded in phase %s: limit $%.2f, actual $%.2f",
+		e.Phase, e.Limit, e.Actual)
+}
+
 // DependencyNotMetError is returned when a phase's prerequisite has not completed.
 type DependencyNotMetError struct {
 	Phase      string
