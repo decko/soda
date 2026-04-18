@@ -3,8 +3,6 @@ package pipeline
 import (
 	"fmt"
 	"strings"
-
-	"github.com/decko/soda/schemas"
 )
 
 // BudgetExceededError is returned when accumulated cost exceeds the configured limit.
@@ -40,13 +38,22 @@ func (e *PhaseGateError) Error() string {
 	return fmt.Sprintf("pipeline: phase %s gated: %s", e.Phase, e.Reason)
 }
 
+// reworkFinding is a minimal finding type used by reworkSignal for error
+// message context. It carries only the fields needed to describe rework
+// issues (severity + issue text), decoupled from schemas.ReviewFinding
+// which carries additional review-specific fields (file, line, source, etc.).
+type reworkFinding struct {
+	Severity string
+	Issue    string
+}
+
 // reworkSignal is an internal sentinel error used by gatePhase to signal the
 // engine loop that a phase produced a "rework" verdict and the pipeline should
 // route back to the configured target phase. This is NOT a terminal error —
 // the engine loop catches it and handles routing.
 type reworkSignal struct {
-	target   string                  // phase to route back to
-	findings []schemas.ReviewFinding // findings for error message context
+	target   string          // phase to route back to
+	findings []reworkFinding // findings for error message context
 }
 
 func (e *reworkSignal) Error() string {
