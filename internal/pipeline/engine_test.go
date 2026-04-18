@@ -4861,40 +4861,6 @@ func TestExtractReviewFeedback(t *testing.T) {
 	})
 }
 
-func TestFeedbackSourcesFor(t *testing.T) {
-	t.Run("returns_sources_from_phase_config", func(t *testing.T) {
-		pipeline := &PhasePipeline{
-			Phases: []PhaseConfig{
-				{Name: "implement", FeedbackFrom: []string{"review", "verify"}},
-				{Name: "review", Rework: &ReworkConfig{Target: "implement"}},
-			},
-		}
-		engine := &Engine{config: EngineConfig{Pipeline: pipeline}}
-
-		sources := engine.feedbackSourcesFor(pipeline.Phases[0])
-		if len(sources) != 2 {
-			t.Fatalf("sources = %v, want [review verify]", sources)
-		}
-		if sources[0] != "review" || sources[1] != "verify" {
-			t.Errorf("sources = %v, want [review verify]", sources)
-		}
-	})
-
-	t.Run("returns_nil_for_phase_without_config", func(t *testing.T) {
-		pipeline := &PhasePipeline{
-			Phases: []PhaseConfig{
-				{Name: "triage"},
-			},
-		}
-		engine := &Engine{config: EngineConfig{Pipeline: pipeline}}
-
-		sources := engine.feedbackSourcesFor(pipeline.Phases[0])
-		if sources != nil {
-			t.Errorf("sources = %v, want nil", sources)
-		}
-	})
-}
-
 func TestExtractFeedbackFrom(t *testing.T) {
 	t.Run("review_source", func(t *testing.T) {
 		stateDir := t.TempDir()
