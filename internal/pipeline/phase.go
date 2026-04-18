@@ -115,8 +115,9 @@ func LoadPipeline(path string) (*PhasePipeline, error) {
 		phaseNames[p.Name] = struct{}{}
 	}
 
-	// Validate cross-references: ReworkConfig.Target and FeedbackFrom
-	// must refer to phases that exist in the pipeline.
+	// Validate cross-references: ReworkConfig.Target, FeedbackFrom,
+	// CorrectiveConfig.Phase, and CorrectiveConfig.EscalateTo must
+	// refer to phases that exist in the pipeline.
 	for _, phase := range pipeline.Phases {
 		if phase.Rework != nil {
 			if _, ok := phaseNames[phase.Rework.Target]; !ok {
@@ -126,6 +127,16 @@ func LoadPipeline(path string) (*PhasePipeline, error) {
 		for _, src := range phase.FeedbackFrom {
 			if _, ok := phaseNames[src]; !ok {
 				return nil, fmt.Errorf("pipeline: phase %q feedback_from references unknown phase %q", phase.Name, src)
+			}
+		}
+		if phase.Corrective != nil {
+			if _, ok := phaseNames[phase.Corrective.Phase]; !ok {
+				return nil, fmt.Errorf("pipeline: phase %q corrective.phase %q not found", phase.Name, phase.Corrective.Phase)
+			}
+			if phase.Corrective.EscalateTo != "" {
+				if _, ok := phaseNames[phase.Corrective.EscalateTo]; !ok {
+					return nil, fmt.Errorf("pipeline: phase %q corrective.escalate_to %q not found", phase.Name, phase.Corrective.EscalateTo)
+				}
 			}
 		}
 	}
