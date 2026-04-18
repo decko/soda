@@ -173,6 +173,7 @@ func setupMonitorEngineWithRunner(t *testing.T, r runner.Runner, poller PRPoller
 		SleepFunc:  func(time.Duration) {}, // no-op for tests
 		JitterFunc: func(time.Duration) time.Duration { return 0 },
 		PRPoller:   poller,
+		SelfUser:   "soda-bot", // required for comment classification
 		OnEvent: func(e Event) {
 			events = append(events, e)
 		},
@@ -529,6 +530,100 @@ func TestMonitor_PollCountIncremented(t *testing.T) {
 	}
 	if monState.PollCount != 3 {
 		t.Errorf("PollCount = %d, want 3", monState.PollCount)
+	}
+}
+
+func TestMonitor_FallbackToStubWithoutSelfUser(t *testing.T) {
+	// When SelfUser is empty, should emit a warning and fall back to stub.
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "open", Approved: true}},
+		},
+	}
+
+	engine, state, events := setupMonitorEngine(t, poller, nil, func(cfg *EngineConfig) {
+		cfg.SelfUser = "" // override the default set by helper
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !state.IsCompleted("monitor") {
+		t.Error("monitor should be completed via stub fallback")
+	}
+
+	hasWarning := false
+	hasMonitorSkipped := false
+	for _, e := range *events {
+		if e.Kind == EventMonitorWarning {
+			if w, _ := e.Data["warning"].(string); strings.Contains(w, "self_user not configured") {
+				hasWarning = true
+			}
+		}
+		if e.Kind == EventMonitorSkipped {
+			hasMonitorSkipped = true
+		}
+	}
+	if !hasWarning {
+		t.Error("monitor_warning event about self_user not emitted")
+	}
+	if !hasMonitorSkipped {
+		t.Error("monitor_skipped event not emitted for stub fallback")
+	}
+
+	// Should NOT have entered the polling loop.
+	_, err := state.ReadMonitorState()
+	if err == nil {
+		t.Error("monitor state should not exist (stub does not write it)")
+	}
+}
+
+func TestMonitor_FallbackToStubWithWhitespaceSelfUser(t *testing.T) {
+	// Whitespace-only SelfUser should be treated the same as empty —
+	// fall back to stub rather than entering the polling loop where
+	// every classifier construction would fail.
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "open", Approved: true}},
+		},
+	}
+
+	engine, state, events := setupMonitorEngine(t, poller, nil, func(cfg *EngineConfig) {
+		cfg.SelfUser = "   " // whitespace-only
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !state.IsCompleted("monitor") {
+		t.Error("monitor should be completed via stub fallback")
+	}
+
+	hasWarning := false
+	hasMonitorSkipped := false
+	for _, e := range *events {
+		if e.Kind == EventMonitorWarning {
+			if w, _ := e.Data["warning"].(string); strings.Contains(w, "self_user not configured") {
+				hasWarning = true
+			}
+		}
+		if e.Kind == EventMonitorSkipped {
+			hasMonitorSkipped = true
+		}
+	}
+	if !hasWarning {
+		t.Error("monitor_warning event about self_user not emitted")
+	}
+	if !hasMonitorSkipped {
+		t.Error("monitor_skipped event not emitted for stub fallback")
+	}
+
+	// Should NOT have entered the polling loop.
+	_, err := state.ReadMonitorState()
+	if err == nil {
+		t.Error("monitor state should not exist (stub does not write it)")
 	}
 }
 
@@ -2062,5 +2157,65 @@ func TestMonitor_CorruptStateReturnsError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "read monitor state") {
 		t.Errorf("expected 'read monitor state' error, got: %v", err)
+	}
+}
+
+func TestCheckNewComments_ClassifierFailureDoesNotAdvanceLastCommentID(t *testing.T) {
+	// When the classifier fails to construct (e.g., invalid selfUser),
+	// LastCommentID must NOT be advanced. Otherwise, comments are
+	// permanently skipped — they won't be re-fetched on the next poll.
+	poller := &mockPRPoller{
+		commentResponses: []mockCommentResponse{
+			{comments: []PRComment{
+				{ID: "IC_1", Author: "reviewer", Body: "Fix this."},
+				{ID: "IC_2", Author: "reviewer", Body: "Fix that."},
+			}},
+		},
+	}
+
+	stateDir := t.TempDir()
+	state, err := LoadOrCreate(stateDir, "TEST-CLASSIFY")
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+
+	var events []Event
+	engine := &Engine{
+		state: state,
+		config: EngineConfig{
+			SelfUser: "", // empty → classifier will fail
+			PRPoller: poller,
+			OnEvent:  func(e Event) { events = append(events, e) },
+		},
+	}
+
+	monState := &MonitorState{
+		PRURL:         "https://github.com/decko/soda/pull/49",
+		LastCommentID: "", // no previous comments
+	}
+
+	classified := engine.checkNewComments(context.Background(), "monitor", monState)
+
+	// Classifier should have failed → nil result.
+	if classified != nil {
+		t.Errorf("expected nil classified, got %d items", len(classified))
+	}
+
+	// LastCommentID must NOT have been advanced.
+	if monState.LastCommentID != "" {
+		t.Errorf("LastCommentID = %q, want %q (should not advance on classifier failure)", monState.LastCommentID, "")
+	}
+
+	// Should have emitted a warning about classifier creation.
+	hasClassifierWarning := false
+	for _, evt := range events {
+		if evt.Kind == EventMonitorWarning {
+			if w, _ := evt.Data["warning"].(string); strings.Contains(w, "create classifier") {
+				hasClassifierWarning = true
+			}
+		}
+	}
+	if !hasClassifierWarning {
+		t.Error("monitor_warning event about classifier creation not emitted")
 	}
 }
