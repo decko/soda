@@ -1316,7 +1316,7 @@ func (e *Engine) gateRework(phase PhaseConfig, raw json.RawMessage) error {
 		// "pass-with-follow-ups" so the pipeline proceeds to submit and
 		// the remaining minors are handled by the follow-up phase.
 		if len(issues) == 0 {
-			if err := e.downgradeToFollowUps(phase, raw); err != nil {
+			if err := e.downgradeToFollowUps(phase, raw, result.Findings); err != nil {
 				return err
 			}
 			return nil
@@ -1345,16 +1345,24 @@ func (e *Engine) gateRework(phase PhaseConfig, raw json.RawMessage) error {
 // max rework cycles are exhausted but the remaining findings are all
 // minor — the pipeline can proceed to submit and handle them as follow-ups
 // instead of blocking.
-func (e *Engine) downgradeToFollowUps(phase PhaseConfig, raw json.RawMessage) error {
-	// Parse the full review output so we preserve all fields.
-	var review schemas.ReviewOutput
-	if err := json.Unmarshal(raw, &review); err != nil {
+//
+// The raw JSON is round-tripped through map[string]any (rather than a
+// typed struct like schemas.ReviewOutput) so that fields belonging to
+// non-review phases are preserved. The minor count is derived from the
+// already-parsed reworkVerdict findings, keeping this function
+// phase-agnostic — consistent with gateRework.
+func (e *Engine) downgradeToFollowUps(phase PhaseConfig, raw json.RawMessage, findings []struct {
+	Severity string `json:"severity"`
+	Issue    string `json:"issue"`
+}) error {
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
 		return fmt.Errorf("engine: downgrade to follow-ups: unmarshal %s result: %w", phase.Name, err)
 	}
 
-	review.Verdict = "pass-with-follow-ups"
+	doc["verdict"] = "pass-with-follow-ups"
 
-	updated, err := json.Marshal(review)
+	updated, err := json.Marshal(doc)
 	if err != nil {
 		return fmt.Errorf("engine: downgrade to follow-ups: marshal %s result: %w", phase.Name, err)
 	}
@@ -1363,7 +1371,7 @@ func (e *Engine) downgradeToFollowUps(phase PhaseConfig, raw json.RawMessage) er
 	}
 
 	minorCount := 0
-	for _, f := range review.Findings {
+	for _, f := range findings {
 		if strings.EqualFold(f.Severity, "minor") {
 			minorCount++
 		}

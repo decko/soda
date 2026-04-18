@@ -1310,7 +1310,7 @@ func TestEngine_gateRework_nilReworkConfig(t *testing.T) {
 
 func TestEngine_downgradeToFollowUps(t *testing.T) {
 	// Direct unit test for downgradeToFollowUps: verify it rewrites the
-	// verdict on disk and emits the correct event.
+	// verdict on disk, preserves unknown fields, and emits the correct event.
 	phases := []PhaseConfig{
 		{
 			Name:   "review",
@@ -1329,8 +1329,10 @@ func TestEngine_downgradeToFollowUps(t *testing.T) {
 	})
 	state.Meta().ReworkCycles = 1
 
-	// Write a review result with rework verdict and minor findings.
-	raw := json.RawMessage(`{"ticket_key":"TEST-1","findings":[{"severity":"minor","file":"a.go","issue":"naming","suggestion":"rename"},{"severity":"minor","file":"b.go","issue":"style","suggestion":"fix"}],"verdict":"rework"}`)
+	// Write a result with rework verdict, minor findings, and an extra
+	// field ("custom_metric") that is not part of schemas.ReviewOutput.
+	// downgradeToFollowUps must preserve it through the roundtrip.
+	raw := json.RawMessage(`{"ticket_key":"TEST-1","custom_metric":42,"findings":[{"severity":"minor","file":"a.go","issue":"naming","suggestion":"rename"},{"severity":"minor","file":"b.go","issue":"style","suggestion":"fix"}],"verdict":"rework"}`)
 	if err := state.WriteResult("review", raw); err != nil {
 		t.Fatalf("WriteResult: %v", err)
 	}
@@ -1339,7 +1341,14 @@ func TestEngine_downgradeToFollowUps(t *testing.T) {
 		Name:   "review",
 		Rework: &ReworkConfig{Target: "implement"},
 	}
-	if err := engine.downgradeToFollowUps(phase, raw); err != nil {
+	findings := []struct {
+		Severity string `json:"severity"`
+		Issue    string `json:"issue"`
+	}{
+		{Severity: "minor", Issue: "naming"},
+		{Severity: "minor", Issue: "style"},
+	}
+	if err := engine.downgradeToFollowUps(phase, raw, findings); err != nil {
 		t.Fatalf("downgradeToFollowUps: %v", err)
 	}
 
@@ -1348,15 +1357,22 @@ func TestEngine_downgradeToFollowUps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadResult: %v", err)
 	}
-	var reviewOutput schemas.ReviewOutput
-	if err := json.Unmarshal(updated, &reviewOutput); err != nil {
+
+	// Parse as map to check all fields including extras.
+	var doc map[string]any
+	if err := json.Unmarshal(updated, &doc); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if reviewOutput.Verdict != "pass-with-follow-ups" {
-		t.Errorf("verdict = %q, want %q", reviewOutput.Verdict, "pass-with-follow-ups")
+	if v, _ := doc["verdict"].(string); v != "pass-with-follow-ups" {
+		t.Errorf("verdict = %q, want %q", v, "pass-with-follow-ups")
 	}
-	if len(reviewOutput.Findings) != 2 {
-		t.Errorf("findings count = %d, want 2", len(reviewOutput.Findings))
+	findingsSlice, _ := doc["findings"].([]any)
+	if len(findingsSlice) != 2 {
+		t.Errorf("findings count = %d, want 2", len(findingsSlice))
+	}
+	// Extra field must survive the roundtrip.
+	if cm, _ := doc["custom_metric"].(float64); cm != 42 {
+		t.Errorf("custom_metric = %v, want 42 (extra fields must be preserved)", cm)
 	}
 
 	// Verify event was emitted.
