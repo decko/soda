@@ -30,6 +30,8 @@ const (
 	EventPhaseSkipped             = "phase_skipped"
 	EventOutputChunk              = "output_chunk"
 	EventBudgetWarning            = "budget_warning"
+	EventPhaseBudgetWarning       = "phase_budget_warning"
+	EventPhaseBudgetExceeded      = "phase_budget_exceeded"
 	EventCheckpointPause          = "checkpoint_pause"
 	EventWorktreeCreated          = "worktree_created"
 	EventMonitorSkipped           = "monitor_skipped"

@@ -42,7 +42,8 @@ type EngineConfig struct {
 	WorktreeBase      string
 	BaseBranch        string
 	MaxCostUSD        float64
-	MaxReworkCycles   int // max review→implement rework loops; 0 means use default (2)
+	MaxCostPerPhase   float64 // per-phase cost cap; 0 means no per-phase limit
+	MaxReworkCycles   int     // max review→implement rework loops; 0 means use default (2)
 	Mode              Mode
 	OnEvent           func(Event)
 	PauseSignal       <-chan bool // receives true=pause, false=resume from TUI; nil disables
@@ -624,6 +625,12 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 		return err
 	}
 
+	// Pre-run per-phase budget check: prevent starting a new generation
+	// when cumulative cost already exceeds (or meets) the per-phase limit.
+	if err := e.checkPhaseBudget(phase); err != nil {
+		return err
+	}
+
 	// Mark phase running and notify callback.
 	if err := e.state.MarkRunning(phase.Name); err != nil {
 		return fmt.Errorf("engine: mark running %s: %w", phase.Name, err)
@@ -690,6 +697,14 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 	if e.config.MaxCostUSD <= 0 {
 		remaining = 0 // no budget enforcement
 	}
+	// Cap with per-phase limit: use the remaining per-phase budget
+	// (MaxCostPerPhase minus cumulative cost already spent) as the tighter bound.
+	if e.config.MaxCostPerPhase > 0 {
+		perPhaseRemaining := e.config.MaxCostPerPhase - e.state.Meta().Phases[phase.Name].CumulativeCost
+		if remaining <= 0 || perPhaseRemaining < remaining {
+			remaining = perPhaseRemaining
+		}
+	}
 	// Prefer per-phase model if set, otherwise use the global model.
 	model := e.config.Model
 	if phase.Model != "" {
@@ -729,6 +744,13 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 	}
 	if err := e.state.AccumulateCost(phase.Name, result.CostUSD); err != nil {
 		return fmt.Errorf("engine: accumulate cost for %s: %w", phase.Name, err)
+	}
+
+	// Per-phase cost enforcement: abort if this phase exceeded its budget.
+	if err := e.checkPhaseBudget(phase); err != nil {
+		_ = e.state.MarkFailed(phase.Name, err)
+		e.emitPhaseFailed(phase.Name, err)
+		return err
 	}
 
 	// Mark completed and notify callback.
@@ -868,6 +890,42 @@ func (e *Engine) checkBudget(phase PhaseConfig) error {
 			Phase: phase.Name,
 			Kind:  EventBudgetWarning,
 			Data:  map[string]any{"total_cost": total, "limit": e.config.MaxCostUSD},
+		})
+	}
+	return nil
+}
+
+// checkPhaseBudget verifies a phase has not exceeded the per-phase cost cap.
+// Called after AccumulateCost so the phase's CumulativeCost reflects the full run
+// across all rework generations.
+// Emits a warning at 90% and returns PhaseBudgetExceededError when exceeded.
+func (e *Engine) checkPhaseBudget(phase PhaseConfig) error {
+	if e.config.MaxCostPerPhase <= 0 {
+		return nil
+	}
+	ps := e.state.Meta().Phases[phase.Name]
+	if ps == nil {
+		return nil
+	}
+	cost := ps.CumulativeCost
+	limit := e.config.MaxCostPerPhase
+	if cost >= limit {
+		e.emit(Event{
+			Phase: phase.Name,
+			Kind:  EventPhaseBudgetExceeded,
+			Data:  map[string]any{"phase_cost": cost, "limit": limit},
+		})
+		return &PhaseBudgetExceededError{
+			Limit:  limit,
+			Actual: cost,
+			Phase:  phase.Name,
+		}
+	}
+	if cost >= limit*0.9 {
+		e.emit(Event{
+			Phase: phase.Name,
+			Kind:  EventPhaseBudgetWarning,
+			Data:  map[string]any{"phase_cost": cost, "limit": limit},
 		})
 	}
 	return nil
@@ -1620,6 +1678,12 @@ func (e *Engine) runParallelReview(ctx context.Context, phase PhaseConfig) error
 		return err
 	}
 
+	// Pre-run per-phase budget check: prevent starting a new generation
+	// when cumulative cost already exceeds (or meets) the per-phase limit.
+	if err := e.checkPhaseBudget(phase); err != nil {
+		return err
+	}
+
 	// Mark phase running.
 	if err := e.state.MarkRunning(phase.Name); err != nil {
 		return fmt.Errorf("engine: mark running %s: %w", phase.Name, err)
@@ -1638,6 +1702,14 @@ func (e *Engine) runParallelReview(ctx context.Context, phase PhaseConfig) error
 	budgetRemaining := 0.0
 	if e.config.MaxCostUSD > 0 {
 		budgetRemaining = e.config.MaxCostUSD - e.state.Meta().TotalCost
+	}
+	// Cap with per-phase limit: use the remaining per-phase budget
+	// (MaxCostPerPhase minus cumulative cost already spent) as the tighter bound.
+	if e.config.MaxCostPerPhase > 0 {
+		perPhaseRemaining := e.config.MaxCostPerPhase - e.state.Meta().Phases[phase.Name].CumulativeCost
+		if budgetRemaining <= 0 || perPhaseRemaining < budgetRemaining {
+			budgetRemaining = perPhaseRemaining
+		}
 	}
 
 	// Channel for reviewer goroutines to send messages to the parent.
@@ -1727,6 +1799,13 @@ func (e *Engine) runParallelReview(ctx context.Context, phase PhaseConfig) error
 	}
 	if err := e.state.AccumulateCost(phase.Name, totalCost); err != nil {
 		return fmt.Errorf("engine: accumulate cost for %s: %w", phase.Name, err)
+	}
+
+	// Per-phase cost enforcement.
+	if err := e.checkPhaseBudget(phase); err != nil {
+		_ = e.state.MarkFailed(phase.Name, err)
+		e.emitPhaseFailed(phase.Name, err)
+		return err
 	}
 
 	// Mark completed.

@@ -7790,3 +7790,689 @@ func TestEngine_ReviewReworkAndPatchIndependent(t *testing.T) {
 		t.Errorf("runner called %d times, want 8", len(mock.calls))
 	}
 }
+
+func TestEngine_PhaseBudgetExceeded(t *testing.T) {
+	// Phase costs $10 but per-phase limit is $5 → PhaseBudgetExceededError.
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage done",
+					CostUSD: 10.0,
+				},
+			}},
+		},
+	}
+
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.MaxCostPerPhase = 5.0
+	})
+
+	err := engine.Run(context.Background())
+	if err == nil {
+		t.Fatal("expected PhaseBudgetExceededError")
+	}
+
+	var phaseBudgetErr *PhaseBudgetExceededError
+	if !errors.As(err, &phaseBudgetErr) {
+		t.Fatalf("expected PhaseBudgetExceededError, got: %v", err)
+	}
+	if phaseBudgetErr.Phase != "triage" {
+		t.Errorf("phase = %q, want %q", phaseBudgetErr.Phase, "triage")
+	}
+	if phaseBudgetErr.Limit != 5.0 {
+		t.Errorf("limit = %f, want 5.0", phaseBudgetErr.Limit)
+	}
+	if phaseBudgetErr.Actual != 10.0 {
+		t.Errorf("actual = %f, want 10.0", phaseBudgetErr.Actual)
+	}
+}
+
+func TestEngine_PhaseBudgetExceeded_AtLimit(t *testing.T) {
+	// Phase costs exactly the limit → PhaseBudgetExceededError (>= check).
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage done",
+					CostUSD: 5.0,
+				},
+			}},
+		},
+	}
+
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.MaxCostPerPhase = 5.0
+	})
+
+	err := engine.Run(context.Background())
+	if err == nil {
+		t.Fatal("expected PhaseBudgetExceededError")
+	}
+
+	var phaseBudgetErr *PhaseBudgetExceededError
+	if !errors.As(err, &phaseBudgetErr) {
+		t.Fatalf("expected PhaseBudgetExceededError, got: %v", err)
+	}
+	if phaseBudgetErr.Phase != "triage" {
+		t.Errorf("phase = %q, want %q", phaseBudgetErr.Phase, "triage")
+	}
+}
+
+func TestEngine_PhaseBudgetUnderLimit(t *testing.T) {
+	// Phase costs $4 with per-phase limit $5 → succeeds.
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "plan",
+			Prompt:    "plan.md",
+			DependsOn: []string{"triage"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage done",
+					CostUSD: 4.0,
+				},
+			}},
+			"plan": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tasks":[{"id":"1","description":"task"}]}`),
+					RawText: "Plan done",
+					CostUSD: 3.0,
+				},
+			}},
+		},
+	}
+
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.MaxCostPerPhase = 5.0
+	})
+
+	err := engine.Run(context.Background())
+	if err != nil {
+		t.Fatalf("expected success, got: %v", err)
+	}
+
+	// Both phases should complete and each should be under the per-phase limit.
+	if !state.IsCompleted("triage") {
+		t.Error("triage should be completed")
+	}
+	if !state.IsCompleted("plan") {
+		t.Error("plan should be completed")
+	}
+	if state.Meta().Phases["triage"].Cost != 4.0 {
+		t.Errorf("triage cost = %f, want 4.0", state.Meta().Phases["triage"].Cost)
+	}
+	if state.Meta().Phases["plan"].Cost != 3.0 {
+		t.Errorf("plan cost = %f, want 3.0", state.Meta().Phases["plan"].Cost)
+	}
+}
+
+func TestEngine_PhaseBudgetWarning(t *testing.T) {
+	// Phase costs $4.6 with per-phase limit $5 → warning at 90% ($4.50).
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage done",
+					CostUSD: 4.6,
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.MaxCostPerPhase = 5.0
+		cfg.OnEvent = func(ev Event) { events = append(events, ev) }
+	})
+
+	err := engine.Run(context.Background())
+	if err != nil {
+		t.Fatalf("expected success, got: %v", err)
+	}
+
+	hasWarning := false
+	for _, ev := range events {
+		if ev.Kind == EventPhaseBudgetWarning {
+			hasWarning = true
+			if ev.Phase != "triage" {
+				t.Errorf("warning phase = %q, want %q", ev.Phase, "triage")
+			}
+		}
+	}
+	if !hasWarning {
+		t.Error("expected phase_budget_warning event")
+	}
+}
+
+func TestEngine_PhaseBudgetExceededEmitsEvent(t *testing.T) {
+	// Verify that the phase_budget_exceeded event is emitted.
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage done",
+					CostUSD: 10.0,
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.MaxCostPerPhase = 5.0
+		cfg.OnEvent = func(ev Event) { events = append(events, ev) }
+	})
+
+	_ = engine.Run(context.Background())
+
+	hasExceeded := false
+	for _, ev := range events {
+		if ev.Kind == EventPhaseBudgetExceeded {
+			hasExceeded = true
+			if ev.Phase != "triage" {
+				t.Errorf("exceeded phase = %q, want %q", ev.Phase, "triage")
+			}
+		}
+	}
+	if !hasExceeded {
+		t.Error("expected phase_budget_exceeded event")
+	}
+}
+
+func TestEngine_PhaseBudgetCapsRunnerOpts(t *testing.T) {
+	// When MaxCostPerPhase < remaining pipeline budget, the runner
+	// should receive MaxCostPerPhase as its MaxBudgetUSD.
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage done",
+					CostUSD: 2.0,
+				},
+			}},
+		},
+	}
+
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.MaxCostUSD = 100.0    // plenty of pipeline budget
+		cfg.MaxCostPerPhase = 8.0 // per-phase limit is tighter
+	})
+
+	err := engine.Run(context.Background())
+	if err != nil {
+		t.Fatalf("expected success, got: %v", err)
+	}
+
+	if len(mock.calls) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(mock.calls))
+	}
+	// Runner should have received the per-phase cap, not the pipeline remaining.
+	if mock.calls[0].MaxBudgetUSD != 8.0 {
+		t.Errorf("MaxBudgetUSD = %f, want 8.0", mock.calls[0].MaxBudgetUSD)
+	}
+}
+
+func TestEngine_PhaseBudgetNoCap(t *testing.T) {
+	// When MaxCostPerPhase is 0, no per-phase enforcement.
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage done",
+					CostUSD: 50.0,
+				},
+			}},
+		},
+	}
+
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.MaxCostPerPhase = 0 // disabled
+	})
+
+	err := engine.Run(context.Background())
+	if err != nil {
+		t.Fatalf("expected success (no per-phase cap), got: %v", err)
+	}
+}
+
+func TestEngine_PhaseBudgetSecondPhaseExceeds(t *testing.T) {
+	// First phase is under budget, second phase exceeds per-phase limit.
+	// Each phase gets its own cost counter that resets on MarkRunning.
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "plan",
+			Prompt:    "plan.md",
+			DependsOn: []string{"triage"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage done",
+					CostUSD: 3.0, // under $5 per-phase limit
+				},
+			}},
+			"plan": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tasks":[{"id":"1","description":"task"}]}`),
+					RawText: "Plan done",
+					CostUSD: 6.0, // over $5 per-phase limit
+				},
+			}},
+		},
+	}
+
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.MaxCostPerPhase = 5.0
+	})
+
+	err := engine.Run(context.Background())
+	if err == nil {
+		t.Fatal("expected PhaseBudgetExceededError")
+	}
+
+	var phaseBudgetErr *PhaseBudgetExceededError
+	if !errors.As(err, &phaseBudgetErr) {
+		t.Fatalf("expected PhaseBudgetExceededError, got: %v", err)
+	}
+	if phaseBudgetErr.Phase != "plan" {
+		t.Errorf("phase = %q, want %q", phaseBudgetErr.Phase, "plan")
+	}
+
+	// Triage should have completed successfully.
+	if !state.IsCompleted("triage") {
+		t.Error("triage should be completed")
+	}
+	// Plan should be marked failed.
+	ps := state.Meta().Phases["plan"]
+	if ps == nil || ps.Status != PhaseFailed {
+		t.Error("plan should be marked failed")
+	}
+}
+
+func TestEngine_PhaseBudgetCumulativeAcrossRework(t *testing.T) {
+	// A phase runs twice via rework. Each generation costs $3, which is
+	// under the $5 per-phase limit individually. The cumulative cost ($6)
+	// should exceed the limit and trigger PhaseBudgetExceededError on the
+	// second generation.
+	//
+	// Pipeline: implement → verify → review (rework → implement)
+	phases := []PhaseConfig{
+		{
+			Name:         "implement",
+			Prompt:       "implement.md",
+			Retry:        RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			FeedbackFrom: []string{"review", "verify"},
+		},
+		{
+			Name:      "verify",
+			Prompt:    "verify.md",
+			DependsOn: []string{"implement"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "review",
+			Type:      "parallel-review",
+			DependsOn: []string{"implement", "verify"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Rework:    &ReworkConfig{Target: "implement"},
+			Reviewers: []ReviewerConfig{
+				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+			},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {
+				// First implement: costs $3 (under $5 per-phase limit).
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true,"commits":1}`),
+					RawText: "Impl v1",
+					CostUSD: 3.0,
+				}},
+				// Second implement (rework): costs $3.
+				// Cumulative = $6, exceeds $5 per-phase limit.
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true,"commits":2}`),
+					RawText: "Impl v2",
+					CostUSD: 3.0,
+				}},
+			},
+			"verify": {
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"verdict":"PASS"}`),
+					RawText: "Verify v1",
+					CostUSD: 0.10,
+				}},
+			},
+			"review/go-specialist": {
+				// First review: rework verdict → routes back to implement.
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[{"severity":"critical","file":"handler.go","line":42,"issue":"nil deref","suggestion":"add nil check"}]}`),
+					RawText: "Critical issue found",
+					CostUSD: 0.20,
+				}},
+			},
+		},
+	}
+
+	engine, state := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.MaxCostPerPhase = 5.0
+		cfg.MaxReworkCycles = 2
+	})
+
+	err := engine.Run(context.Background())
+	if err == nil {
+		t.Fatal("expected PhaseBudgetExceededError, got nil")
+	}
+
+	var phaseBudgetErr *PhaseBudgetExceededError
+	if !errors.As(err, &phaseBudgetErr) {
+		t.Fatalf("expected PhaseBudgetExceededError, got: %v", err)
+	}
+	if phaseBudgetErr.Phase != "implement" {
+		t.Errorf("phase = %q, want %q", phaseBudgetErr.Phase, "implement")
+	}
+	if phaseBudgetErr.Limit != 5.0 {
+		t.Errorf("limit = %f, want 5.0", phaseBudgetErr.Limit)
+	}
+	if phaseBudgetErr.Actual != 6.0 {
+		t.Errorf("actual = %f, want 6.0", phaseBudgetErr.Actual)
+	}
+
+	// CumulativeCost should reflect the total across both generations.
+	implState := state.Meta().Phases["implement"]
+	if implState == nil {
+		t.Fatal("implement phase state is nil")
+	}
+	if implState.CumulativeCost != 6.0 {
+		t.Errorf("CumulativeCost = %f, want 6.0", implState.CumulativeCost)
+	}
+}
+
+func TestEngine_PhaseBudgetCumulativePreRunCheck(t *testing.T) {
+	// A phase runs via rework. First generation costs $4.50 (under $5 limit).
+	// On the second generation, the pre-run check should detect that cumulative
+	// cost already meets the limit (when exactly at the limit) and prevent
+	// starting the phase, avoiding any token spend.
+	phases := []PhaseConfig{
+		{
+			Name:         "implement",
+			Prompt:       "implement.md",
+			Retry:        RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			FeedbackFrom: []string{"review", "verify"},
+		},
+		{
+			Name:      "verify",
+			Prompt:    "verify.md",
+			DependsOn: []string{"implement"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "review",
+			Type:      "parallel-review",
+			DependsOn: []string{"implement", "verify"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Rework:    &ReworkConfig{Target: "implement"},
+			Reviewers: []ReviewerConfig{
+				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+			},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {
+				// First implement: costs exactly $5 (meets $5 per-phase limit).
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true,"commits":1}`),
+					RawText: "Impl v1",
+					CostUSD: 5.0,
+				}},
+				// Second implement should never run — pre-run check blocks it.
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true,"commits":2}`),
+					RawText: "Impl v2",
+					CostUSD: 1.0,
+				}},
+			},
+			"verify": {
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"verdict":"PASS"}`),
+					RawText: "Verify v1",
+					CostUSD: 0.10,
+				}},
+			},
+			"review/go-specialist": {
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[{"severity":"critical","file":"handler.go","line":42,"issue":"nil deref","suggestion":"add nil check"}]}`),
+					RawText: "Critical issue found",
+					CostUSD: 0.20,
+				}},
+			},
+		},
+	}
+
+	engine, state := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.MaxCostPerPhase = 5.0
+		cfg.MaxReworkCycles = 2
+	})
+
+	err := engine.Run(context.Background())
+	if err == nil {
+		t.Fatal("expected PhaseBudgetExceededError, got nil")
+	}
+
+	var phaseBudgetErr *PhaseBudgetExceededError
+	if !errors.As(err, &phaseBudgetErr) {
+		t.Fatalf("expected PhaseBudgetExceededError, got: %v", err)
+	}
+	if phaseBudgetErr.Phase != "implement" {
+		t.Errorf("phase = %q, want %q", phaseBudgetErr.Phase, "implement")
+	}
+
+	// The first implement run should be the only one — the post-run check
+	// catches it at exactly $5 == limit (>= check).
+	implState := state.Meta().Phases["implement"]
+	if implState == nil {
+		t.Fatal("implement phase state is nil")
+	}
+	if implState.CumulativeCost != 5.0 {
+		t.Errorf("CumulativeCost = %f, want 5.0", implState.CumulativeCost)
+	}
+
+	// The implement runner should only have been called once —
+	// either the post-run check catches $5 == limit on the first gen,
+	// or the pre-run check blocks the second gen.
+	implCalls := 0
+	for _, call := range mock.calls {
+		if call.Phase == "implement" {
+			implCalls++
+		}
+	}
+	if implCalls != 1 {
+		t.Errorf("implement runner called %d times, want 1", implCalls)
+	}
+}
+
+func TestEngine_PhaseBudgetRunnerCapSubtractsCumulativeCost(t *testing.T) {
+	// When a phase re-runs via rework, the runner's MaxBudgetUSD should
+	// reflect the remaining per-phase budget (MaxCostPerPhase - CumulativeCost),
+	// not the full MaxCostPerPhase.
+	//
+	// Pipeline: implement → verify → review (rework → implement)
+	// MaxCostPerPhase = 10, first implement costs $3 → second implement
+	// runner should see MaxBudgetUSD = 7 (10 - 3).
+	phases := []PhaseConfig{
+		{
+			Name:         "implement",
+			Prompt:       "implement.md",
+			Retry:        RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			FeedbackFrom: []string{"review", "verify"},
+		},
+		{
+			Name:      "verify",
+			Prompt:    "verify.md",
+			DependsOn: []string{"implement"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "review",
+			Type:      "parallel-review",
+			DependsOn: []string{"implement", "verify"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Rework:    &ReworkConfig{Target: "implement"},
+			Reviewers: []ReviewerConfig{
+				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+			},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {
+				// First implement: costs $3.
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true,"commits":1}`),
+					RawText: "Impl v1",
+					CostUSD: 3.0,
+				}},
+				// Second implement (rework): costs $2.
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true,"commits":2}`),
+					RawText: "Impl v2",
+					CostUSD: 2.0,
+				}},
+			},
+			"verify": {
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"verdict":"PASS"}`),
+					RawText: "Verify v1",
+					CostUSD: 0.10,
+				}},
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"verdict":"PASS"}`),
+					RawText: "Verify v2",
+					CostUSD: 0.10,
+				}},
+			},
+			"review/go-specialist": {
+				// First review: rework.
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[{"severity":"critical","file":"handler.go","line":42,"issue":"nil deref","suggestion":"add nil check"}]}`),
+					RawText: "Critical issue found",
+					CostUSD: 0.20,
+				}},
+				// Second review: pass.
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[]}`),
+					RawText: "No issues",
+					CostUSD: 0.15,
+				}},
+			},
+		},
+	}
+
+	engine, _ := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.MaxCostPerPhase = 10.0
+		cfg.MaxReworkCycles = 2
+	})
+
+	err := engine.Run(context.Background())
+	if err != nil {
+		t.Fatalf("expected success, got: %v", err)
+	}
+
+	// Find the second implement call and verify its MaxBudgetUSD.
+	implCalls := 0
+	for _, call := range mock.calls {
+		if call.Phase == "implement" {
+			implCalls++
+			if implCalls == 2 {
+				// Second call should have remaining = 10 - 3 = 7.
+				if call.MaxBudgetUSD != 7.0 {
+					t.Errorf("second implement MaxBudgetUSD = %f, want 7.0", call.MaxBudgetUSD)
+				}
+			}
+		}
+	}
+	if implCalls != 2 {
+		t.Errorf("implement called %d times, want 2", implCalls)
+	}
+}

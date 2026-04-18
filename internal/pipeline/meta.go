@@ -22,13 +22,14 @@ const (
 
 // PhaseState holds the status and metrics for a single phase.
 type PhaseState struct {
-	Status     PhaseStatus `json:"status"`
-	Cost       float64     `json:"cost,omitempty"`
-	DurationMs int64       `json:"duration_ms,omitempty"`
-	Error      string      `json:"error,omitempty"`
-	Generation int         `json:"generation,omitempty"`
-	PlanHash   string      `json:"plan_hash,omitempty"`
-	startedAt  time.Time
+	Status         PhaseStatus `json:"status"`
+	Cost           float64     `json:"cost,omitempty"`
+	CumulativeCost float64     `json:"cumulative_cost,omitempty"`
+	DurationMs     int64       `json:"duration_ms,omitempty"`
+	Error          string      `json:"error,omitempty"`
+	Generation     int         `json:"generation,omitempty"`
+	PlanHash       string      `json:"plan_hash,omitempty"`
+	startedAt      time.Time
 }
 
 // PipelineMeta is the top-level state stored in meta.json.

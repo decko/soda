@@ -36,6 +36,9 @@ func TestLoad(t *testing.T) {
 				if cfg.Limits.MaxCostPerTicket != 15.0 {
 					t.Errorf("MaxCostPerTicket = %f, want 15.0", cfg.Limits.MaxCostPerTicket)
 				}
+				if cfg.Limits.MaxCostPerPhase != 8.0 {
+					t.Errorf("MaxCostPerPhase = %f, want 8.0", cfg.Limits.MaxCostPerPhase)
+				}
 				if cfg.StateDir != ".soda" {
 					t.Errorf("StateDir = %q, want %q", cfg.StateDir, ".soda")
 				}
