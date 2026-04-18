@@ -167,12 +167,14 @@ func (s *State) MarkFailed(phase string, phaseErr error) error {
 }
 
 // AccumulateCost adds cost to the phase and total. Phase must exist (via MarkRunning).
+// Both the per-generation Cost and the cross-generation CumulativeCost are updated.
 func (s *State) AccumulateCost(phase string, cost float64) error {
 	ps := s.meta.Phases[phase]
 	if ps == nil {
 		return fmt.Errorf("pipeline: accumulate cost: phase %q not started", phase)
 	}
 	ps.Cost += cost
+	ps.CumulativeCost += cost
 	s.meta.TotalCost += cost
 	return s.flushMeta()
 }

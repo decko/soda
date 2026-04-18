@@ -195,12 +195,18 @@ func TestMarkRunning(t *testing.T) {
 		if ps.Cost != 0.50 {
 			t.Errorf("cost before rerun = %v", ps.Cost)
 		}
+		if ps.CumulativeCost != 0.50 {
+			t.Errorf("cumulative cost before rerun = %v, want 0.50", ps.CumulativeCost)
+		}
 
 		state.MarkRunning("plan")
 
 		ps = state.meta.Phases["plan"]
 		if ps.Cost != 0 {
 			t.Errorf("cost after rerun = %v, want 0", ps.Cost)
+		}
+		if ps.CumulativeCost != 0.50 {
+			t.Errorf("cumulative cost after rerun = %v, want 0.50 (should NOT be reset)", ps.CumulativeCost)
 		}
 		if ps.Error != "" {
 			t.Errorf("error after rerun = %q, want empty", ps.Error)
@@ -327,6 +333,9 @@ func TestAccumulateCost(t *testing.T) {
 		ps := state.meta.Phases["triage"]
 		if !approxEqual(ps.Cost, 0.15) {
 			t.Errorf("phase cost = %v, want 0.15", ps.Cost)
+		}
+		if !approxEqual(ps.CumulativeCost, 0.15) {
+			t.Errorf("phase cumulative cost = %v, want 0.15", ps.CumulativeCost)
 		}
 		if !approxEqual(state.meta.TotalCost, 0.15) {
 			t.Errorf("total cost = %v, want 0.15", state.meta.TotalCost)
