@@ -371,11 +371,19 @@ func (e *Engine) checkNewComments(ctx context.Context, phaseName string, monStat
 	monState.LastCommentID = lastComment.ID
 
 	// Build classifier using engine config.
-	classifier := NewCommentClassifier(
+	classifier, err := NewCommentClassifier(
 		e.config.SelfUser,
 		e.config.BotUsers,
 		e.config.AuthorityResolver,
 	)
+	if err != nil {
+		e.emit(Event{
+			Phase: phaseName,
+			Kind:  EventMonitorWarning,
+			Data:  map[string]any{"warning": fmt.Sprintf("create classifier: %v", err)},
+		})
+		return nil
+	}
 
 	classified := classifier.ClassifyAll(comments)
 

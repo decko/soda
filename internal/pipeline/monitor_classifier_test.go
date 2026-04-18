@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -18,8 +19,27 @@ func (s *staticAuthority) IsAuthoritative(author, filePath string) bool {
 	return false
 }
 
+func TestCommentClassifier_EmptySelfUserReturnsError(t *testing.T) {
+	_, err := NewCommentClassifier("", nil, nil)
+	if err == nil {
+		t.Fatal("expected error for empty selfUser")
+	}
+	if !strings.Contains(err.Error(), "non-empty selfUser") {
+		t.Errorf("error = %q, want mention of non-empty selfUser", err)
+	}
+
+	// Whitespace-only should also fail.
+	_, err = NewCommentClassifier("   ", nil, nil)
+	if err == nil {
+		t.Fatal("expected error for whitespace-only selfUser")
+	}
+}
+
 func TestCommentClassifier_SelfFilter(t *testing.T) {
-	c := NewCommentClassifier("soda-bot", nil, nil)
+	c, err := NewCommentClassifier("soda-bot", nil, nil)
+	if err != nil {
+		t.Fatalf("NewCommentClassifier: %v", err)
+	}
 
 	result := c.Classify(PRComment{
 		ID:     "IC_1",
@@ -39,7 +59,10 @@ func TestCommentClassifier_SelfFilter(t *testing.T) {
 }
 
 func TestCommentClassifier_SelfFilterCaseInsensitive(t *testing.T) {
-	c := NewCommentClassifier("Soda-Bot", nil, nil)
+	c, err := NewCommentClassifier("Soda-Bot", nil, nil)
+	if err != nil {
+		t.Fatalf("NewCommentClassifier: %v", err)
+	}
 
 	result := c.Classify(PRComment{
 		ID:     "IC_1",
@@ -77,7 +100,10 @@ func TestCommentClassifier_BotFilter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := NewCommentClassifier("soda-bot", []string{"dependabot", "renovate"}, nil)
+			c, err := NewCommentClassifier("soda-bot", []string{"dependabot", "renovate"}, nil)
+			if err != nil {
+				t.Fatalf("NewCommentClassifier: %v", err)
+			}
 
 			result := c.Classify(PRComment{
 				ID:     "IC_1",
@@ -104,7 +130,10 @@ func TestCommentClassifier_NonAuthoritative(t *testing.T) {
 			"owner:main.go": true,
 		},
 	}
-	c := NewCommentClassifier("soda-bot", nil, auth)
+	c, err := NewCommentClassifier("soda-bot", nil, auth)
+	if err != nil {
+		t.Fatalf("NewCommentClassifier: %v", err)
+	}
 
 	result := c.Classify(PRComment{
 		ID:     "IC_1",
@@ -127,7 +156,10 @@ func TestCommentClassifier_AuthoritativeCodeChange(t *testing.T) {
 			"owner:main.go": true,
 		},
 	}
-	c := NewCommentClassifier("soda-bot", nil, auth)
+	c, err := NewCommentClassifier("soda-bot", nil, auth)
+	if err != nil {
+		t.Fatalf("NewCommentClassifier: %v", err)
+	}
 
 	result := c.Classify(PRComment{
 		ID:     "IC_1",
@@ -221,7 +253,10 @@ func TestCommentClassifier_ContentClassification(t *testing.T) {
 	}
 
 	// Use nil authority → all authors are authoritative.
-	c := NewCommentClassifier("soda-bot", nil, nil)
+	c, err := NewCommentClassifier("soda-bot", nil, nil)
+	if err != nil {
+		t.Fatalf("NewCommentClassifier: %v", err)
+	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -245,7 +280,10 @@ func TestCommentClassifier_ContentClassification(t *testing.T) {
 }
 
 func TestCommentClassifier_ClassifyAll(t *testing.T) {
-	c := NewCommentClassifier("soda-bot", []string{"ci-bot"}, nil)
+	c, err := NewCommentClassifier("soda-bot", []string{"ci-bot"}, nil)
+	if err != nil {
+		t.Fatalf("NewCommentClassifier: %v", err)
+	}
 
 	comments := []PRComment{
 		{ID: "IC_1", Author: "soda-bot", Body: "Updated code."},
@@ -319,7 +357,10 @@ func TestHasActionable(t *testing.T) {
 
 func TestCommentClassifier_NilAuthority(t *testing.T) {
 	// nil authority → all authors treated as authoritative (backward-compatible).
-	c := NewCommentClassifier("soda-bot", nil, nil)
+	c, err := NewCommentClassifier("soda-bot", nil, nil)
+	if err != nil {
+		t.Fatalf("NewCommentClassifier: %v", err)
+	}
 
 	result := c.Classify(PRComment{
 		ID:     "IC_1",

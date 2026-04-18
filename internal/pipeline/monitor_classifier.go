@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"fmt"
 	"strings"
 )
 
@@ -45,9 +46,13 @@ type CommentClassifier struct {
 }
 
 // NewCommentClassifier creates a classifier. selfUser is the username
-// of the PR author (i.e., the bot). botUsers is a list of known bot
-// usernames to filter. authority may be nil for backward compatibility.
-func NewCommentClassifier(selfUser string, botUsers []string, authority AuthorityResolver) *CommentClassifier {
+// of the PR author (i.e., the bot) and must be non-empty. botUsers is
+// a list of known bot usernames to filter. authority may be nil for
+// backward compatibility.
+func NewCommentClassifier(selfUser string, botUsers []string, authority AuthorityResolver) (*CommentClassifier, error) {
+	if strings.TrimSpace(selfUser) == "" {
+		return nil, fmt.Errorf("pipeline: NewCommentClassifier requires non-empty selfUser")
+	}
 	bots := make(map[string]bool, len(botUsers))
 	for _, u := range botUsers {
 		bots[strings.ToLower(u)] = true
@@ -56,7 +61,7 @@ func NewCommentClassifier(selfUser string, botUsers []string, authority Authorit
 		selfUser:  strings.ToLower(selfUser),
 		botUsers:  bots,
 		authority: authority,
-	}
+	}, nil
 }
 
 // Classify processes a single comment and returns its classification.
