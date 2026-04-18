@@ -4503,6 +4503,75 @@ func TestEngine_ReviewReworkRouting(t *testing.T) {
 			t.Errorf("ReworkCycles = %d, want 0", state.Meta().ReworkCycles)
 		}
 	})
+
+	t.Run("invalid_target_does_not_mutate_state", func(t *testing.T) {
+		// When the rework target refers to a phase that doesn't exist in
+		// the pipeline, routeRework should return an error WITHOUT
+		// incrementing ReworkCycles or emitting a routed event.
+		phases := []PhaseConfig{
+			{
+				Name:   "implement",
+				Prompt: "implement.md",
+				Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+			{
+				Name:      "review",
+				Type:      "parallel-review",
+				DependsOn: []string{"implement"},
+				Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+				Rework:    &ReworkConfig{Target: "nonexistent-phase"},
+				Reviewers: []ReviewerConfig{
+					{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+				},
+			},
+		}
+
+		mock := &flexMockRunner{
+			responses: map[string][]flexResponse{
+				"implement": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"tests_passed":true,"commits":1}`),
+						RawText: "Impl v1",
+						CostUSD: 0.50,
+					},
+				}},
+				"review/go-specialist": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"findings":[{"severity":"critical","file":"x.go","line":1,"issue":"bug","suggestion":"fix it"}]}`),
+						RawText: "Critical issue",
+						CostUSD: 0.15,
+					},
+				}},
+			},
+		}
+
+		var events []Event
+		engine, state := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
+			cfg.OnEvent = func(e Event) {
+				events = append(events, e)
+			}
+		})
+
+		err := engine.Run(context.Background())
+		if err == nil {
+			t.Fatal("expected error for invalid rework target")
+		}
+		if !strings.Contains(err.Error(), "nonexistent-phase") {
+			t.Errorf("error should mention invalid target, got: %v", err)
+		}
+
+		// ReworkCycles must NOT have been incremented.
+		if state.Meta().ReworkCycles != 0 {
+			t.Errorf("ReworkCycles = %d, want 0 (state mutated before validation)", state.Meta().ReworkCycles)
+		}
+
+		// No review_rework_routed event should have been emitted.
+		for _, ev := range events {
+			if ev.Kind == EventReworkRouted {
+				t.Error("review_rework_routed event should not be emitted for invalid target")
+			}
+		}
+	})
 }
 
 func TestEngine_ReviewReworkFeedbackInjected(t *testing.T) {

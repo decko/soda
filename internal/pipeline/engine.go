@@ -360,18 +360,26 @@ type reworkRoute struct {
 	forceFirst bool
 }
 
-// routeRework handles a reworkSignal by incrementing the rework cycle counter,
-// emitting a routed event, flushing meta, and re-slicing the pipeline phases
-// to start from the rework target. Returns the new route or an error.
+// routeRework handles a reworkSignal by validating the target phase exists,
+// incrementing the rework cycle counter, emitting a routed event, flushing
+// meta, and re-slicing the pipeline phases to start from the rework target.
+// Returns the new route or an error.
 //
-// When the rework target re-runs (e.g. implement), its downstream
-// dependents (verify, review) also re-run because they detect a re-ran
-// dependency via reranPhases. Those re-runs overwrite the previous
-// verify.json / review.json result files. Consequently, on the NEXT
-// rework cycle the ReworkFeedback extracted for implement will reflect
-// only the latest failures — previous failures are implicitly reset.
-// See ReworkFeedback doc comment for the full reset lifecycle.
+// The target phase is validated before any state mutation so that an invalid
+// target does not leave behind an incremented counter or a spurious event.
 func (e *Engine) routeRework(phaseName string, sig *reworkSignal) (*reworkRoute, error) {
+	// Validate the target phase exists before mutating any state.
+	targetIdx := -1
+	for i, p := range e.config.Pipeline.Phases {
+		if p.Name == sig.target {
+			targetIdx = i
+			break
+		}
+	}
+	if targetIdx < 0 {
+		return nil, fmt.Errorf("engine: rework routing requires phase %q in the pipeline", sig.target)
+	}
+
 	// Increment the appropriate counter based on whether the target is
 	// a corrective phase (patch) or a full rework (implement).
 	isPatch := e.isCorrectivePhase(sig.target)
@@ -380,7 +388,6 @@ func (e *Engine) routeRework(phaseName string, sig *reworkSignal) (*reworkRoute,
 	} else {
 		e.state.Meta().ReworkCycles++
 	}
-
 	cycle := e.state.Meta().ReworkCycles
 	if isPatch {
 		cycle = e.state.Meta().PatchCycles
@@ -398,17 +405,6 @@ func (e *Engine) routeRework(phaseName string, sig *reworkSignal) (*reworkRoute,
 
 	if err := e.state.flushMeta(); err != nil {
 		return nil, fmt.Errorf("engine: flush meta after rework routing: %w", err)
-	}
-
-	targetIdx := -1
-	for i, p := range e.config.Pipeline.Phases {
-		if p.Name == sig.target {
-			targetIdx = i
-			break
-		}
-	}
-	if targetIdx < 0 {
-		return nil, fmt.Errorf("engine: rework routing requires phase %q in the pipeline", sig.target)
 	}
 
 	return &reworkRoute{
