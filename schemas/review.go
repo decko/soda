@@ -10,8 +10,8 @@ type ReviewOutput struct {
 
 // ReviewFinding is a single issue found by a specialist reviewer.
 type ReviewFinding struct {
-	Source     string `json:"source"`   // reviewer name, e.g. "go-specialist" or "ai-harness"
-	Severity   string `json:"severity"` // "critical", "major", "minor"
+	Source     string `json:"source,omitempty"` // engine-populated reviewer name, not LLM-provided
+	Severity   string `json:"severity"`         // "critical", "major", "minor"
 	File       string `json:"file"`
 	Line       int    `json:"line,omitempty"`
 	Issue      string `json:"issue"`
