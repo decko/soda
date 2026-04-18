@@ -7790,3 +7790,377 @@ func TestEngine_ReviewReworkAndPatchIndependent(t *testing.T) {
 		t.Errorf("runner called %d times, want 8", len(mock.calls))
 	}
 }
+
+func TestEngine_PhaseBudgetExceeded(t *testing.T) {
+	// Phase costs $10 but per-phase limit is $5 → PhaseBudgetExceededError.
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage done",
+					CostUSD: 10.0,
+				},
+			}},
+		},
+	}
+
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.MaxCostPerPhase = 5.0
+	})
+
+	err := engine.Run(context.Background())
+	if err == nil {
+		t.Fatal("expected PhaseBudgetExceededError")
+	}
+
+	var phaseBudgetErr *PhaseBudgetExceededError
+	if !errors.As(err, &phaseBudgetErr) {
+		t.Fatalf("expected PhaseBudgetExceededError, got: %v", err)
+	}
+	if phaseBudgetErr.Phase != "triage" {
+		t.Errorf("phase = %q, want %q", phaseBudgetErr.Phase, "triage")
+	}
+	if phaseBudgetErr.Limit != 5.0 {
+		t.Errorf("limit = %f, want 5.0", phaseBudgetErr.Limit)
+	}
+	if phaseBudgetErr.Actual != 10.0 {
+		t.Errorf("actual = %f, want 10.0", phaseBudgetErr.Actual)
+	}
+}
+
+func TestEngine_PhaseBudgetExceeded_AtLimit(t *testing.T) {
+	// Phase costs exactly the limit → PhaseBudgetExceededError (>= check).
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage done",
+					CostUSD: 5.0,
+				},
+			}},
+		},
+	}
+
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.MaxCostPerPhase = 5.0
+	})
+
+	err := engine.Run(context.Background())
+	if err == nil {
+		t.Fatal("expected PhaseBudgetExceededError")
+	}
+
+	var phaseBudgetErr *PhaseBudgetExceededError
+	if !errors.As(err, &phaseBudgetErr) {
+		t.Fatalf("expected PhaseBudgetExceededError, got: %v", err)
+	}
+	if phaseBudgetErr.Phase != "triage" {
+		t.Errorf("phase = %q, want %q", phaseBudgetErr.Phase, "triage")
+	}
+}
+
+func TestEngine_PhaseBudgetUnderLimit(t *testing.T) {
+	// Phase costs $4 with per-phase limit $5 → succeeds.
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "plan",
+			Prompt:    "plan.md",
+			DependsOn: []string{"triage"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage done",
+					CostUSD: 4.0,
+				},
+			}},
+			"plan": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tasks":[{"id":"1","description":"task"}]}`),
+					RawText: "Plan done",
+					CostUSD: 3.0,
+				},
+			}},
+		},
+	}
+
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.MaxCostPerPhase = 5.0
+	})
+
+	err := engine.Run(context.Background())
+	if err != nil {
+		t.Fatalf("expected success, got: %v", err)
+	}
+
+	// Both phases should complete and each should be under the per-phase limit.
+	if !state.IsCompleted("triage") {
+		t.Error("triage should be completed")
+	}
+	if !state.IsCompleted("plan") {
+		t.Error("plan should be completed")
+	}
+	if state.Meta().Phases["triage"].Cost != 4.0 {
+		t.Errorf("triage cost = %f, want 4.0", state.Meta().Phases["triage"].Cost)
+	}
+	if state.Meta().Phases["plan"].Cost != 3.0 {
+		t.Errorf("plan cost = %f, want 3.0", state.Meta().Phases["plan"].Cost)
+	}
+}
+
+func TestEngine_PhaseBudgetWarning(t *testing.T) {
+	// Phase costs $4.6 with per-phase limit $5 → warning at 90% ($4.50).
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage done",
+					CostUSD: 4.6,
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.MaxCostPerPhase = 5.0
+		cfg.OnEvent = func(ev Event) { events = append(events, ev) }
+	})
+
+	err := engine.Run(context.Background())
+	if err != nil {
+		t.Fatalf("expected success, got: %v", err)
+	}
+
+	hasWarning := false
+	for _, ev := range events {
+		if ev.Kind == EventPhaseBudgetWarning {
+			hasWarning = true
+			if ev.Phase != "triage" {
+				t.Errorf("warning phase = %q, want %q", ev.Phase, "triage")
+			}
+		}
+	}
+	if !hasWarning {
+		t.Error("expected phase_budget_warning event")
+	}
+}
+
+func TestEngine_PhaseBudgetExceededEmitsEvent(t *testing.T) {
+	// Verify that the phase_budget_exceeded event is emitted.
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage done",
+					CostUSD: 10.0,
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.MaxCostPerPhase = 5.0
+		cfg.OnEvent = func(ev Event) { events = append(events, ev) }
+	})
+
+	_ = engine.Run(context.Background())
+
+	hasExceeded := false
+	for _, ev := range events {
+		if ev.Kind == EventPhaseBudgetExceeded {
+			hasExceeded = true
+			if ev.Phase != "triage" {
+				t.Errorf("exceeded phase = %q, want %q", ev.Phase, "triage")
+			}
+		}
+	}
+	if !hasExceeded {
+		t.Error("expected phase_budget_exceeded event")
+	}
+}
+
+func TestEngine_PhaseBudgetCapsRunnerOpts(t *testing.T) {
+	// When MaxCostPerPhase < remaining pipeline budget, the runner
+	// should receive MaxCostPerPhase as its MaxBudgetUSD.
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage done",
+					CostUSD: 2.0,
+				},
+			}},
+		},
+	}
+
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.MaxCostUSD = 100.0    // plenty of pipeline budget
+		cfg.MaxCostPerPhase = 8.0 // per-phase limit is tighter
+	})
+
+	err := engine.Run(context.Background())
+	if err != nil {
+		t.Fatalf("expected success, got: %v", err)
+	}
+
+	if len(mock.calls) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(mock.calls))
+	}
+	// Runner should have received the per-phase cap, not the pipeline remaining.
+	if mock.calls[0].MaxBudgetUSD != 8.0 {
+		t.Errorf("MaxBudgetUSD = %f, want 8.0", mock.calls[0].MaxBudgetUSD)
+	}
+}
+
+func TestEngine_PhaseBudgetNoCap(t *testing.T) {
+	// When MaxCostPerPhase is 0, no per-phase enforcement.
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage done",
+					CostUSD: 50.0,
+				},
+			}},
+		},
+	}
+
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.MaxCostPerPhase = 0 // disabled
+	})
+
+	err := engine.Run(context.Background())
+	if err != nil {
+		t.Fatalf("expected success (no per-phase cap), got: %v", err)
+	}
+}
+
+func TestEngine_PhaseBudgetSecondPhaseExceeds(t *testing.T) {
+	// First phase is under budget, second phase exceeds per-phase limit.
+	// Each phase gets its own cost counter that resets on MarkRunning.
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "plan",
+			Prompt:    "plan.md",
+			DependsOn: []string{"triage"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage done",
+					CostUSD: 3.0, // under $5 per-phase limit
+				},
+			}},
+			"plan": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tasks":[{"id":"1","description":"task"}]}`),
+					RawText: "Plan done",
+					CostUSD: 6.0, // over $5 per-phase limit
+				},
+			}},
+		},
+	}
+
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.MaxCostPerPhase = 5.0
+	})
+
+	err := engine.Run(context.Background())
+	if err == nil {
+		t.Fatal("expected PhaseBudgetExceededError")
+	}
+
+	var phaseBudgetErr *PhaseBudgetExceededError
+	if !errors.As(err, &phaseBudgetErr) {
+		t.Fatalf("expected PhaseBudgetExceededError, got: %v", err)
+	}
+	if phaseBudgetErr.Phase != "plan" {
+		t.Errorf("phase = %q, want %q", phaseBudgetErr.Phase, "plan")
+	}
+
+	// Triage should have completed successfully.
+	if !state.IsCompleted("triage") {
+		t.Error("triage should be completed")
+	}
+	// Plan should be marked failed.
+	ps := state.Meta().Phases["plan"]
+	if ps == nil || ps.Status != PhaseFailed {
+		t.Error("plan should be marked failed")
+	}
+}
