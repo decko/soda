@@ -1360,10 +1360,7 @@ func (e *Engine) gateRework(phase PhaseConfig, raw json.RawMessage) error {
 				issues = append(issues, finding.Issue)
 			}
 		}
-		reason := fmt.Sprintf("%s requires rework but max cycles (%d) reached", phase.Name, maxCycles)
-		if len(issues) > 0 {
-			reason += ": " + strings.Join(issues, "; ")
-		}
+
 		e.emit(Event{
 			Phase: phase.Name,
 			Kind:  EventReworkMaxCycles,
@@ -1372,6 +1369,19 @@ func (e *Engine) gateRework(phase PhaseConfig, raw json.RawMessage) error {
 				"max_rework_cycles": maxCycles,
 			},
 		})
+
+		// When no critical/major issues remain, downgrade the verdict to
+		// "pass-with-follow-ups" so the pipeline proceeds to submit and
+		// the remaining minors are handled by the follow-up phase.
+		if len(issues) == 0 {
+			if err := e.downgradeToFollowUps(phase, raw, result.Findings); err != nil {
+				return err
+			}
+			return nil
+		}
+
+		reason := fmt.Sprintf("%s requires rework but max cycles (%d) reached: %s",
+			phase.Name, maxCycles, strings.Join(issues, "; "))
 		return &PhaseGateError{Phase: phase.Name, Reason: reason}
 	}
 
@@ -1386,6 +1396,58 @@ func (e *Engine) gateRework(phase PhaseConfig, raw json.RawMessage) error {
 
 	// Signal rework needed — the engine loop will handle routing.
 	return &reworkSignal{target: phase.Rework.Target, findings: findings}
+}
+
+// downgradeToFollowUps rewrites the phase result on disk, changing the
+// verdict from "rework" to "pass-with-follow-ups". This is called when
+// max rework cycles are exhausted but the remaining findings are all
+// minor — the pipeline can proceed to submit and handle them as follow-ups
+// instead of blocking.
+//
+// The raw JSON is round-tripped through map[string]any (rather than a
+// typed struct like schemas.ReviewOutput) so that fields belonging to
+// non-review phases are preserved. The minor count is derived from the
+// already-parsed reworkVerdict findings, keeping this function
+// phase-agnostic — consistent with gateRework.
+func (e *Engine) downgradeToFollowUps(phase PhaseConfig, raw json.RawMessage, findings []struct {
+	Severity string `json:"severity"`
+	Issue    string `json:"issue"`
+}) error {
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return fmt.Errorf("engine: downgrade to follow-ups: unmarshal %s result: %w", phase.Name, err)
+	}
+
+	doc["verdict"] = "pass-with-follow-ups"
+
+	updated, err := json.Marshal(doc)
+	if err != nil {
+		return fmt.Errorf("engine: downgrade to follow-ups: marshal %s result: %w", phase.Name, err)
+	}
+	if err := e.state.WriteResult(phase.Name, json.RawMessage(updated)); err != nil {
+		return fmt.Errorf("engine: downgrade to follow-ups: write %s result: %w", phase.Name, err)
+	}
+
+	minorCount := 0
+	for _, f := range findings {
+		if strings.EqualFold(f.Severity, "minor") {
+			minorCount++
+		}
+	}
+
+	e.emit(Event{
+		Phase: phase.Name,
+		Kind:  EventReworkMinorsDowngraded,
+		Data: map[string]any{
+			"original_verdict":  "rework",
+			"new_verdict":       "pass-with-follow-ups",
+			"minor_count":       minorCount,
+			"rework_cycles":     e.state.Meta().ReworkCycles,
+			"max_rework_cycles": e.config.maxReworkCycles(),
+		},
+	})
+
+	return nil
 }
 
 // regressionResult holds the outcome of a regression check between two
