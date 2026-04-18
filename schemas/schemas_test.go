@@ -185,6 +185,95 @@ func TestPatchSchema_MatchesStruct(t *testing.T) {
 	}
 }
 
+func TestReviewSchema_MatchesStruct(t *testing.T) {
+	var parsed struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+		Required   []string                   `json:"required"`
+	}
+	if err := json.Unmarshal([]byte(ReviewSchema), &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	// ReviewOutput has these non-omitempty fields.
+	wantRequired := []string{"findings", "ticket_key", "verdict"}
+	if len(parsed.Required) != len(wantRequired) {
+		t.Fatalf("required count = %d, want %d: %v", len(parsed.Required), len(wantRequired), parsed.Required)
+	}
+	reqSet := make(map[string]bool)
+	for _, field := range parsed.Required {
+		reqSet[field] = true
+	}
+	for _, want := range wantRequired {
+		if !reqSet[want] {
+			t.Errorf("required missing %q", want)
+		}
+	}
+
+	// All top-level properties should exist.
+	wantProps := []string{"findings", "ticket_key", "verdict"}
+	for _, prop := range wantProps {
+		if _, ok := parsed.Properties[prop]; !ok {
+			t.Errorf("missing property %q", prop)
+		}
+	}
+
+	// Drill into findings array items to validate ReviewFinding schema.
+	findingsRaw, ok := parsed.Properties["findings"]
+	if !ok {
+		t.Fatal("missing 'findings' property")
+	}
+
+	var findings struct {
+		Type  string `json:"type"`
+		Items struct {
+			Type       string                 `json:"type"`
+			Properties map[string]interface{} `json:"properties"`
+			Required   []string               `json:"required"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(findingsRaw, &findings); err != nil {
+		t.Fatalf("unmarshal findings: %v", err)
+	}
+
+	if findings.Type != "array" {
+		t.Errorf("findings.type = %q, want 'array'", findings.Type)
+	}
+	if findings.Items.Type != "object" {
+		t.Errorf("findings.items.type = %q, want 'object'", findings.Items.Type)
+	}
+
+	// ReviewFinding non-omitempty fields are required.
+	wantItemRequired := []string{"file", "issue", "severity", "suggestion"}
+	if len(findings.Items.Required) != len(wantItemRequired) {
+		t.Fatalf("findings.items required count = %d, want %d: %v",
+			len(findings.Items.Required), len(wantItemRequired), findings.Items.Required)
+	}
+	itemReqSet := make(map[string]bool)
+	for _, field := range findings.Items.Required {
+		itemReqSet[field] = true
+	}
+	for _, want := range wantItemRequired {
+		if !itemReqSet[want] {
+			t.Errorf("findings.items required missing %q", want)
+		}
+	}
+
+	// source and line are omitempty, so NOT required.
+	for _, field := range []string{"source", "line"} {
+		if itemReqSet[field] {
+			t.Errorf("findings.items: %q should not be required (omitempty)", field)
+		}
+	}
+
+	// All ReviewFinding properties should exist.
+	wantItemProps := []string{"file", "issue", "line", "severity", "source", "suggestion"}
+	for _, prop := range wantItemProps {
+		if _, ok := findings.Items.Properties[prop]; !ok {
+			t.Errorf("findings.items missing property %q", prop)
+		}
+	}
+}
+
 func TestImplementSchema_NestedTypes(t *testing.T) {
 	var parsed struct {
 		Properties map[string]json.RawMessage `json:"properties"`
