@@ -911,7 +911,7 @@ func (e *Engine) buildPromptData(phase PhaseConfig) (PromptData, error) {
 	// so after verify/review re-run and overwrite their results, the
 	// next rework cycle sees only the new failures. See ReworkFeedback
 	// doc comment for the full reset lifecycle.
-	if sources := e.feedbackSourcesFor(phase); len(sources) > 0 {
+	if sources := phase.FeedbackFrom; len(sources) > 0 {
 		for _, source := range sources {
 			if fb := e.extractFeedbackFrom(source); fb != nil {
 				data.ReworkFeedback = fb
