@@ -109,6 +109,38 @@ func LoadPipeline(path string) (*PhasePipeline, error) {
 		return nil, fmt.Errorf("pipeline: no phases defined in %s", path)
 	}
 
+	// Build a set of known phase names for cross-reference validation.
+	phaseNames := make(map[string]struct{}, len(pipeline.Phases))
+	for _, p := range pipeline.Phases {
+		phaseNames[p.Name] = struct{}{}
+	}
+
+	// Validate cross-references: ReworkConfig.Target, FeedbackFrom,
+	// CorrectiveConfig.Phase, and CorrectiveConfig.EscalateTo must
+	// refer to phases that exist in the pipeline.
+	for _, phase := range pipeline.Phases {
+		if phase.Rework != nil {
+			if _, ok := phaseNames[phase.Rework.Target]; !ok {
+				return nil, fmt.Errorf("pipeline: phase %q rework target %q not found in pipeline", phase.Name, phase.Rework.Target)
+			}
+		}
+		for _, src := range phase.FeedbackFrom {
+			if _, ok := phaseNames[src]; !ok {
+				return nil, fmt.Errorf("pipeline: phase %q feedback_from references unknown phase %q", phase.Name, src)
+			}
+		}
+		if phase.Corrective != nil {
+			if _, ok := phaseNames[phase.Corrective.Phase]; !ok {
+				return nil, fmt.Errorf("pipeline: phase %q corrective.phase %q not found", phase.Name, phase.Corrective.Phase)
+			}
+			if phase.Corrective.EscalateTo != "" {
+				if _, ok := phaseNames[phase.Corrective.EscalateTo]; !ok {
+					return nil, fmt.Errorf("pipeline: phase %q corrective.escalate_to %q not found", phase.Name, phase.Corrective.EscalateTo)
+				}
+			}
+		}
+	}
+
 	// Resolve schemas: if a phase has no inline schema, look up the
 	// generated schema by phase name from the schemas package.
 	for idx := range pipeline.Phases {

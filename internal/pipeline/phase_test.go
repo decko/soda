@@ -257,4 +257,179 @@ func TestLoadPipeline(t *testing.T) {
 			t.Fatal("expected error for invalid yaml")
 		}
 	})
+
+	t.Run("errors_on_invalid_rework_target", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "phases.yaml")
+		content := `phases:
+  - name: implement
+    prompt: prompts/implement.md
+    timeout: 5m
+  - name: review
+    prompt: prompts/review.md
+    timeout: 5m
+    rework:
+      target: nonexistent
+`
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		_, err := LoadPipeline(path)
+		if err == nil {
+			t.Fatal("expected error for invalid rework target")
+		}
+		if !strings.Contains(err.Error(), "rework target") {
+			t.Errorf("error = %q, want mention of rework target", err)
+		}
+		if !strings.Contains(err.Error(), "nonexistent") {
+			t.Errorf("error = %q, want mention of %q", err, "nonexistent")
+		}
+	})
+
+	t.Run("errors_on_invalid_feedback_from", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "phases.yaml")
+		content := `phases:
+  - name: implement
+    prompt: prompts/implement.md
+    timeout: 5m
+    feedback_from:
+      - nonexistent
+`
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		_, err := LoadPipeline(path)
+		if err == nil {
+			t.Fatal("expected error for invalid feedback_from")
+		}
+		if !strings.Contains(err.Error(), "feedback_from") {
+			t.Errorf("error = %q, want mention of feedback_from", err)
+		}
+		if !strings.Contains(err.Error(), "nonexistent") {
+			t.Errorf("error = %q, want mention of %q", err, "nonexistent")
+		}
+	})
+
+	t.Run("valid_rework_target_and_feedback_from", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "phases.yaml")
+		content := `phases:
+  - name: implement
+    prompt: prompts/implement.md
+    timeout: 5m
+    feedback_from:
+      - review
+  - name: review
+    prompt: prompts/review.md
+    timeout: 5m
+    rework:
+      target: implement
+`
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		pipeline, err := LoadPipeline(path)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(pipeline.Phases) != 2 {
+			t.Errorf("got %d phases, want 2", len(pipeline.Phases))
+		}
+	})
+
+	t.Run("errors_on_invalid_corrective_phase", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "phases.yaml")
+		content := `phases:
+  - name: verify
+    prompt: prompts/verify.md
+    timeout: 5m
+    corrective:
+      phase: nonexistent
+      max_attempts: 2
+      on_exhausted: stop
+`
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		_, err := LoadPipeline(path)
+		if err == nil {
+			t.Fatal("expected error for invalid corrective.phase")
+		}
+		if !strings.Contains(err.Error(), "corrective.phase") {
+			t.Errorf("error = %q, want mention of corrective.phase", err)
+		}
+		if !strings.Contains(err.Error(), "nonexistent") {
+			t.Errorf("error = %q, want mention of %q", err, "nonexistent")
+		}
+	})
+
+	t.Run("errors_on_invalid_corrective_escalate_to", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "phases.yaml")
+		content := `phases:
+  - name: patch
+    prompt: prompts/patch.md
+    timeout: 5m
+  - name: verify
+    prompt: prompts/verify.md
+    timeout: 5m
+    corrective:
+      phase: patch
+      max_attempts: 2
+      on_exhausted: escalate
+      escalate_to: nonexistent
+`
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		_, err := LoadPipeline(path)
+		if err == nil {
+			t.Fatal("expected error for invalid corrective.escalate_to")
+		}
+		if !strings.Contains(err.Error(), "corrective.escalate_to") {
+			t.Errorf("error = %q, want mention of corrective.escalate_to", err)
+		}
+		if !strings.Contains(err.Error(), "nonexistent") {
+			t.Errorf("error = %q, want mention of %q", err, "nonexistent")
+		}
+	})
+
+	t.Run("valid_corrective_config", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "phases.yaml")
+		content := `phases:
+  - name: implement
+    prompt: prompts/implement.md
+    timeout: 5m
+  - name: patch
+    prompt: prompts/patch.md
+    timeout: 5m
+  - name: verify
+    prompt: prompts/verify.md
+    timeout: 5m
+    corrective:
+      phase: patch
+      max_attempts: 2
+      on_exhausted: escalate
+      escalate_to: implement
+`
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		pipeline, err := LoadPipeline(path)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(pipeline.Phases) != 3 {
+			t.Errorf("got %d phases, want 3", len(pipeline.Phases))
+		}
+	})
 }
