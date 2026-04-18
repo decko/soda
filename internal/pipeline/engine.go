@@ -941,12 +941,6 @@ func (e *Engine) buildPromptData(phase PhaseConfig) (PromptData, error) {
 	return data, nil
 }
 
-// feedbackSourcesFor returns the ordered list of feedback sources for a phase.
-// Sources are read from the phase's own FeedbackFrom config.
-func (e *Engine) feedbackSourcesFor(phase PhaseConfig) []string {
-	return phase.FeedbackFrom
-}
-
 // extractFeedbackFrom dispatches to the appropriate source-specific feedback
 // extractor. Returns nil for unknown sources.
 func (e *Engine) extractFeedbackFrom(source string) *ReworkFeedback {
