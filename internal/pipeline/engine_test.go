@@ -4758,6 +4758,41 @@ func TestEngine_ReviewReworkDefaultMaxCycles(t *testing.T) {
 	}
 }
 
+func TestEngine_remoteName(t *testing.T) {
+	t.Run("default", func(t *testing.T) {
+		// When PushTo is empty, remoteName() should return "origin".
+		stateDir := t.TempDir()
+		state, err := LoadOrCreate(stateDir, "REMOTE-1")
+		if err != nil {
+			t.Fatalf("LoadOrCreate: %v", err)
+		}
+		e := &Engine{config: EngineConfig{}, state: state}
+		if got := e.remoteName(); got != "origin" {
+			t.Errorf("remoteName() = %q, want %q", got, "origin")
+		}
+	})
+
+	t.Run("configured", func(t *testing.T) {
+		// When PushTo is set, remoteName() should return the configured value.
+		stateDir := t.TempDir()
+		state, err := LoadOrCreate(stateDir, "REMOTE-2")
+		if err != nil {
+			t.Fatalf("LoadOrCreate: %v", err)
+		}
+		e := &Engine{
+			config: EngineConfig{
+				PromptConfig: PromptConfigData{
+					Repo: RepoConfig{PushTo: "upstream"},
+				},
+			},
+			state: state,
+		}
+		if got := e.remoteName(); got != "upstream" {
+			t.Errorf("remoteName() = %q, want %q", got, "upstream")
+		}
+	})
+}
+
 func TestEngine_ReviewReworkCyclesPersisted(t *testing.T) {
 	// Verify rework cycles are persisted to meta.json across engine restarts.
 	stateDir := t.TempDir()
