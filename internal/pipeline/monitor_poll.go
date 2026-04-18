@@ -485,9 +485,10 @@ func (e *Engine) checkMergeConflicts(ctx context.Context, phaseName string, monS
 	}
 
 	// Fetch latest base branch before checking.
-	_ = git.FetchBranch(ctx, workDir, "origin", baseBranch)
+	remote := e.remoteName()
+	_ = git.FetchBranch(ctx, workDir, remote, baseBranch)
 
-	hasConflicts, err := git.NeedsMergeWithBase(ctx, workDir, "origin/"+baseBranch)
+	hasConflicts, err := git.NeedsMergeWithBase(ctx, workDir, remote+"/"+baseBranch)
 	if err != nil {
 		// Non-fatal: some setups may not have origin configured.
 		return
@@ -508,7 +509,7 @@ func (e *Engine) checkMergeConflicts(ctx context.Context, phaseName string, monS
 	}
 
 	// Attempt auto-rebase.
-	if err := git.Rebase(ctx, workDir, "origin/"+baseBranch); err != nil {
+	if err := git.Rebase(ctx, workDir, remote+"/"+baseBranch); err != nil {
 		e.emit(Event{
 			Phase: phaseName,
 			Kind:  EventMonitorRebaseFailed,
@@ -521,7 +522,7 @@ func (e *Engine) checkMergeConflicts(ctx context.Context, phaseName string, monS
 	}
 
 	// Push the rebased branch.
-	if err := git.ForcePush(ctx, workDir, "origin"); err != nil {
+	if err := git.ForcePush(ctx, workDir, remote); err != nil {
 		e.emit(Event{
 			Phase: phaseName,
 			Kind:  EventMonitorRebaseFailed,
@@ -584,7 +585,8 @@ func (e *Engine) respondToComments(ctx context.Context, phase PhaseConfig, class
 
 	// Fetch latest base branch before computing diff so the comparison
 	// is against the current remote state, not a stale local ref.
-	if fetchErr := git.FetchBranch(ctx, workDir, "origin", baseBranch); fetchErr != nil {
+	remote := e.remoteName()
+	if fetchErr := git.FetchBranch(ctx, workDir, remote, baseBranch); fetchErr != nil {
 		// Non-fatal: proceed with potentially stale ref.
 		e.emit(Event{
 			Phase: phase.Name,
@@ -595,7 +597,7 @@ func (e *Engine) respondToComments(ctx context.Context, phase PhaseConfig, class
 		})
 	}
 
-	diffCtx, err := git.Diff(ctx, workDir, "origin/"+baseBranch, 50000)
+	diffCtx, err := git.Diff(ctx, workDir, remote+"/"+baseBranch, 50000)
 	if err != nil {
 		// Non-fatal: the session can still read files.
 		diffCtx = "(diff unavailable: " + err.Error() + ")"
