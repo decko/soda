@@ -1308,6 +1308,155 @@ func TestEngine_gateRework_nilReworkConfig(t *testing.T) {
 	}
 }
 
+func TestEngine_downgradeToFollowUps(t *testing.T) {
+	// Direct unit test for downgradeToFollowUps: verify it rewrites the
+	// verdict on disk and emits the correct event.
+	phases := []PhaseConfig{
+		{
+			Name:   "review",
+			Prompt: "review.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Rework: &ReworkConfig{Target: "implement"},
+		},
+	}
+
+	var events []Event
+	engine, state := setupEngine(t, phases, &flexMockRunner{}, func(cfg *EngineConfig) {
+		cfg.MaxReworkCycles = 1
+		cfg.OnEvent = func(e Event) {
+			events = append(events, e)
+		}
+	})
+	state.Meta().ReworkCycles = 1
+
+	// Write a review result with rework verdict and minor findings.
+	raw := json.RawMessage(`{"ticket_key":"TEST-1","findings":[{"severity":"minor","file":"a.go","issue":"naming","suggestion":"rename"},{"severity":"minor","file":"b.go","issue":"style","suggestion":"fix"}],"verdict":"rework"}`)
+	if err := state.WriteResult("review", raw); err != nil {
+		t.Fatalf("WriteResult: %v", err)
+	}
+
+	phase := PhaseConfig{
+		Name:   "review",
+		Rework: &ReworkConfig{Target: "implement"},
+	}
+	if err := engine.downgradeToFollowUps(phase, raw); err != nil {
+		t.Fatalf("downgradeToFollowUps: %v", err)
+	}
+
+	// Verify the result on disk was rewritten.
+	updated, err := state.ReadResult("review")
+	if err != nil {
+		t.Fatalf("ReadResult: %v", err)
+	}
+	var reviewOutput schemas.ReviewOutput
+	if err := json.Unmarshal(updated, &reviewOutput); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if reviewOutput.Verdict != "pass-with-follow-ups" {
+		t.Errorf("verdict = %q, want %q", reviewOutput.Verdict, "pass-with-follow-ups")
+	}
+	if len(reviewOutput.Findings) != 2 {
+		t.Errorf("findings count = %d, want 2", len(reviewOutput.Findings))
+	}
+
+	// Verify event was emitted.
+	hasDowngraded := false
+	for _, e := range events {
+		if e.Kind == EventReworkMinorsDowngraded {
+			hasDowngraded = true
+			if mc, _ := e.Data["minor_count"].(int); mc != 2 {
+				t.Errorf("minor_count = %d, want 2", mc)
+			}
+		}
+	}
+	if !hasDowngraded {
+		t.Error("rework_minors_downgraded event not emitted")
+	}
+}
+
+func TestEngine_gateRework_maxCyclesMinorsOnly(t *testing.T) {
+	// When max rework cycles exhausted with only minor findings,
+	// gateRework should downgrade to pass-with-follow-ups (return nil).
+	phases := []PhaseConfig{
+		{
+			Name:   "review",
+			Prompt: "review.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Rework: &ReworkConfig{Target: "implement"},
+		},
+	}
+
+	engine, state := setupEngine(t, phases, &flexMockRunner{}, func(cfg *EngineConfig) {
+		cfg.MaxReworkCycles = 1
+	})
+	state.Meta().ReworkCycles = 1
+
+	// Write the result to disk so downgradeToFollowUps can rewrite it.
+	raw := json.RawMessage(`{"ticket_key":"TEST-1","findings":[{"severity":"minor","file":"x.go","issue":"naming","suggestion":"rename"}],"verdict":"rework"}`)
+	if err := state.WriteResult("review", raw); err != nil {
+		t.Fatalf("WriteResult: %v", err)
+	}
+
+	phase := PhaseConfig{
+		Name:   "review",
+		Rework: &ReworkConfig{Target: "implement"},
+	}
+	err := engine.gateRework(phase, raw)
+	if err != nil {
+		t.Fatalf("expected nil (downgrade), got: %v", err)
+	}
+
+	// Verify the result was rewritten.
+	updated, err := state.ReadResult("review")
+	if err != nil {
+		t.Fatalf("ReadResult: %v", err)
+	}
+	var output schemas.ReviewOutput
+	if err := json.Unmarshal(updated, &output); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if output.Verdict != "pass-with-follow-ups" {
+		t.Errorf("verdict = %q, want %q", output.Verdict, "pass-with-follow-ups")
+	}
+}
+
+func TestEngine_gateRework_maxCyclesCriticalBlocks(t *testing.T) {
+	// When max rework cycles exhausted with critical findings,
+	// gateRework should still return PhaseGateError.
+	phases := []PhaseConfig{
+		{
+			Name:   "review",
+			Prompt: "review.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Rework: &ReworkConfig{Target: "implement"},
+		},
+	}
+
+	engine, state := setupEngine(t, phases, &flexMockRunner{}, func(cfg *EngineConfig) {
+		cfg.MaxReworkCycles = 1
+	})
+	state.Meta().ReworkCycles = 1
+
+	phase := PhaseConfig{
+		Name:   "review",
+		Rework: &ReworkConfig{Target: "implement"},
+	}
+	raw := json.RawMessage(`{"verdict":"rework","findings":[{"severity":"critical","issue":"SQL injection"}]}`)
+
+	err := engine.gateRework(phase, raw)
+	if err == nil {
+		t.Fatal("expected PhaseGateError when critical findings remain")
+	}
+
+	var gateErr *PhaseGateError
+	if !errors.As(err, &gateErr) {
+		t.Fatalf("expected PhaseGateError, got: %T: %v", err, err)
+	}
+	if !strings.Contains(gateErr.Reason, "SQL injection") {
+		t.Errorf("reason should mention the critical issue, got: %q", gateErr.Reason)
+	}
+}
+
 func TestEngineFullLifecycle(t *testing.T) {
 	// A realistic 4-phase pipeline: triage -> plan -> implement -> verify.
 	// Each phase depends on the previous one. Prompt templates reference
@@ -4346,6 +4495,228 @@ func TestEngine_ReviewReworkRouting(t *testing.T) {
 		}
 		if !hasMaxCycles {
 			t.Error("rework_max_cycles event not emitted")
+		}
+	})
+
+	t.Run("max_rework_cycles_downgrades_minors", func(t *testing.T) {
+		// Pipeline: implement → review → submit
+		// Uses a regular (non-parallel) review phase where the runner
+		// controls the verdict directly. First review returns "rework" with
+		// major findings, second review returns "rework" with only minor
+		// findings. After max cycles, the engine should downgrade the
+		// verdict to "pass-with-follow-ups" and proceed to submit.
+		phases := []PhaseConfig{
+			{
+				Name:         "implement",
+				Prompt:       "implement.md",
+				Retry:        RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+				FeedbackFrom: []string{"review"},
+			},
+			{
+				Name:      "review",
+				Prompt:    "review.md",
+				DependsOn: []string{"implement"},
+				Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+				Rework:    &ReworkConfig{Target: "implement"},
+			},
+			{
+				Name:      "submit",
+				Prompt:    "submit.md",
+				DependsOn: []string{"implement", "review"},
+				Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+		}
+
+		mock := &flexMockRunner{
+			responses: map[string][]flexResponse{
+				"implement": {
+					{result: &runner.RunResult{
+						Output:  json.RawMessage(`{"tests_passed":true,"commits":1}`),
+						RawText: "Impl v1",
+						CostUSD: 0.50,
+					}},
+					{result: &runner.RunResult{
+						Output:  json.RawMessage(`{"tests_passed":true,"commits":2}`),
+						RawText: "Impl v2",
+						CostUSD: 0.50,
+					}},
+				},
+				"review": {
+					// First review: rework with major finding → triggers rework.
+					{result: &runner.RunResult{
+						Output:  json.RawMessage(`{"ticket_key":"TEST-1","findings":[{"severity":"major","file":"x.go","line":1,"issue":"error not wrapped","suggestion":"use fmt.Errorf"}],"verdict":"rework"}`),
+						RawText: "Major issues found",
+						CostUSD: 0.15,
+					}},
+					// Second review: rework with only minor findings → downgraded.
+					{result: &runner.RunResult{
+						Output:  json.RawMessage(`{"ticket_key":"TEST-1","findings":[{"severity":"minor","file":"x.go","line":5,"issue":"naming style","suggestion":"use camelCase"}],"verdict":"rework"}`),
+						RawText: "Minor issue only",
+						CostUSD: 0.15,
+					}},
+				},
+				"submit": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"pr_url":"https://github.com/org/repo/pull/42"}`),
+						RawText: "PR created",
+						CostUSD: 0.05,
+					},
+				}},
+			},
+		}
+
+		var events []Event
+		engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+			cfg.MaxReworkCycles = 1
+			cfg.OnEvent = func(e Event) {
+				events = append(events, e)
+			}
+		})
+
+		err := engine.Run(context.Background())
+		if err != nil {
+			t.Fatalf("expected pipeline to proceed after downgrade, got: %v", err)
+		}
+
+		// All phases should be completed.
+		for _, name := range []string{"implement", "review", "submit"} {
+			if !state.IsCompleted(name) {
+				t.Errorf("phase %q should be completed", name)
+			}
+		}
+
+		// Should have 1 rework cycle.
+		if state.Meta().ReworkCycles != 1 {
+			t.Errorf("ReworkCycles = %d, want 1", state.Meta().ReworkCycles)
+		}
+
+		// Review result should have been rewritten with pass-with-follow-ups.
+		result, err := state.ReadResult("review")
+		if err != nil {
+			t.Fatalf("ReadResult: %v", err)
+		}
+		var reviewOutput schemas.ReviewOutput
+		if err := json.Unmarshal(result, &reviewOutput); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if reviewOutput.Verdict != "pass-with-follow-ups" {
+			t.Errorf("verdict = %q, want %q", reviewOutput.Verdict, "pass-with-follow-ups")
+		}
+		// Findings should still be present.
+		if len(reviewOutput.Findings) != 1 {
+			t.Errorf("findings count = %d, want 1", len(reviewOutput.Findings))
+		}
+
+		// Should have rework_routed, rework_max_cycles, and rework_minors_downgraded events.
+		hasRouted := false
+		hasDowngraded := false
+		hasMaxCycles := false
+		for _, e := range events {
+			if e.Kind == EventReworkRouted {
+				hasRouted = true
+			}
+			if e.Kind == EventReworkMinorsDowngraded {
+				hasDowngraded = true
+				if orig, _ := e.Data["original_verdict"].(string); orig != "rework" {
+					t.Errorf("original_verdict = %q, want %q", orig, "rework")
+				}
+				if newV, _ := e.Data["new_verdict"].(string); newV != "pass-with-follow-ups" {
+					t.Errorf("new_verdict = %q, want %q", newV, "pass-with-follow-ups")
+				}
+			}
+			if e.Kind == EventReworkMaxCycles {
+				hasMaxCycles = true
+			}
+		}
+		if !hasRouted {
+			t.Error("rework_routed event not emitted")
+		}
+		if !hasDowngraded {
+			t.Error("rework_minors_downgraded event not emitted")
+		}
+		if !hasMaxCycles {
+			t.Error("rework_max_cycles event not emitted")
+		}
+	})
+
+	t.Run("max_rework_cycles_blocks_with_mixed_findings", func(t *testing.T) {
+		// Pipeline: implement → review
+		// Uses a regular (non-parallel) review where the runner controls
+		// the verdict. Both reviews return "rework" with major+minor findings.
+		// The engine should block because critical/major findings remain.
+		phases := []PhaseConfig{
+			{
+				Name:         "implement",
+				Prompt:       "implement.md",
+				Retry:        RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+				FeedbackFrom: []string{"review"},
+			},
+			{
+				Name:      "review",
+				Prompt:    "review.md",
+				DependsOn: []string{"implement"},
+				Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+				Rework:    &ReworkConfig{Target: "implement"},
+			},
+		}
+
+		mixedFindings := `{"ticket_key":"TEST-1","findings":[{"severity":"major","file":"x.go","line":1,"issue":"error not wrapped","suggestion":"use fmt.Errorf"},{"severity":"minor","file":"y.go","line":10,"issue":"naming style","suggestion":"rename"}],"verdict":"rework"}`
+
+		mock := &flexMockRunner{
+			responses: map[string][]flexResponse{
+				"implement": {
+					{result: &runner.RunResult{
+						Output:  json.RawMessage(`{"tests_passed":true,"commits":1}`),
+						RawText: "Impl v1",
+						CostUSD: 0.50,
+					}},
+					{result: &runner.RunResult{
+						Output:  json.RawMessage(`{"tests_passed":true,"commits":2}`),
+						RawText: "Impl v2",
+						CostUSD: 0.50,
+					}},
+				},
+				"review": {
+					{result: &runner.RunResult{
+						Output:  json.RawMessage(mixedFindings),
+						RawText: "Mixed issues",
+						CostUSD: 0.15,
+					}},
+					{result: &runner.RunResult{
+						Output:  json.RawMessage(mixedFindings),
+						RawText: "Still mixed issues",
+						CostUSD: 0.15,
+					}},
+				},
+			},
+		}
+
+		engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+			cfg.MaxReworkCycles = 1
+		})
+
+		err := engine.Run(context.Background())
+		if err == nil {
+			t.Fatal("expected PhaseGateError after max rework cycles with major findings")
+		}
+
+		var gateErr *PhaseGateError
+		if !errors.As(err, &gateErr) {
+			t.Fatalf("expected PhaseGateError, got: %T: %v", err, err)
+		}
+		if gateErr.Phase != "review" {
+			t.Errorf("gate error phase = %q, want %q", gateErr.Phase, "review")
+		}
+		if !strings.Contains(gateErr.Reason, "max cycles") {
+			t.Errorf("gate error should mention max cycles, got: %q", gateErr.Reason)
+		}
+		if !strings.Contains(gateErr.Reason, "error not wrapped") {
+			t.Errorf("gate error should mention the major issue, got: %q", gateErr.Reason)
+		}
+
+		// Should have 1 rework cycle.
+		if state.Meta().ReworkCycles != 1 {
+			t.Errorf("ReworkCycles = %d, want 1", state.Meta().ReworkCycles)
 		}
 	})
 
