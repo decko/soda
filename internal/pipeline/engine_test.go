@@ -7501,6 +7501,143 @@ func TestEngine_PatchNoProgressRetry(t *testing.T) {
 	}
 }
 
+func TestEngine_PatchExhaustedSkipsExtractFailingCriteria(t *testing.T) {
+	// When patch cycles are exhausted, gateVerifyFail should return via the
+	// on_exhausted policy without calling extractFailingCriteria. This test
+	// verifies that even when the verify result contains criteria data that
+	// would trigger regression detection, exhaustion takes precedence and
+	// the gate error reflects the exhaustion policy, not regression.
+	phases := []PhaseConfig{
+		{
+			Name:   "implement",
+			Prompt: "implement.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:         "patch",
+			Type:         "corrective",
+			Prompt:       "patch.md",
+			DependsOn:    []string{"implement"},
+			FeedbackFrom: []string{"verify"},
+			Retry:        RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "verify",
+			Prompt:    "verify.md",
+			DependsOn: []string{"implement"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Corrective: &CorrectiveConfig{
+				Phase:       "patch",
+				MaxAttempts: 1,
+				OnExhausted: "stop",
+			},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true}`),
+					RawText: "impl",
+					CostUSD: 0.10,
+				},
+			}},
+			"verify": {
+				// First verify: FAIL with criterion A failing.
+				{
+					result: &runner.RunResult{
+						Output: json.RawMessage(`{
+							"verdict":"FAIL",
+							"fixes_required":["fix A"],
+							"criteria_results":[
+								{"criterion":"A","passed":false,"evidence":"fails"},
+								{"criterion":"B","passed":true,"evidence":"ok"}
+							],
+							"command_results":[]
+						}`),
+						RawText: "fail1",
+						CostUSD: 0.05,
+					},
+				},
+				// Second verify (after patch): A still fails and B now
+				// fails too. Without lazy eval this would be a regression;
+				// with lazy eval the exhaustion policy fires first.
+				{
+					result: &runner.RunResult{
+						Output: json.RawMessage(`{
+							"verdict":"FAIL",
+							"fixes_required":["fix A","fix B"],
+							"criteria_results":[
+								{"criterion":"A","passed":false,"evidence":"still fails"},
+								{"criterion":"B","passed":false,"evidence":"now fails"}
+							],
+							"command_results":[]
+						}`),
+						RawText: "fail2",
+						CostUSD: 0.05,
+					},
+				},
+			},
+			"patch": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"ticket_key":"TEST-1","fix_results":[],"files_changed":[],"tests_passed":false,"too_complex":false}`),
+					RawText: "patched",
+					CostUSD: 0.20,
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(ev Event) { events = append(events, ev) }
+	})
+
+	err := engine.Run(context.Background())
+	var gateErr *PhaseGateError
+	if !errors.As(err, &gateErr) {
+		t.Fatalf("expected PhaseGateError, got: %v", err)
+	}
+
+	// The error should mention exhaustion, not regression — the max_attempts
+	// check fires before extractFailingCriteria is called.
+	if !strings.Contains(gateErr.Reason, "patch attempts exhausted") {
+		t.Errorf("gate error reason should mention patch attempts exhausted, got: %q", gateErr.Reason)
+	}
+	if strings.Contains(gateErr.Reason, "regression") {
+		t.Errorf("gate error reason should NOT mention regression (lazy eval skips it), got: %q", gateErr.Reason)
+	}
+
+	// Should have patch_exhausted event, NOT patch_regression.
+	hasExhausted := false
+	hasRegression := false
+	for _, ev := range events {
+		if ev.Kind == EventPatchExhausted {
+			hasExhausted = true
+		}
+		if ev.Kind == EventPatchRegression {
+			hasRegression = true
+		}
+	}
+	if !hasExhausted {
+		t.Error("patch_exhausted event not emitted")
+	}
+	if hasRegression {
+		t.Error("patch_regression event should NOT be emitted when exhausted (lazy eval)")
+	}
+
+	// PatchCycles should be 1 (one patch ran before exhaustion).
+	if state.Meta().PatchCycles != 1 {
+		t.Errorf("PatchCycles = %d, want 1", state.Meta().PatchCycles)
+	}
+
+	// Runner should have been called: implement, verify(fail), patch, verify(exhausted) = 4.
+	if len(mock.calls) != 4 {
+		t.Errorf("runner called %d times, want 4", len(mock.calls))
+	}
+}
+
 func TestEngine_ReviewReworkAndPatchIndependent(t *testing.T) {
 	// Both review rework and patch cycles should work independently in the
 	// same pipeline run. Review rework increments ReworkCycles, patch

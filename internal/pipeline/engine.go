@@ -1402,12 +1402,35 @@ func (e *Engine) gateVerifyFail(phase PhaseConfig, fixesRequired []string) error
 		return &PhaseGateError{Phase: phase.Name, Reason: reason + " (escalated from patch, no re-entry)"}
 	}
 
+	// Check max_attempts before extracting failing criteria (lazy
+	// evaluation). When cycles are exhausted the on_exhausted policy takes
+	// over and the I/O from extractFailingCriteria (reading + parsing
+	// verify.json) is avoided.
+	maxAttempts := cc.MaxAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = 2
+	}
+	if e.state.Meta().PatchCycles >= maxAttempts {
+		e.emit(Event{
+			Phase: phase.Name,
+			Kind:  EventPatchExhausted,
+			Data: map[string]any{
+				"patch_cycles": e.state.Meta().PatchCycles,
+				"on_exhausted": cc.OnExhausted,
+			},
+		})
+		return e.handlePatchExhausted(phase, cc, reason)
+	}
+
+	// Extract failing criteria lazily — only when we know the result will
+	// be used for regression detection or snapshotting for the next cycle.
+	currentFailures := e.extractFailingCriteria()
+
 	// Regression detection: when PatchCycles > 0, compare current failures
 	// against PreviousFailures. A regression (previously-passing criterion
 	// now fails) triggers immediate escalation. Note: criterion text from
 	// the ticket's acceptance criteria should be stable across runs; if
 	// criteria are rephrased, this may cause false negatives.
-	currentFailures := e.extractFailingCriteria()
 	if e.state.Meta().PatchCycles > 0 && len(e.state.Meta().PreviousFailures) > 0 {
 		regResult := detectRegression(e.state.Meta().PreviousFailures, currentFailures)
 		if len(regResult.Regressions) > 0 {
@@ -1424,23 +1447,6 @@ func (e *Engine) gateVerifyFail(phase PhaseConfig, fixesRequired []string) error
 				Reason: reason + " (regression: previously-passing criteria now fail: " + strings.Join(regResult.Regressions, "; ") + ")",
 			}
 		}
-	}
-
-	// Check max_attempts.
-	maxAttempts := cc.MaxAttempts
-	if maxAttempts <= 0 {
-		maxAttempts = 2
-	}
-	if e.state.Meta().PatchCycles >= maxAttempts {
-		e.emit(Event{
-			Phase: phase.Name,
-			Kind:  EventPatchExhausted,
-			Data: map[string]any{
-				"patch_cycles": e.state.Meta().PatchCycles,
-				"on_exhausted": cc.OnExhausted,
-			},
-		})
-		return e.handlePatchExhausted(phase, cc, reason)
 	}
 
 	// Snapshot current failures for the next regression check.
