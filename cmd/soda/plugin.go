@@ -4,6 +4,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -48,7 +49,7 @@ Use --global to install to ~/.claude/plugins/soda/ instead.`,
 				return err
 			}
 
-			return installPlugin(destDir, force)
+			return installPlugin(cmd.OutOrStdout(), destDir, force)
 		},
 	}
 
@@ -74,7 +75,7 @@ Use --global to remove ~/.claude/plugins/soda/ instead.`,
 				return err
 			}
 
-			return uninstallPlugin(destDir)
+			return uninstallPlugin(cmd.OutOrStdout(), destDir)
 		},
 	}
 
@@ -96,7 +97,7 @@ func pluginDestDir(global bool) (string, error) {
 }
 
 // installPlugin copies the embedded plugin files to destDir.
-func installPlugin(destDir string, force bool) error {
+func installPlugin(w io.Writer, destDir string, force bool) error {
 	// Check if already installed
 	if _, err := os.Stat(destDir); err == nil {
 		if !force {
@@ -138,18 +139,18 @@ func installPlugin(destDir string, force bool) error {
 		return fmt.Errorf("plugin: install: %w", err)
 	}
 
-	fmt.Printf("Installed soda plugin to %s/\n", destDir)
-	fmt.Println("  Skill:    soda-pipeline")
-	fmt.Println("  Commands: /soda:run, /soda:status, /soda:sessions, /soda:init")
-	fmt.Println("  Agent:    pipeline-architect")
-	fmt.Println()
-	fmt.Println("Enable in Claude Code: the plugin is auto-discovered from .claude/plugins/")
+	fmt.Fprintf(w, "Installed soda plugin to %s/\n", destDir)
+	fmt.Fprintln(w, "  Skill:    soda-pipeline")
+	fmt.Fprintln(w, "  Commands: /soda:run, /soda:status, /soda:sessions")
+	fmt.Fprintln(w, "  Agent:    pipeline-architect")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Enable in Claude Code: the plugin is auto-discovered from .claude/plugins/")
 
 	return nil
 }
 
 // uninstallPlugin removes the plugin directory at destDir.
-func uninstallPlugin(destDir string) error {
+func uninstallPlugin(w io.Writer, destDir string) error {
 	info, err := os.Stat(destDir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -165,6 +166,6 @@ func uninstallPlugin(destDir string) error {
 		return fmt.Errorf("plugin: remove: %w", err)
 	}
 
-	fmt.Printf("Removed soda plugin from %s/\n", destDir)
+	fmt.Fprintf(w, "Removed soda plugin from %s/\n", destDir)
 	return nil
 }

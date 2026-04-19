@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -10,8 +11,21 @@ import (
 func TestInstallPlugin(t *testing.T) {
 	destDir := filepath.Join(t.TempDir(), ".claude", "plugins", "soda")
 
-	if err := installPlugin(destDir, false); err != nil {
+	var buf bytes.Buffer
+	if err := installPlugin(&buf, destDir, false); err != nil {
 		t.Fatalf("installPlugin() error: %v", err)
+	}
+
+	// Verify output contains expected info
+	output := buf.String()
+	if !contains(output, "Installed soda plugin") {
+		t.Errorf("expected output to contain 'Installed soda plugin', got %q", output)
+	}
+	if !contains(output, "soda-pipeline") {
+		t.Errorf("expected output to mention soda-pipeline skill")
+	}
+	if contains(output, "/soda:init") {
+		t.Errorf("output should not reference /soda:init (command does not exist)")
 	}
 
 	// Verify key files exist
@@ -21,7 +35,6 @@ func TestInstallPlugin(t *testing.T) {
 		"commands/run.md",
 		"commands/status.md",
 		"commands/sessions.md",
-		"commands/init.md",
 		"agents/pipeline-architect.md",
 	}
 
@@ -41,7 +54,7 @@ func TestInstallPlugin(t *testing.T) {
 func TestInstallPluginMatchesEmbedded(t *testing.T) {
 	destDir := filepath.Join(t.TempDir(), ".claude", "plugins", "soda")
 
-	if err := installPlugin(destDir, false); err != nil {
+	if err := installPlugin(&bytes.Buffer{}, destDir, false); err != nil {
 		t.Fatalf("installPlugin() error: %v", err)
 	}
 
@@ -93,12 +106,12 @@ func TestInstallPluginAlreadyExistsNoForce(t *testing.T) {
 	destDir := filepath.Join(t.TempDir(), ".claude", "plugins", "soda")
 
 	// First install
-	if err := installPlugin(destDir, false); err != nil {
+	if err := installPlugin(&bytes.Buffer{}, destDir, false); err != nil {
 		t.Fatalf("first installPlugin() error: %v", err)
 	}
 
 	// Second install without force should fail
-	err := installPlugin(destDir, false)
+	err := installPlugin(&bytes.Buffer{}, destDir, false)
 	if err == nil {
 		t.Fatal("expected error when installing without --force, got nil")
 	}
@@ -113,7 +126,7 @@ func TestInstallPluginForceOverwrites(t *testing.T) {
 	destDir := filepath.Join(t.TempDir(), ".claude", "plugins", "soda")
 
 	// First install
-	if err := installPlugin(destDir, false); err != nil {
+	if err := installPlugin(&bytes.Buffer{}, destDir, false); err != nil {
 		t.Fatalf("first installPlugin() error: %v", err)
 	}
 
@@ -124,7 +137,7 @@ func TestInstallPluginForceOverwrites(t *testing.T) {
 	}
 
 	// Install with force
-	if err := installPlugin(destDir, true); err != nil {
+	if err := installPlugin(&bytes.Buffer{}, destDir, true); err != nil {
 		t.Fatalf("force installPlugin() error: %v", err)
 	}
 
@@ -144,7 +157,7 @@ func TestUninstallPlugin(t *testing.T) {
 	destDir := filepath.Join(t.TempDir(), ".claude", "plugins", "soda")
 
 	// Install first
-	if err := installPlugin(destDir, false); err != nil {
+	if err := installPlugin(&bytes.Buffer{}, destDir, false); err != nil {
 		t.Fatalf("installPlugin() error: %v", err)
 	}
 
@@ -154,8 +167,14 @@ func TestUninstallPlugin(t *testing.T) {
 	}
 
 	// Uninstall
-	if err := uninstallPlugin(destDir); err != nil {
+	var buf bytes.Buffer
+	if err := uninstallPlugin(&buf, destDir); err != nil {
 		t.Fatalf("uninstallPlugin() error: %v", err)
+	}
+
+	// Verify output
+	if !contains(buf.String(), "Removed soda plugin") {
+		t.Errorf("expected output to contain 'Removed soda plugin', got %q", buf.String())
 	}
 
 	// Verify directory is gone
@@ -167,7 +186,7 @@ func TestUninstallPlugin(t *testing.T) {
 func TestUninstallPluginNotInstalled(t *testing.T) {
 	destDir := filepath.Join(t.TempDir(), ".claude", "plugins", "soda")
 
-	err := uninstallPlugin(destDir)
+	err := uninstallPlugin(&bytes.Buffer{}, destDir)
 	if err == nil {
 		t.Fatal("expected error when uninstalling non-existent plugin, got nil")
 	}
