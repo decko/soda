@@ -14,6 +14,22 @@ OS-level isolation (Landlock, network namespaces, cgroups).
 
 Design phase. Not yet implemented.
 
+## Getting Started
+
+Generate a starter configuration file:
+
+```bash
+soda init                        # writes ~/.config/soda/config.yaml
+soda init -o ./soda.config.yaml  # write to a custom path
+soda init --force                # overwrite an existing config
+```
+
+The generated file contains sensible defaults (GitHub Issues source,
+`claude-sonnet-4-20250514` model, standard budget limits). Edit it to
+match your project before running the pipeline. See
+[config.example.yaml](config.example.yaml) for a fully annotated
+reference.
+
 ## Architecture
 
 ```
