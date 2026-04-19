@@ -136,6 +136,8 @@ func installPlugin(w io.Writer, destDir string, force bool) error {
 		return os.WriteFile(dest, data, 0644)
 	})
 	if err != nil {
+		// Clean up partially-written directory so a retry does not require --force.
+		os.RemoveAll(destDir)
 		return fmt.Errorf("plugin: install: %w", err)
 	}
 
