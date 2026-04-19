@@ -2407,8 +2407,13 @@ func (e *Engine) lastRunningPhase() string {
 		}
 	}
 	// Fall back to PhaseFailed — the timed-out phase was marked failed
-	// before the error propagated here.
-	for _, phase := range e.config.Pipeline.Phases {
+	// before the error propagated here. Iterate in reverse because phases
+	// execute sequentially and stop on first error, so the LAST failed
+	// phase in pipeline order is the one that just failed. Earlier phases
+	// may retain stale PhaseFailed status from a prior run (e.g., when
+	// Resume is called from a later phase).
+	for i := len(e.config.Pipeline.Phases) - 1; i >= 0; i-- {
+		phase := e.config.Pipeline.Phases[i]
 		if ps := e.state.Meta().Phases[phase.Name]; ps != nil && ps.Status == PhaseFailed {
 			return phase.Name
 		}

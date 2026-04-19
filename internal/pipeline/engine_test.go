@@ -9554,6 +9554,86 @@ func TestEngine_PipelineTimeout_Resume(t *testing.T) {
 	}
 }
 
+func TestEngine_PipelineTimeout_ResumeWithStaleFailed(t *testing.T) {
+	// Regression test: when resuming from a later phase, earlier phases may
+	// retain stale PhaseFailed status from a prior run. lastRunningPhase must
+	// return the LAST failed phase (the one that just timed out), not the
+	// first failed phase (which is stale).
+	//
+	// Scenario: 3-phase pipeline [triage → implement → review].
+	// Prior run: triage succeeded, implement failed. Now we resume from
+	// implement, which succeeds, but review times out. The stale PhaseFailed
+	// status on implement from the prior run should NOT be returned — review
+	// (the last failed phase) should be returned.
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 0, Parse: 0, Semantic: 0},
+		},
+		{
+			Name:      "implement",
+			Prompt:    "implement.md",
+			DependsOn: []string{"triage"},
+			Retry:     RetryConfig{Transient: 0, Parse: 0, Semantic: 0},
+		},
+		{
+			Name:      "review",
+			Prompt:    "review.md",
+			DependsOn: []string{"implement"},
+			Retry:     RetryConfig{Transient: 0, Parse: 0, Semantic: 0},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"ok":true}`),
+					RawText: "implement ok",
+					CostUSD: 0.01,
+				},
+			}},
+			"review": {{
+				result: nil,
+				err:    context.DeadlineExceeded,
+			}},
+		},
+	}
+
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.MaxPipelineDuration = 200 * time.Millisecond
+	})
+
+	// Pre-complete triage from a prior run.
+	_ = state.MarkRunning("triage")
+	_ = state.WriteResult("triage", json.RawMessage(`{"automatable":true}`))
+	_ = state.WriteArtifact("triage", []byte("done"))
+	_ = state.MarkCompleted("triage")
+
+	// Simulate implement having failed in a prior run (stale PhaseFailed).
+	// MarkRunning creates the phase entry, then MarkFailed sets status=failed.
+	_ = state.MarkRunning("implement")
+	_ = state.MarkFailed("implement", fmt.Errorf("prior run failure"))
+
+	// Resume from implement: implement will succeed (re-run), then review
+	// will return DeadlineExceeded, triggering the pipeline timeout.
+	err := engine.Resume(context.Background(), "implement")
+	if err == nil {
+		t.Fatal("expected error from pipeline timeout")
+	}
+
+	var timeoutErr *PipelineTimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("expected PipelineTimeoutError, got: %T: %v", err, err)
+	}
+	// Phase should be "review" — the phase that actually timed out — not
+	// "implement" which had stale PhaseFailed status from the prior run.
+	if timeoutErr.Phase != "review" {
+		t.Errorf("Phase = %q, want %q (lastRunningPhase returned stale failed phase)", timeoutErr.Phase, "review")
+	}
+}
+
 func TestEngine_PipelineTimeout_ZeroMeansNoLimit(t *testing.T) {
 	phases := []PhaseConfig{
 		{
