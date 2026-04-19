@@ -17,7 +17,7 @@ func TestRunInit_WritesDefaultConfig(t *testing.T) {
 	dest := filepath.Join(dir, "soda.yaml")
 
 	var buf bytes.Buffer
-	if err := runInit(&buf, dest, false, false, false); err != nil {
+	if err := runInit(&buf, dest, false, false, false, true); err != nil {
 		t.Fatalf("runInit() error: %v", err)
 	}
 
@@ -52,7 +52,7 @@ func TestRunInit_CreatesParentDirs(t *testing.T) {
 	dir := t.TempDir()
 	dest := filepath.Join(dir, "deep", "nested", "soda.yaml")
 
-	if err := runInit(io.Discard, dest, false, false, false); err != nil {
+	if err := runInit(io.Discard, dest, false, false, false, true); err != nil {
 		t.Fatalf("runInit() error: %v", err)
 	}
 
@@ -70,7 +70,7 @@ func TestRunInit_RefusesOverwrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := runInit(io.Discard, dest, false, false, false)
+	err := runInit(io.Discard, dest, false, false, false, true)
 	if err == nil {
 		t.Fatal("expected error when file exists, got nil")
 	}
@@ -94,7 +94,7 @@ func TestRunInit_ForceOverwrites(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := runInit(io.Discard, dest, true, false, false); err != nil {
+	if err := runInit(io.Discard, dest, true, false, false, true); err != nil {
 		t.Fatalf("runInit(force=true) error: %v", err)
 	}
 
@@ -119,7 +119,7 @@ func TestRunInit_StatErrorNotErrNotExist(t *testing.T) {
 	t.Cleanup(func() { os.Chmod(noPerms, 0755) })
 
 	dest := filepath.Join(noPerms, "soda.yaml")
-	err := runInit(io.Discard, dest, false, false, false)
+	err := runInit(io.Discard, dest, false, false, false, true)
 	if err == nil {
 		t.Fatal("expected error for inaccessible path, got nil")
 	}
@@ -159,7 +159,7 @@ func TestRunInit_DryRun(t *testing.T) {
 	dest := filepath.Join(dir, "soda.yaml")
 
 	var buf bytes.Buffer
-	if err := runInit(&buf, dest, false, true, false); err != nil {
+	if err := runInit(&buf, dest, false, true, false, true); err != nil {
 		t.Fatalf("runInit(dryRun=true) error: %v", err)
 	}
 
@@ -183,7 +183,7 @@ func TestRunInit_PhasesWritten(t *testing.T) {
 	dest := filepath.Join(dir, "soda.yaml")
 
 	var buf bytes.Buffer
-	if err := runInit(&buf, dest, false, false, true); err != nil {
+	if err := runInit(&buf, dest, false, false, true, true); err != nil {
 		t.Fatalf("runInit(phases=true) error: %v", err)
 	}
 
@@ -222,7 +222,7 @@ func TestRunInit_PhasesRefusesOverwrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := runInit(io.Discard, dest, false, false, true)
+	err := runInit(io.Discard, dest, false, false, true, true)
 	if err == nil {
 		t.Fatal("expected error when phases.yaml exists, got nil")
 	}
@@ -247,7 +247,7 @@ func TestRunInit_PhasesForceOverwrites(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := runInit(io.Discard, dest, true, false, true); err != nil {
+	if err := runInit(io.Discard, dest, true, false, true, true); err != nil {
 		t.Fatalf("runInit(force=true, phases=true) error: %v", err)
 	}
 
@@ -261,6 +261,110 @@ func TestRunInit_PhasesForceOverwrites(t *testing.T) {
 	}
 	if len(data) == 0 {
 		t.Error("phases.yaml is empty after overwrite")
+	}
+}
+
+func TestRunInit_GitignoreCreated(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "soda.yaml")
+
+	var buf bytes.Buffer
+	// noGitignore=false → should create/update .gitignore
+	if err := runInit(&buf, dest, false, false, false, false); err != nil {
+		t.Fatalf("runInit() error: %v", err)
+	}
+
+	gitignorePath := filepath.Join(dir, ".gitignore")
+	data, err := os.ReadFile(gitignorePath)
+	if err != nil {
+		t.Fatalf("read .gitignore: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, ".soda/") {
+		t.Errorf(".gitignore missing .soda/ entry: %s", content)
+	}
+	if !strings.Contains(content, ".worktrees/") {
+		t.Errorf(".gitignore missing .worktrees/ entry: %s", content)
+	}
+
+	// Output must mention the update.
+	if !strings.Contains(buf.String(), "Updated .gitignore") {
+		t.Errorf("output missing gitignore update message: %s", buf.String())
+	}
+}
+
+func TestRunInit_GitignoreSkippedWithFlag(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "soda.yaml")
+
+	// noGitignore=true → should NOT create .gitignore
+	if err := runInit(io.Discard, dest, false, false, false, true); err != nil {
+		t.Fatalf("runInit() error: %v", err)
+	}
+
+	gitignorePath := filepath.Join(dir, ".gitignore")
+	if _, err := os.Stat(gitignorePath); err == nil {
+		t.Error("--no-gitignore should prevent .gitignore creation")
+	}
+}
+
+func TestRunInit_GitignoreAppendsWithoutDuplication(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "soda.yaml")
+
+	// Pre-create .gitignore with .soda/ already present.
+	gitignorePath := filepath.Join(dir, ".gitignore")
+	if err := os.WriteFile(gitignorePath, []byte("# existing\n.soda/\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	if err := runInit(&buf, dest, false, false, false, false); err != nil {
+		t.Fatalf("runInit() error: %v", err)
+	}
+
+	data, err := os.ReadFile(gitignorePath)
+	if err != nil {
+		t.Fatalf("read .gitignore: %v", err)
+	}
+	content := string(data)
+
+	// .soda/ should appear exactly once (not duplicated).
+	count := strings.Count(content, ".soda/")
+	if count != 1 {
+		t.Errorf(".soda/ appears %d times, want 1: %s", count, content)
+	}
+
+	// .worktrees/ should be appended.
+	if !strings.Contains(content, ".worktrees/") {
+		t.Errorf(".gitignore missing .worktrees/ entry: %s", content)
+	}
+}
+
+func TestEnsureGitignore_ExistingEntriesWithoutSlash(t *testing.T) {
+	dir := t.TempDir()
+	gitignorePath := filepath.Join(dir, ".gitignore")
+
+	// Entries without trailing slash should still prevent duplication.
+	if err := os.WriteFile(gitignorePath, []byte(".soda\n.worktrees\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{StateDir: ".soda", WorktreeDir: ".worktrees"}
+
+	var buf bytes.Buffer
+	if err := ensureGitignore(&buf, gitignorePath, cfg); err != nil {
+		t.Fatalf("ensureGitignore() error: %v", err)
+	}
+
+	// Should not add anything since both entries already exist (without slash).
+	if buf.Len() > 0 {
+		t.Errorf("expected no output (nothing to add), got: %s", buf.String())
+	}
+
+	data, _ := os.ReadFile(gitignorePath)
+	if strings.Contains(string(data), ".soda/") {
+		t.Error("should not duplicate entries that exist without trailing slash")
 	}
 }
 

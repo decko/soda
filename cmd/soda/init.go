@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/decko/soda/internal/config"
 	"github.com/decko/soda/internal/detect"
@@ -28,7 +30,8 @@ refuses to overwrite an existing file unless --force is given.`,
 			force, _ := cmd.Flags().GetBool("force")
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
 			phases, _ := cmd.Flags().GetBool("phases")
-			return runInit(cmd.OutOrStdout(), output, force, dryRun, phases)
+			noGitignore, _ := cmd.Flags().GetBool("no-gitignore")
+			return runInit(cmd.OutOrStdout(), output, force, dryRun, phases, noGitignore)
 		},
 	}
 
@@ -36,6 +39,7 @@ refuses to overwrite an existing file unless --force is given.`,
 	cmd.Flags().Bool("force", false, "overwrite existing config file")
 	cmd.Flags().Bool("dry-run", false, "print generated config to stdout without writing")
 	cmd.Flags().Bool("phases", false, "also write phases.yaml alongside the config")
+	cmd.Flags().Bool("no-gitignore", false, "skip adding .soda and .worktrees to .gitignore")
 
 	return cmd
 }
@@ -43,8 +47,9 @@ refuses to overwrite an existing file unless --force is given.`,
 // runInit generates a config (optionally auto-detected) and writes it to disk.
 // When dryRun is true the generated YAML is printed to w without writing files.
 // When phases is true the embedded phases.yaml is written alongside the config.
+// Unless noGitignore is true, .soda and .worktrees entries are added to .gitignore.
 // Extracted for testability — accepts an io.Writer for output messages.
-func runInit(w io.Writer, output string, force bool, dryRun bool, phases bool) error {
+func runInit(w io.Writer, output string, force bool, dryRun bool, phases bool, noGitignore bool) error {
 	// Auto-detect project stack. Detection is best-effort: if it fails
 	// we fall back to DefaultConfig with placeholder values.
 	cfg := config.DefaultConfig()
@@ -103,6 +108,15 @@ func runInit(w io.Writer, output string, force bool, dryRun bool, phases bool) e
 		}
 	}
 
+	// Ensure .soda and .worktrees are in .gitignore unless --no-gitignore.
+	if !noGitignore {
+		gitignorePath := filepath.Join(filepath.Dir(destPath), ".gitignore")
+		if err := ensureGitignore(w, gitignorePath, cfg); err != nil {
+			// Gitignore is best-effort; warn but don't fail.
+			fmt.Fprintf(w, "Warning: could not update .gitignore: %v\n", err)
+		}
+	}
+
 	return nil
 }
 
@@ -122,6 +136,75 @@ func writePhases(w io.Writer, phasesPath string, force bool) error {
 	}
 
 	fmt.Fprintf(w, "Phases written to %s\n", phasesPath)
+	return nil
+}
+
+// ensureGitignore appends missing entries for the state and worktree directories
+// to the .gitignore at gitignorePath. It reads the existing file (if any) and
+// only appends entries that are not already present.
+func ensureGitignore(w io.Writer, gitignorePath string, cfg *config.Config) error {
+	stateDir := cfg.StateDir
+	if stateDir == "" {
+		stateDir = ".soda"
+	}
+	worktreeDir := cfg.WorktreeDir
+	if worktreeDir == "" {
+		worktreeDir = ".worktrees"
+	}
+
+	// Normalise to patterns with trailing slash (directory convention).
+	needed := []string{
+		stateDir + "/",
+		worktreeDir + "/",
+	}
+
+	// Read existing .gitignore lines.
+	existing := map[string]bool{}
+	data, err := os.ReadFile(gitignorePath)
+	if err == nil {
+		scanner := bufio.NewScanner(strings.NewReader(string(data)))
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			existing[line] = true
+			// Also match without trailing slash since "foo" already covers "foo/".
+			existing[strings.TrimSuffix(line, "/")] = true
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("read .gitignore: %w", err)
+	}
+
+	var toAdd []string
+	for _, entry := range needed {
+		bare := strings.TrimSuffix(entry, "/")
+		if !existing[entry] && !existing[bare] {
+			toAdd = append(toAdd, entry)
+		}
+	}
+
+	if len(toAdd) == 0 {
+		return nil
+	}
+
+	file, err := os.OpenFile(gitignorePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("open .gitignore: %w", err)
+	}
+	defer file.Close()
+
+	// Ensure we start on a new line if the file doesn't end with one.
+	if len(data) > 0 && data[len(data)-1] != '\n' {
+		if _, err := file.WriteString("\n"); err != nil {
+			return fmt.Errorf("write newline to .gitignore: %w", err)
+		}
+	}
+
+	for _, entry := range toAdd {
+		if _, err := fmt.Fprintln(file, entry); err != nil {
+			return fmt.Errorf("write .gitignore entry: %w", err)
+		}
+	}
+
+	fmt.Fprintf(w, "Updated .gitignore with %s\n", strings.Join(toAdd, ", "))
 	return nil
 }
 
