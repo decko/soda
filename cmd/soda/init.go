@@ -13,6 +13,7 @@ import (
 
 	"github.com/decko/soda/internal/config"
 	"github.com/decko/soda/internal/detect"
+	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 )
 
@@ -31,7 +32,9 @@ refuses to overwrite an existing file unless --force is given.`,
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
 			phases, _ := cmd.Flags().GetBool("phases")
 			noGitignore, _ := cmd.Flags().GetBool("no-gitignore")
-			return runInit(cmd.OutOrStdout(), output, force, dryRun, phases, noGitignore)
+			yes, _ := cmd.Flags().GetBool("yes")
+			isTTY := isatty.IsTerminal(os.Stdin.Fd()) || isatty.IsCygwinTerminal(os.Stdin.Fd())
+			return runInit(cmd.OutOrStdout(), cmd.InOrStdin(), isTTY, output, force, dryRun, phases, noGitignore, yes)
 		},
 	}
 
@@ -49,14 +52,16 @@ refuses to overwrite an existing file unless --force is given.`,
 // When dryRun is true the generated YAML is printed to w without writing files.
 // When phases is true the embedded phases.yaml is written alongside the config.
 // Unless noGitignore is true, .soda and .worktrees entries are added to .gitignore.
-// Extracted for testability — accepts an io.Writer for output messages.
-func runInit(w io.Writer, output string, force bool, dryRun bool, phases bool, noGitignore bool) error {
+// When isTTY is true and yes is false a confirmation prompt is shown before writing.
+// When isTTY is false (non-interactive) the file is written without prompting.
+// Extracted for testability — accepts an io.Writer for output and io.Reader for stdin.
+func runInit(w io.Writer, stdin io.Reader, isTTY bool, output string, force bool, dryRun bool, phases bool, noGitignore bool, yes bool) error {
 	// Auto-detect project stack. Detection is best-effort: if it fails
 	// we fall back to DefaultConfig with placeholder values.
 	cfg := config.DefaultConfig()
 	info, detectErr := detect.Detect(context.Background(), ".")
 	if detectErr != nil {
-		fmt.Fprintf(w, "Warning: project detection failed: %v\n", detectErr)
+		fmt.Fprintln(w, colorMsg("33", fmt.Sprintf("Warning: project detection failed: %v", detectErr)))
 	}
 	if info != nil {
 		cfg = configFromDetected(info)
@@ -88,6 +93,19 @@ func runInit(w io.Writer, output string, force bool, dryRun bool, phases bool, n
 		}
 	}
 
+	// Confirmation prompt: shown when running in a TTY and --yes was not given.
+	// In non-TTY environments (CI, pipes) the file is written automatically.
+	if isTTY && !yes {
+		confirmed, promptErr := confirmWrite(w, stdin, destPath)
+		if promptErr != nil {
+			return promptErr
+		}
+		if !confirmed {
+			fmt.Fprintln(w, "Aborted.")
+			return nil
+		}
+	}
+
 	// Ensure parent directory exists.
 	dir := filepath.Dir(destPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -99,7 +117,7 @@ func runInit(w io.Writer, output string, force bool, dryRun bool, phases bool, n
 		return fmt.Errorf("init: write config: %w", err)
 	}
 
-	fmt.Fprintf(w, "Config written to %s\n", destPath)
+	fmt.Fprintln(w, colorMsg("32", fmt.Sprintf("Config written to %s", destPath)))
 
 	// Write phases.yaml alongside the config when --phases is set.
 	if phases {
@@ -114,11 +132,34 @@ func runInit(w io.Writer, output string, force bool, dryRun bool, phases bool, n
 		gitignorePath := filepath.Join(filepath.Dir(destPath), ".gitignore")
 		if err := ensureGitignore(w, gitignorePath, cfg); err != nil {
 			// Gitignore is best-effort; warn but don't fail.
-			fmt.Fprintf(w, "Warning: could not update .gitignore: %v\n", err)
+			fmt.Fprintln(w, colorMsg("33", fmt.Sprintf("Warning: could not update .gitignore: %v", err)))
 		}
 	}
 
 	return nil
+}
+
+// confirmWrite prints a prompt to w and reads a line from stdin.
+// Returns true if the user accepts (empty input or "y"/"yes"), false otherwise.
+func confirmWrite(w io.Writer, stdin io.Reader, destPath string) (bool, error) {
+	fmt.Fprintf(w, "Write config to %s? [Y/n] ", destPath)
+	reader := bufio.NewReader(stdin)
+	line, err := reader.ReadString('\n')
+	if err != nil && err != io.EOF {
+		return false, fmt.Errorf("init: read confirmation: %w", err)
+	}
+	line = strings.TrimSpace(line)
+	return line == "" || strings.EqualFold(line, "y") || strings.EqualFold(line, "yes"), nil
+}
+
+// colorMsg wraps s in ANSI color escape codes using the given code (e.g. "32"
+// for green, "33" for yellow). When the NO_COLOR environment variable is set
+// (per https://no-color.org) the string is returned unchanged.
+func colorMsg(code, s string) string {
+	if os.Getenv("NO_COLOR") != "" {
+		return s
+	}
+	return "\033[" + code + "m" + s + "\033[0m"
 }
 
 // writePhases writes the embedded phases.yaml to phasesPath.
@@ -136,7 +177,7 @@ func writePhases(w io.Writer, phasesPath string, force bool) error {
 		return fmt.Errorf("init: write phases.yaml: %w", err)
 	}
 
-	fmt.Fprintf(w, "Phases written to %s\n", phasesPath)
+	fmt.Fprintln(w, colorMsg("32", fmt.Sprintf("Phases written to %s", phasesPath)))
 	return nil
 }
 
@@ -205,7 +246,7 @@ func ensureGitignore(w io.Writer, gitignorePath string, cfg *config.Config) erro
 		}
 	}
 
-	fmt.Fprintf(w, "Updated .gitignore with %s\n", strings.Join(toAdd, ", "))
+	fmt.Fprintln(w, colorMsg("32", fmt.Sprintf("Updated .gitignore with %s", strings.Join(toAdd, ", "))))
 	return nil
 }
 

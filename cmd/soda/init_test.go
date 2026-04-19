@@ -17,7 +17,7 @@ func TestRunInit_WritesDefaultConfig(t *testing.T) {
 	dest := filepath.Join(dir, "soda.yaml")
 
 	var buf bytes.Buffer
-	if err := runInit(&buf, dest, false, false, false, true); err != nil {
+	if err := runInit(&buf, strings.NewReader(""), false, dest, false, false, false, true, false); err != nil {
 		t.Fatalf("runInit() error: %v", err)
 	}
 
@@ -52,7 +52,7 @@ func TestRunInit_CreatesParentDirs(t *testing.T) {
 	dir := t.TempDir()
 	dest := filepath.Join(dir, "deep", "nested", "soda.yaml")
 
-	if err := runInit(io.Discard, dest, false, false, false, true); err != nil {
+	if err := runInit(io.Discard, strings.NewReader(""), false, dest, false, false, false, true, false); err != nil {
 		t.Fatalf("runInit() error: %v", err)
 	}
 
@@ -70,7 +70,7 @@ func TestRunInit_RefusesOverwrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := runInit(io.Discard, dest, false, false, false, true)
+	err := runInit(io.Discard, strings.NewReader(""), false, dest, false, false, false, true, false)
 	if err == nil {
 		t.Fatal("expected error when file exists, got nil")
 	}
@@ -94,7 +94,7 @@ func TestRunInit_ForceOverwrites(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := runInit(io.Discard, dest, true, false, false, true); err != nil {
+	if err := runInit(io.Discard, strings.NewReader(""), false, dest, true, false, false, true, false); err != nil {
 		t.Fatalf("runInit(force=true) error: %v", err)
 	}
 
@@ -119,7 +119,7 @@ func TestRunInit_StatErrorNotErrNotExist(t *testing.T) {
 	t.Cleanup(func() { os.Chmod(noPerms, 0755) })
 
 	dest := filepath.Join(noPerms, "soda.yaml")
-	err := runInit(io.Discard, dest, false, false, false, true)
+	err := runInit(io.Discard, strings.NewReader(""), false, dest, false, false, false, true, false)
 	if err == nil {
 		t.Fatal("expected error for inaccessible path, got nil")
 	}
@@ -159,7 +159,7 @@ func TestRunInit_DryRun(t *testing.T) {
 	dest := filepath.Join(dir, "soda.yaml")
 
 	var buf bytes.Buffer
-	if err := runInit(&buf, dest, false, true, false, true); err != nil {
+	if err := runInit(&buf, strings.NewReader(""), false, dest, false, true, false, true, false); err != nil {
 		t.Fatalf("runInit(dryRun=true) error: %v", err)
 	}
 
@@ -183,7 +183,7 @@ func TestRunInit_PhasesWritten(t *testing.T) {
 	dest := filepath.Join(dir, "soda.yaml")
 
 	var buf bytes.Buffer
-	if err := runInit(&buf, dest, false, false, true, true); err != nil {
+	if err := runInit(&buf, strings.NewReader(""), false, dest, false, false, true, true, false); err != nil {
 		t.Fatalf("runInit(phases=true) error: %v", err)
 	}
 
@@ -222,7 +222,7 @@ func TestRunInit_PhasesRefusesOverwrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := runInit(io.Discard, dest, false, false, true, true)
+	err := runInit(io.Discard, strings.NewReader(""), false, dest, false, false, true, true, false)
 	if err == nil {
 		t.Fatal("expected error when phases.yaml exists, got nil")
 	}
@@ -247,7 +247,7 @@ func TestRunInit_PhasesForceOverwrites(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := runInit(io.Discard, dest, true, false, true, true); err != nil {
+	if err := runInit(io.Discard, strings.NewReader(""), false, dest, true, false, true, true, false); err != nil {
 		t.Fatalf("runInit(force=true, phases=true) error: %v", err)
 	}
 
@@ -270,7 +270,7 @@ func TestRunInit_GitignoreCreated(t *testing.T) {
 
 	var buf bytes.Buffer
 	// noGitignore=false → should create/update .gitignore
-	if err := runInit(&buf, dest, false, false, false, false); err != nil {
+	if err := runInit(&buf, strings.NewReader(""), false, dest, false, false, false, false, false); err != nil {
 		t.Fatalf("runInit() error: %v", err)
 	}
 
@@ -298,7 +298,7 @@ func TestRunInit_GitignoreSkippedWithFlag(t *testing.T) {
 	dest := filepath.Join(dir, "soda.yaml")
 
 	// noGitignore=true → should NOT create .gitignore
-	if err := runInit(io.Discard, dest, false, false, false, true); err != nil {
+	if err := runInit(io.Discard, strings.NewReader(""), false, dest, false, false, false, true, false); err != nil {
 		t.Fatalf("runInit() error: %v", err)
 	}
 
@@ -319,7 +319,7 @@ func TestRunInit_GitignoreAppendsWithoutDuplication(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := runInit(&buf, dest, false, false, false, false); err != nil {
+	if err := runInit(&buf, strings.NewReader(""), false, dest, false, false, false, false, false); err != nil {
 		t.Fatalf("runInit() error: %v", err)
 	}
 
@@ -457,6 +457,136 @@ func TestConfigFromDetected_NoForge(t *testing.T) {
 	}
 	if repo.TestCommand != "pytest" {
 		t.Errorf("Repos[0].TestCommand = %q, want %q", repo.TestCommand, "pytest")
+	}
+}
+
+// TestRunInit_ConfirmationPromptYes verifies that when isTTY=true and the user
+// types "y", the file is written and the prompt is shown.
+func TestRunInit_ConfirmationPromptYes(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "soda.yaml")
+
+	var buf bytes.Buffer
+	if err := runInit(&buf, strings.NewReader("y\n"), true, dest, false, false, false, true, false); err != nil {
+		t.Fatalf("runInit() error: %v", err)
+	}
+
+	if _, err := os.Stat(dest); err != nil {
+		t.Fatalf("file should be written after 'y' response: %v", err)
+	}
+	if !strings.Contains(buf.String(), "Write config to") {
+		t.Errorf("output should show prompt, got: %s", buf.String())
+	}
+}
+
+// TestRunInit_ConfirmationPromptNo verifies that when isTTY=true and the user
+// types "n", the file is NOT written and "Aborted" is reported.
+func TestRunInit_ConfirmationPromptNo(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "soda.yaml")
+
+	var buf bytes.Buffer
+	if err := runInit(&buf, strings.NewReader("n\n"), true, dest, false, false, false, true, false); err != nil {
+		t.Fatalf("runInit() error: %v", err)
+	}
+
+	if _, err := os.Stat(dest); err == nil {
+		t.Fatal("file should not be written after 'n' response")
+	}
+	if !strings.Contains(buf.String(), "Aborted") {
+		t.Errorf("output should mention abort, got: %s", buf.String())
+	}
+}
+
+// TestRunInit_YesSkipsPrompt verifies that --yes skips the confirmation prompt
+// even when isTTY=true.
+func TestRunInit_YesSkipsPrompt(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "soda.yaml")
+
+	var buf bytes.Buffer
+	if err := runInit(&buf, strings.NewReader(""), true, dest, false, false, false, true, true); err != nil {
+		t.Fatalf("runInit(yes=true) error: %v", err)
+	}
+
+	if _, err := os.Stat(dest); err != nil {
+		t.Fatalf("file should be written with --yes: %v", err)
+	}
+	if strings.Contains(buf.String(), "Write config to") {
+		t.Errorf("--yes should skip prompt, got: %s", buf.String())
+	}
+}
+
+// TestRunInit_NonTTYAutoWrites verifies that in a non-TTY environment the file
+// is written automatically without showing a confirmation prompt.
+func TestRunInit_NonTTYAutoWrites(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "soda.yaml")
+
+	var buf bytes.Buffer
+	if err := runInit(&buf, strings.NewReader(""), false, dest, false, false, false, true, false); err != nil {
+		t.Fatalf("runInit(isTTY=false) error: %v", err)
+	}
+
+	if _, err := os.Stat(dest); err != nil {
+		t.Fatalf("non-TTY should auto-write without prompt: %v", err)
+	}
+	if strings.Contains(buf.String(), "Write config to") {
+		t.Errorf("non-TTY should not show prompt, got: %s", buf.String())
+	}
+}
+
+// TestColorMsg_WithColor verifies that color codes are emitted when NO_COLOR is unset.
+func TestColorMsg_WithColor(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	result := colorMsg("32", "hello")
+	if !strings.Contains(result, "\033[32m") {
+		t.Errorf("colorMsg should contain ANSI code, got: %q", result)
+	}
+	if !strings.Contains(result, "hello") {
+		t.Errorf("colorMsg should contain message, got: %q", result)
+	}
+}
+
+// TestColorMsg_NoColor verifies that ANSI codes are suppressed when NO_COLOR is set.
+func TestColorMsg_NoColor(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	result := colorMsg("32", "hello")
+	if result != "hello" {
+		t.Errorf("colorMsg with NO_COLOR should return plain text, got: %q", result)
+	}
+}
+
+// TestRunInit_ColorOutput verifies that success messages include ANSI color codes
+// when NO_COLOR is not set.
+func TestRunInit_ColorOutput(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "soda.yaml")
+
+	var buf bytes.Buffer
+	if err := runInit(&buf, strings.NewReader(""), false, dest, false, false, false, true, false); err != nil {
+		t.Fatalf("runInit() error: %v", err)
+	}
+
+	if !strings.Contains(buf.String(), "\033[") {
+		t.Errorf("output should contain ANSI color codes, got: %q", buf.String())
+	}
+}
+
+// TestRunInit_NoColorEnv verifies that ANSI codes are absent when NO_COLOR is set.
+func TestRunInit_NoColorEnv(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "soda.yaml")
+
+	var buf bytes.Buffer
+	if err := runInit(&buf, strings.NewReader(""), false, dest, false, false, false, true, false); err != nil {
+		t.Fatalf("runInit() error: %v", err)
+	}
+
+	if strings.Contains(buf.String(), "\033[") {
+		t.Errorf("NO_COLOR should suppress ANSI codes, got: %q", buf.String())
 	}
 }
 
