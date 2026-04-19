@@ -19,16 +19,18 @@ Design phase. Not yet implemented.
 Generate a starter configuration file:
 
 ```bash
-soda init                        # writes ~/.config/soda/config.yaml
-soda init -o ./soda.config.yaml  # write to a custom path
-soda init --force                # overwrite an existing config
+soda init                        # auto-detect project stack, write soda.yaml
+soda init --dry-run              # preview generated config without writing
+soda init --phases               # also write phases.yaml alongside the config
+soda init --no-gitignore         # skip adding .soda/.worktrees to .gitignore
+soda init --force                # overwrite existing config
+soda init -o ./my-config.yaml    # write to a custom path
 ```
 
-The generated file contains sensible defaults (GitHub Issues source,
-`claude-sonnet-4-20250514` model, standard budget limits). Edit it to
-match your project before running the pipeline. See
-[config.example.yaml](config.example.yaml) for a fully annotated
-reference.
+The generated file auto-detects your project's language, forge, and
+tooling from the repository. Edit it to match your project before
+running the pipeline. See [config.example.yaml](config.example.yaml)
+for a fully annotated reference.
 
 ## Architecture
 
