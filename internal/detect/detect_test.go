@@ -185,34 +185,40 @@ func TestDetect(t *testing.T) {
 			wantTestCommand: "go test ./...",
 		},
 		{
-			name:         "AGENTS.md detected",
-			remoteURL:    "git@github.com:acme/proj.git",
-			files:        map[string]string{"go.mod": "module m\n\ngo 1.22\n", "AGENTS.md": "# Agents"},
-			wantLanguage: "go",
-			wantForge:    "github",
-			wantOwner:    "acme",
-			wantRepo:     "proj",
-			wantContext:  []string{"AGENTS.md"},
+			name:            "AGENTS.md detected",
+			remoteURL:       "git@github.com:acme/proj.git",
+			files:           map[string]string{"go.mod": "module m\n\ngo 1.22\n", "AGENTS.md": "# Agents"},
+			wantLanguage:    "go",
+			wantForge:       "github",
+			wantOwner:       "acme",
+			wantRepo:        "proj",
+			wantFormatter:   "gofmt -w .",
+			wantTestCommand: "go test ./...",
+			wantContext:     []string{"AGENTS.md"},
 		},
 		{
-			name:         "CLAUDE.md detected",
-			remoteURL:    "git@github.com:acme/proj.git",
-			files:        map[string]string{"go.mod": "module m\n\ngo 1.22\n", "CLAUDE.md": "# Claude"},
-			wantLanguage: "go",
-			wantForge:    "github",
-			wantOwner:    "acme",
-			wantRepo:     "proj",
-			wantContext:  []string{"CLAUDE.md"},
+			name:            "CLAUDE.md detected",
+			remoteURL:       "git@github.com:acme/proj.git",
+			files:           map[string]string{"go.mod": "module m\n\ngo 1.22\n", "CLAUDE.md": "# Claude"},
+			wantLanguage:    "go",
+			wantForge:       "github",
+			wantOwner:       "acme",
+			wantRepo:        "proj",
+			wantFormatter:   "gofmt -w .",
+			wantTestCommand: "go test ./...",
+			wantContext:     []string{"CLAUDE.md"},
 		},
 		{
-			name:         "both AGENTS.md and CLAUDE.md detected",
-			remoteURL:    "git@github.com:acme/proj.git",
-			files:        map[string]string{"go.mod": "module m\n\ngo 1.22\n", "AGENTS.md": "# Agents", "CLAUDE.md": "# Claude"},
-			wantLanguage: "go",
-			wantForge:    "github",
-			wantOwner:    "acme",
-			wantRepo:     "proj",
-			wantContext:  []string{"AGENTS.md", "CLAUDE.md"},
+			name:            "both AGENTS.md and CLAUDE.md detected",
+			remoteURL:       "git@github.com:acme/proj.git",
+			files:           map[string]string{"go.mod": "module m\n\ngo 1.22\n", "AGENTS.md": "# Agents", "CLAUDE.md": "# Claude"},
+			wantLanguage:    "go",
+			wantForge:       "github",
+			wantOwner:       "acme",
+			wantRepo:        "proj",
+			wantFormatter:   "gofmt -w .",
+			wantTestCommand: "go test ./...",
+			wantContext:     []string{"AGENTS.md", "CLAUDE.md"},
 		},
 		{
 			name:            "GitHub HTTPS remote without .git suffix",
@@ -253,10 +259,10 @@ func TestDetect(t *testing.T) {
 			if info.Repo != tt.wantRepo {
 				t.Errorf("Repo = %q, want %q", info.Repo, tt.wantRepo)
 			}
-			if tt.wantFormatter != "" && info.Formatter != tt.wantFormatter {
+			if info.Formatter != tt.wantFormatter {
 				t.Errorf("Formatter = %q, want %q", info.Formatter, tt.wantFormatter)
 			}
-			if tt.wantTestCommand != "" && info.TestCommand != tt.wantTestCommand {
+			if info.TestCommand != tt.wantTestCommand {
 				t.Errorf("TestCommand = %q, want %q", info.TestCommand, tt.wantTestCommand)
 			}
 			if tt.wantContext != nil {
