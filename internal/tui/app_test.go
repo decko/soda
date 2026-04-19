@@ -424,6 +424,36 @@ func TestPauseBuffersEvents(t *testing.T) {
 	}
 }
 
+func TestMonitorWarningAppendsOutput(t *testing.T) {
+	m := testModel()
+	m.handleEvent(pipeline.Event{
+		Kind: pipeline.EventMonitorWarning,
+		Data: map[string]any{
+			"warning": "self_user not configured; falling back to stub (required for comment classification)",
+		},
+	})
+	if len(m.output.lines) != 1 {
+		t.Fatalf("expected 1 output line, got %d", len(m.output.lines))
+	}
+	if !strings.Contains(m.output.lines[0], "self_user not configured") {
+		t.Errorf("expected warning text in output, got %q", m.output.lines[0])
+	}
+	if !strings.Contains(m.output.lines[0], "⚠️") {
+		t.Errorf("expected ⚠️ prefix in output, got %q", m.output.lines[0])
+	}
+}
+
+func TestMonitorWarningMissingData(t *testing.T) {
+	m := testModel()
+	m.handleEvent(pipeline.Event{
+		Kind: pipeline.EventMonitorWarning,
+		Data: map[string]any{},
+	})
+	if len(m.output.lines) != 0 {
+		t.Errorf("expected no output for missing warning data, got %d lines", len(m.output.lines))
+	}
+}
+
 func TestCheckpointPause(t *testing.T) {
 	m := testModel()
 	m.handleEvent(pipeline.Event{Kind: pipeline.EventCheckpointPause})

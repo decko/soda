@@ -161,6 +161,11 @@ func (m *Model) handleEvent(ev pipeline.Event) {
 			m.stats.warning = msg
 		}
 
+	case pipeline.EventMonitorWarning:
+		if w, ok := ev.Data["warning"].(string); ok {
+			m.output.appendLine("⚠️  " + w)
+		}
+
 	case pipeline.EventCheckpointPause:
 		m.paused = true
 		m.keys.paused = true
