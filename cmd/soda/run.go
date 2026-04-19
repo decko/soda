@@ -306,30 +306,45 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 
 	engine = pipeline.NewEngine(r, state, engineCfg)
 
+	// Snapshot cost before this run so the ledger records only the delta.
+	costBefore := state.Meta().TotalCost
+
 	// Run or resume
 	fromPhase, _ := cmd.Flags().GetString("from")
 	startTime := time.Now()
 
-	if useTUI {
-		return runWithTUI(ctx, engine, state, pl, t, fromPhase, pauseSignal, tuiEventCh, startTime, skippedPhases)
-	}
-
 	var runErr error
-	if fromPhase != "" {
-		if fromPhase == "last" {
-			fromPhase, err = resolveLastPhase(state.Meta(), pl.Phases)
-			if err != nil {
-				return fmt.Errorf("run: %w", err)
-			}
-		}
-		fmt.Printf("Resuming from phase: %s\n", fromPhase)
-		runErr = engine.Resume(ctx, fromPhase)
+	if useTUI {
+		runErr = runWithTUI(ctx, engine, state, pl, t, fromPhase, pauseSignal, tuiEventCh, startTime, skippedPhases)
 	} else {
-		runErr = engine.Run(ctx)
+		if fromPhase != "" {
+			if fromPhase == "last" {
+				fromPhase, err = resolveLastPhase(state.Meta(), pl.Phases)
+				if err != nil {
+					return fmt.Errorf("run: %w", err)
+				}
+			}
+			fmt.Printf("Resuming from phase: %s\n", fromPhase)
+			runErr = engine.Resume(ctx, fromPhase)
+		} else {
+			runErr = engine.Run(ctx)
+		}
+
+		// Print summary
+		printSummary(state, pl.Phases, t.Summary, time.Since(startTime), runErr, skippedPhases)
 	}
 
-	// Print summary
-	printSummary(state, pl.Phases, t.Summary, time.Since(startTime), runErr, skippedPhases)
+	// Append an entry to the persistent cost ledger (success or failure).
+	// Errors are non-fatal — a ledger write failure must not mask the pipeline result,
+	// but we emit a warning to stderr so users can diagnose issues (e.g. permission denied).
+	if ledgerErr := pipeline.AppendCostEntry(stateDir, pipeline.CostEntry{
+		Ticket:    ticketKey,
+		Timestamp: time.Now(),
+		Cost:      state.Meta().TotalCost - costBefore,
+		Success:   runErr == nil,
+	}); ledgerErr != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to record cost entry: %v\n", ledgerErr)
+	}
 
 	return runErr
 }

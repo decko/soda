@@ -56,6 +56,8 @@ func cleanAll(stateDir string, dryRun bool) error {
 
 	cleaned := 0
 	for _, entry := range entries {
+		// Skip non-directories. This preserves stateDir-level files such as
+		// cost.json (the persistent cost ledger) which must survive clean runs.
 		if !entry.IsDir() {
 			continue
 		}

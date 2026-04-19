@@ -1,6 +1,8 @@
 package pipeline
 
 import (
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -148,6 +150,126 @@ func TestReadMeta(t *testing.T) {
 	_, err = ReadMeta(filepath.Join(dir, "nonexistent.json"))
 	if err == nil {
 		t.Error("expected error for missing file")
+	}
+}
+
+func TestCumulativeCost_Empty(t *testing.T) {
+	dir := t.TempDir()
+	cost, err := CumulativeCost(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cost != 0 {
+		t.Errorf("CumulativeCost = %f, want 0", cost)
+	}
+}
+
+func TestCumulativeCost_NonexistentDir(t *testing.T) {
+	cost, err := CumulativeCost("/tmp/nonexistent-soda-cumulative-cost-test")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cost != 0 {
+		t.Errorf("CumulativeCost = %f, want 0", cost)
+	}
+}
+
+func TestCumulativeCost_MultipleSessions(t *testing.T) {
+	dir := t.TempDir()
+
+	writeTestMeta(t, filepath.Join(dir, "TICKET-1"), &PipelineMeta{
+		Ticket:    "TICKET-1",
+		TotalCost: 1.50,
+		StartedAt: time.Now(),
+		Phases:    map[string]*PhaseState{},
+	})
+	writeTestMeta(t, filepath.Join(dir, "TICKET-2"), &PipelineMeta{
+		Ticket:    "TICKET-2",
+		TotalCost: 3.25,
+		StartedAt: time.Now(),
+		Phases:    map[string]*PhaseState{},
+	})
+	writeTestMeta(t, filepath.Join(dir, "TICKET-3"), &PipelineMeta{
+		Ticket:    "TICKET-3",
+		TotalCost: 0.75,
+		StartedAt: time.Now(),
+		Phases:    map[string]*PhaseState{},
+	})
+
+	cost, err := CumulativeCost(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := 5.50
+	if cost != want {
+		t.Errorf("CumulativeCost = %f, want %f", cost, want)
+	}
+}
+
+func TestCumulativeCost_SkipsNonDirectories(t *testing.T) {
+	dir := t.TempDir()
+
+	writeTestMeta(t, filepath.Join(dir, "TICKET-1"), &PipelineMeta{
+		Ticket:    "TICKET-1",
+		TotalCost: 2.00,
+		StartedAt: time.Now(),
+		Phases:    map[string]*PhaseState{},
+	})
+
+	// Create a regular file (not a directory) — should be skipped.
+	if err := os.WriteFile(filepath.Join(dir, "not-a-dir"), []byte("junk"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cost, err := CumulativeCost(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cost != 2.00 {
+		t.Errorf("CumulativeCost = %f, want 2.00", cost)
+	}
+}
+
+func TestCumulativeCost_SkipsBrokenMeta(t *testing.T) {
+	dir := t.TempDir()
+
+	writeTestMeta(t, filepath.Join(dir, "TICKET-1"), &PipelineMeta{
+		Ticket:    "TICKET-1",
+		TotalCost: 4.00,
+		StartedAt: time.Now(),
+		Phases:    map[string]*PhaseState{},
+	})
+
+	// Create a directory with a corrupt meta.json — should be skipped.
+	brokenDir := filepath.Join(dir, "BROKEN")
+	if err := os.MkdirAll(brokenDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(brokenDir, "meta.json"), []byte("not json"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cost, err := CumulativeCost(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cost != 4.00 {
+		t.Errorf("CumulativeCost = %f, want 4.00", cost)
+	}
+}
+
+// writeTestMeta writes a PipelineMeta to dir/meta.json for testing.
+func writeTestMeta(t *testing.T, dir string, meta *PipelineMeta) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	data, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "meta.json"), data, 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
 	}
 }
 

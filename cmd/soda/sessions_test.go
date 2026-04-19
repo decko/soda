@@ -259,29 +259,37 @@ func TestSessionsSummaryLine(t *testing.T) {
 		want string
 	}{
 		{
-			name: "mixed statuses",
+			name: "mixed statuses with cost",
 			rows: []sessionEntry{
-				{status: "completed"},
-				{status: "completed"},
-				{status: "running"},
-				{status: "failed"},
+				{status: "completed", costRaw: 1.50},
+				{status: "completed", costRaw: 2.00},
+				{status: "running", costRaw: 0.75},
+				{status: "failed", costRaw: 3.25},
 			},
-			want: "4 sessions (1 running, 2 completed, 1 failed)",
+			want: "4 sessions (1 running, 2 completed, 1 failed) — $7.50 total",
 		},
 		{
-			name: "all completed",
+			name: "all completed with cost",
 			rows: []sessionEntry{
-				{status: "completed"},
-				{status: "completed"},
+				{status: "completed", costRaw: 1.23},
+				{status: "completed", costRaw: 4.56},
 			},
-			want: "2 sessions (2 completed)",
+			want: "2 sessions (2 completed) — $5.79 total",
 		},
 		{
-			name: "single session",
+			name: "single session with cost",
 			rows: []sessionEntry{
-				{status: "running"},
+				{status: "running", costRaw: 0.50},
 			},
-			want: "1 session (1 running)",
+			want: "1 session (1 running) — $0.50 total",
+		},
+		{
+			name: "zero cost sessions",
+			rows: []sessionEntry{
+				{status: "completed", costRaw: 0},
+				{status: "failed", costRaw: 0},
+			},
+			want: "2 sessions (1 completed, 1 failed) — $0.00 total",
 		},
 	}
 	for _, tc := range tests {
