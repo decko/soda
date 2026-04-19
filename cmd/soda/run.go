@@ -332,13 +332,16 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 	}
 
 	// Append an entry to the persistent cost ledger (success or failure).
-	// Errors are non-fatal — a ledger write failure must not mask the pipeline result.
-	_ = pipeline.AppendCostEntry(stateDir, pipeline.CostEntry{
+	// Errors are non-fatal — a ledger write failure must not mask the pipeline result,
+	// but we emit a warning to stderr so users can diagnose issues (e.g. permission denied).
+	if ledgerErr := pipeline.AppendCostEntry(stateDir, pipeline.CostEntry{
 		Ticket:    ticketKey,
 		Timestamp: time.Now(),
 		Cost:      state.Meta().TotalCost,
 		Success:   runErr == nil,
-	})
+	}); ledgerErr != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to record cost entry: %v\n", ledgerErr)
+	}
 
 	return runErr
 }
