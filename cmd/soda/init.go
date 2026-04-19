@@ -17,6 +17,17 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// initOptions groups the flags for runInit so the function signature stays
+// readable and callers don't have to track positional booleans.
+type initOptions struct {
+	Output      string
+	Force       bool
+	DryRun      bool
+	Phases      bool
+	NoGitignore bool
+	Yes         bool
+}
+
 func newInitCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "init",
@@ -34,7 +45,14 @@ refuses to overwrite an existing file unless --force is given.`,
 			noGitignore, _ := cmd.Flags().GetBool("no-gitignore")
 			yes, _ := cmd.Flags().GetBool("yes")
 			isTTY := isatty.IsTerminal(os.Stdin.Fd()) || isatty.IsCygwinTerminal(os.Stdin.Fd())
-			return runInit(cmd.OutOrStdout(), cmd.InOrStdin(), isTTY, output, force, dryRun, phases, noGitignore, yes)
+			return runInit(cmd.OutOrStdout(), cmd.InOrStdin(), isTTY, initOptions{
+				Output:      output,
+				Force:       force,
+				DryRun:      dryRun,
+				Phases:      phases,
+				NoGitignore: noGitignore,
+				Yes:         yes,
+			})
 		},
 	}
 
@@ -49,13 +67,13 @@ refuses to overwrite an existing file unless --force is given.`,
 }
 
 // runInit generates a config (optionally auto-detected) and writes it to disk.
-// When dryRun is true the generated YAML is printed to w without writing files.
-// When phases is true the embedded phases.yaml is written alongside the config.
-// Unless noGitignore is true, .soda and .worktrees entries are added to .gitignore.
-// When isTTY is true and yes is false a confirmation prompt is shown before writing.
+// When opts.DryRun is true the generated YAML is printed to w without writing files.
+// When opts.Phases is true the embedded phases.yaml is written alongside the config.
+// Unless opts.NoGitignore is true, .soda and .worktrees entries are added to .gitignore.
+// When isTTY is true and opts.Yes is false a confirmation prompt is shown before writing.
 // When isTTY is false (non-interactive) the file is written without prompting.
 // Extracted for testability — accepts an io.Writer for output and io.Reader for stdin.
-func runInit(w io.Writer, stdin io.Reader, isTTY bool, output string, force bool, dryRun bool, phases bool, noGitignore bool, yes bool) error {
+func runInit(w io.Writer, stdin io.Reader, isTTY bool, opts initOptions) error {
 	// Auto-detect project stack. Detection is best-effort: if it fails
 	// we fall back to DefaultConfig with placeholder values.
 	cfg := config.DefaultConfig()
@@ -73,19 +91,19 @@ func runInit(w io.Writer, stdin io.Reader, isTTY bool, output string, force bool
 	}
 
 	// Dry-run: print config to writer and return without writing files.
-	if dryRun {
+	if opts.DryRun {
 		_, writeErr := w.Write(data)
 		return writeErr
 	}
 
 	// Resolve output path.
-	destPath, err := resolveInitPath(output)
+	destPath, err := resolveInitPath(opts.Output)
 	if err != nil {
 		return err
 	}
 
 	// Check for existing file unless --force.
-	if !force {
+	if !opts.Force {
 		if _, err := os.Stat(destPath); err == nil {
 			return fmt.Errorf("config file already exists: %s (use --force to overwrite)", destPath)
 		} else if !errors.Is(err, fs.ErrNotExist) {
@@ -95,7 +113,7 @@ func runInit(w io.Writer, stdin io.Reader, isTTY bool, output string, force bool
 
 	// Confirmation prompt: shown when running in a TTY and --yes was not given.
 	// In non-TTY environments (CI, pipes) the file is written automatically.
-	if isTTY && !yes {
+	if isTTY && !opts.Yes {
 		confirmed, promptErr := confirmWrite(w, stdin, destPath)
 		if promptErr != nil {
 			return promptErr
@@ -120,15 +138,15 @@ func runInit(w io.Writer, stdin io.Reader, isTTY bool, output string, force bool
 	fmt.Fprintln(w, colorMsg("32", fmt.Sprintf("Config written to %s", destPath)))
 
 	// Write phases.yaml alongside the config when --phases is set.
-	if phases {
+	if opts.Phases {
 		phasesPath := filepath.Join(filepath.Dir(destPath), "phases.yaml")
-		if err := writePhases(w, phasesPath, force); err != nil {
+		if err := writePhases(w, phasesPath, opts.Force); err != nil {
 			return err
 		}
 	}
 
 	// Ensure .soda and .worktrees are in .gitignore unless --no-gitignore.
-	if !noGitignore {
+	if !opts.NoGitignore {
 		gitignorePath := filepath.Join(filepath.Dir(destPath), ".gitignore")
 		if err := ensureGitignore(w, gitignorePath, cfg); err != nil {
 			// Gitignore is best-effort; warn but don't fail.
