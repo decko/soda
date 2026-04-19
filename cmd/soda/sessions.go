@@ -321,11 +321,13 @@ func sessionsToTUI(rows []sessionEntry) []tui.SessionInfo {
 	return sessions
 }
 
-// sessionsSummaryLine returns a summary like "4 sessions (3 completed, 1 running)".
+// sessionsSummaryLine returns a summary like "4 sessions (3 completed, 1 running) — $12.34 total".
 func sessionsSummaryLine(rows []sessionEntry) string {
 	counts := map[string]int{}
+	var totalCost float64
 	for _, row := range rows {
 		counts[row.status]++
+		totalCost += row.costRaw
 	}
 
 	total := len(rows)
@@ -337,13 +339,16 @@ func sessionsSummaryLine(rows []sessionEntry) string {
 		}
 	}
 
-	if len(parts) == 0 {
-		return fmt.Sprintf("%d sessions", total)
-	}
-
 	noun := "sessions"
 	if total == 1 {
 		noun = "session"
 	}
-	return fmt.Sprintf("%d %s (%s)", total, noun, strings.Join(parts, ", "))
+
+	costStr := fmt.Sprintf("$%.2f total", totalCost)
+
+	if len(parts) == 0 {
+		return fmt.Sprintf("%d %s — %s", total, noun, costStr)
+	}
+
+	return fmt.Sprintf("%d %s (%s) — %s", total, noun, strings.Join(parts, ", "), costStr)
 }
