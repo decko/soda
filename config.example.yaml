@@ -40,8 +40,8 @@ sandbox:
 
 # Budget
 limits:
-  max_cost_per_ticket: 15.00
-  max_cost_per_phase: 8.00
+  max_cost_per_ticket: 30.00
+  max_cost_per_phase: 15.00
 
 # Worktrees
 worktree_dir: .worktrees
