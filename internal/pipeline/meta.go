@@ -49,22 +49,38 @@ type PipelineMeta struct {
 	Phases             map[string]*PhaseState `json:"phases"`
 }
 
-// CumulativeCost scans all session directories under stateDir and returns the
-// sum of TotalCost from every meta.json. Directories without a valid meta.json
-// are silently skipped. Returns 0 if the directory does not exist or is empty.
+// CumulativeCost returns the total spend across all pipeline runs. It first
+// sums all entries from the persistent cost ledger (stateDir/cost.json), which
+// survives soda clean. For backward compatibility it also adds TotalCost from
+// meta.json files belonging to sessions that have no ledger entries yet.
 func CumulativeCost(stateDir string) (float64, error) {
+	// Sum all entries from the persistent ledger (survives soda clean).
+	ledger, err := ReadCostLedger(stateDir)
+	if err != nil {
+		return 0, fmt.Errorf("pipeline: read cost ledger for cumulative cost: %w", err)
+	}
+	inLedger := make(map[string]bool, len(ledger))
+	var total float64
+	for _, e := range ledger {
+		inLedger[e.Ticket] = true
+		total += e.Cost
+	}
+
+	// Also sum from meta.json for sessions not yet tracked in the ledger
+	// (legacy sessions that predate the ledger feature).
 	entries, err := os.ReadDir(stateDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return 0, nil
+			return total, nil
 		}
 		return 0, fmt.Errorf("pipeline: read state dir for cumulative cost: %w", err)
 	}
-
-	var total float64
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
+		}
+		if inLedger[entry.Name()] {
+			continue // already counted via ledger; skip to avoid double-counting
 		}
 		metaPath := filepath.Join(stateDir, entry.Name(), "meta.json")
 		meta, readErr := ReadMeta(metaPath)
