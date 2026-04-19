@@ -4,7 +4,37 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestPipelineTimeoutError(t *testing.T) {
+	err := &PipelineTimeoutError{
+		Limit:   2 * time.Hour,
+		Elapsed: 2*time.Hour + 5*time.Minute,
+		Phase:   "implement",
+	}
+	msg := err.Error()
+	if msg == "" {
+		t.Fatal("Error() should return non-empty string")
+	}
+	if !strings.Contains(msg, "implement") {
+		t.Errorf("Error() should contain phase name, got: %s", msg)
+	}
+	if !strings.Contains(msg, "2h0m0s") {
+		t.Errorf("Error() should contain limit, got: %s", msg)
+	}
+	if !strings.Contains(msg, "2h5m0s") {
+		t.Errorf("Error() should contain elapsed, got: %s", msg)
+	}
+
+	var target *PipelineTimeoutError
+	if !errors.As(err, &target) {
+		t.Error("errors.As should match PipelineTimeoutError")
+	}
+	if target.Phase != "implement" {
+		t.Errorf("Phase = %q, want %q", target.Phase, "implement")
+	}
+}
 
 func TestBudgetExceededError(t *testing.T) {
 	err := &BudgetExceededError{Limit: 15.00, Actual: 15.50, Phase: "verify"}

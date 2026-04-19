@@ -3,6 +3,7 @@ package pipeline
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 // BudgetExceededError is returned when accumulated cost exceeds the configured limit.
@@ -39,6 +40,19 @@ type DependencyNotMetError struct {
 func (e *DependencyNotMetError) Error() string {
 	return fmt.Sprintf("pipeline: phase %s requires %s to be completed",
 		e.Phase, e.Dependency)
+}
+
+// PipelineTimeoutError is returned when the total pipeline duration exceeds
+// the configured max_pipeline_duration limit.
+type PipelineTimeoutError struct {
+	Limit   time.Duration
+	Elapsed time.Duration
+	Phase   string // phase that was running (or about to start) when timeout fired
+}
+
+func (e *PipelineTimeoutError) Error() string {
+	return fmt.Sprintf("pipeline: timeout after %s (limit %s) during phase %s",
+		e.Elapsed.Truncate(time.Second), e.Limit.Truncate(time.Second), e.Phase)
 }
 
 // PhaseGateError is returned when domain gating fails after a phase succeeds.
