@@ -144,6 +144,9 @@ func DefaultConfig() *Config {
 				Labels:      []string{"ai-assisted"},
 			},
 		},
+		Monitor: MonitorConfig{
+			SelfUser: "your-bot-username",
+		},
 	}
 }
 

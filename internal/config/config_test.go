@@ -226,6 +226,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.GitHub.Owner != "your-org" {
 		t.Errorf("GitHub.Owner = %q, want %q", cfg.GitHub.Owner, "your-org")
 	}
+	if cfg.Monitor.SelfUser != "your-bot-username" {
+		t.Errorf("Monitor.SelfUser = %q, want %q", cfg.Monitor.SelfUser, "your-bot-username")
+	}
 }
 
 func TestMarshalRoundTrip(t *testing.T) {
