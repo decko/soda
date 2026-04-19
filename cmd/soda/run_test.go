@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/decko/soda/internal/claude"
+	"github.com/decko/soda/internal/config"
 	"github.com/decko/soda/internal/pipeline"
 	"github.com/decko/soda/internal/progress"
 )
@@ -779,6 +780,81 @@ func TestPrintSummaryGenericError(t *testing.T) {
 	if !strings.Contains(output, "cd /tmp/worktrees/PROJ-60") {
 		t.Error("expected cd to worktree path")
 	}
+}
+
+func TestBuildPromptConfigDetectDefaults(t *testing.T) {
+	t.Run("detected_values_fill_empty_fields", func(t *testing.T) {
+		cfg := &config.Config{
+			Repos: []config.RepoConfig{
+				{Name: "myrepo", Forge: "github"},
+				// Formatter and TestCommand are empty.
+			},
+		}
+		promptConfig := buildPromptConfig(cfg)
+
+		// Simulate what runPipeline does after detect.
+		if promptConfig.Formatter == "" {
+			promptConfig.Formatter = "gofmt -w ."
+		}
+		if promptConfig.TestCommand == "" {
+			promptConfig.TestCommand = "go test ./..."
+		}
+
+		if promptConfig.Formatter != "gofmt -w ." {
+			t.Errorf("Formatter = %q, want %q", promptConfig.Formatter, "gofmt -w .")
+		}
+		if promptConfig.TestCommand != "go test ./..." {
+			t.Errorf("TestCommand = %q, want %q", promptConfig.TestCommand, "go test ./...")
+		}
+	})
+
+	t.Run("explicit_config_takes_precedence", func(t *testing.T) {
+		cfg := &config.Config{
+			Repos: []config.RepoConfig{
+				{
+					Name:        "myrepo",
+					Forge:       "github",
+					Formatter:   "custom-fmt",
+					TestCommand: "custom-test",
+				},
+			},
+		}
+		promptConfig := buildPromptConfig(cfg)
+
+		// Simulate detection filling — should NOT overwrite.
+		if promptConfig.Formatter == "" {
+			promptConfig.Formatter = "gofmt -w ."
+		}
+		if promptConfig.TestCommand == "" {
+			promptConfig.TestCommand = "go test ./..."
+		}
+
+		if promptConfig.Formatter != "custom-fmt" {
+			t.Errorf("Formatter = %q, want %q (explicit config should take precedence)", promptConfig.Formatter, "custom-fmt")
+		}
+		if promptConfig.TestCommand != "custom-test" {
+			t.Errorf("TestCommand = %q, want %q (explicit config should take precedence)", promptConfig.TestCommand, "custom-test")
+		}
+	})
+
+	t.Run("no_repos_uses_detected_values", func(t *testing.T) {
+		cfg := &config.Config{}
+		promptConfig := buildPromptConfig(cfg)
+
+		if promptConfig.Formatter == "" {
+			promptConfig.Formatter = "cargo fmt"
+		}
+		if promptConfig.TestCommand == "" {
+			promptConfig.TestCommand = "cargo test"
+		}
+
+		if promptConfig.Formatter != "cargo fmt" {
+			t.Errorf("Formatter = %q, want %q", promptConfig.Formatter, "cargo fmt")
+		}
+		if promptConfig.TestCommand != "cargo test" {
+			t.Errorf("TestCommand = %q, want %q", promptConfig.TestCommand, "cargo test")
+		}
+	})
 }
 
 func TestHandleEventPatchExhaustedCycles(t *testing.T) {

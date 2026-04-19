@@ -319,6 +319,13 @@ func TestValidateTemplate(t *testing.T) {
 		}
 	})
 
+	t.Run("valid_template_with_detected_stack", func(t *testing.T) {
+		tmpl := `{{- if .DetectedStack.Language}}Language: {{.DetectedStack.Language}}{{- end}}`
+		if err := ValidateTemplate(tmpl); err != nil {
+			t.Fatalf("ValidateTemplate: %v", err)
+		}
+	})
+
 	t.Run("errors_on_syntax_error", func(t *testing.T) {
 		err := ValidateTemplate("{{.Invalid}")
 		if err == nil {
@@ -710,6 +717,60 @@ Verdict: {{.ReworkFeedback.Verdict}}
 		// Core triage content should still be present.
 		if !strings.Contains(result, "TEST-134") {
 			t.Errorf("triage prompt should still contain ticket key;\ngot: %s", result)
+		}
+	})
+
+	t.Run("renders_detected_stack_when_present", func(t *testing.T) {
+		tmpl := `{{- if .DetectedStack.Language}}Language: {{.DetectedStack.Language}}
+Forge: {{.DetectedStack.Forge}}
+Owner: {{.DetectedStack.Owner}}
+Repo: {{.DetectedStack.Repo}}
+{{- range .DetectedStack.ContextFiles}}
+Context: {{.}}
+{{- end}}
+{{- end}}`
+		data := PromptData{
+			DetectedStack: DetectedStackData{
+				Language:     "go",
+				Forge:        "github",
+				Owner:        "decko",
+				Repo:         "soda",
+				ContextFiles: []string{"AGENTS.md", "CLAUDE.md"},
+			},
+		}
+		result, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+		if !strings.Contains(result, "Language: go") {
+			t.Errorf("result should contain language, got: %s", result)
+		}
+		if !strings.Contains(result, "Forge: github") {
+			t.Errorf("result should contain forge, got: %s", result)
+		}
+		if !strings.Contains(result, "Owner: decko") {
+			t.Errorf("result should contain owner, got: %s", result)
+		}
+		if !strings.Contains(result, "Repo: soda") {
+			t.Errorf("result should contain repo, got: %s", result)
+		}
+		if !strings.Contains(result, "Context: AGENTS.md") {
+			t.Errorf("result should contain AGENTS.md, got: %s", result)
+		}
+		if !strings.Contains(result, "Context: CLAUDE.md") {
+			t.Errorf("result should contain CLAUDE.md, got: %s", result)
+		}
+	})
+
+	t.Run("omits_detected_stack_when_empty", func(t *testing.T) {
+		tmpl := `{{- if .DetectedStack.Language}}Language: {{.DetectedStack.Language}}{{- end}}`
+		data := PromptData{} // zero-value DetectedStack
+		result, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+		if strings.Contains(result, "Language") {
+			t.Errorf("result should not contain Language when DetectedStack is zero-value, got: %s", result)
 		}
 	})
 
