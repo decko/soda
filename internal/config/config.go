@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,6 +23,16 @@ type Config struct {
 	Context      []string            `yaml:"context"`
 	PhaseContext map[string][]string `yaml:"phase_context"`
 	Repos        []RepoConfig        `yaml:"repos"`
+	Monitor      MonitorConfig       `yaml:"monitor"`
+}
+
+// MonitorConfig holds monitor phase settings loaded from the config file.
+// These values are wired into EngineConfig at startup.
+type MonitorConfig struct {
+	Profile    string   `yaml:"profile"`    // monitor profile preset: conservative, smart, aggressive
+	SelfUser   string   `yaml:"self_user"`  // PR author username for self-comment filtering
+	BotUsers   []string `yaml:"bot_users"`  // known bot usernames to filter out
+	CODEOWNERS string   `yaml:"codeowners"` // path to CODEOWNERS file for authority resolution
 }
 
 // JiraConfig holds Jira ticket source settings.
@@ -134,15 +145,33 @@ func DefaultConfig() *Config {
 				Labels:      []string{"ai-assisted"},
 			},
 		},
+		// Monitor.SelfUser left empty so that the empty-string guard in
+		// runMonitor triggers a warning and stub fallback. Users must set
+		// self_user explicitly in their config for comment classification.
+		Monitor: MonitorConfig{},
 	}
 }
 
 // Marshal serialises a Config to YAML bytes.
+// When SelfUser is empty the serialised output includes an inline comment
+// reminding users that the field is required for comment classification.
 func Marshal(cfg *Config) ([]byte, error) {
 	data, err := yaml.Marshal(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("config: marshal: %w", err)
 	}
+
+	// When self_user is empty, replace the bare `self_user: ""` line with
+	// a commented-out example so the requirement is obvious in the generated file.
+	if cfg.Monitor.SelfUser == "" {
+		data = bytes.Replace(
+			data,
+			[]byte("  self_user: \"\""),
+			[]byte("  self_user: \"\" # REQUIRED — set to your bot's GitHub username for comment classification"),
+			1,
+		)
+	}
+
 	return data, nil
 }
 

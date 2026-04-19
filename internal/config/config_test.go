@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/decko/soda/internal/pipeline"
@@ -100,6 +101,25 @@ func TestLoad(t *testing.T) {
 				if cfg.GitHub.Plan.EndMarker != "<!-- plan:end -->" {
 					t.Errorf("GitHub.Plan.EndMarker = %q, want %q", cfg.GitHub.Plan.EndMarker, "<!-- plan:end -->")
 				}
+				// Monitor config
+				if cfg.Monitor.Profile != "smart" {
+					t.Errorf("Monitor.Profile = %q, want %q", cfg.Monitor.Profile, "smart")
+				}
+				if cfg.Monitor.SelfUser != "soda-bot" {
+					t.Errorf("Monitor.SelfUser = %q, want %q", cfg.Monitor.SelfUser, "soda-bot")
+				}
+				if len(cfg.Monitor.BotUsers) != 2 {
+					t.Fatalf("len(Monitor.BotUsers) = %d, want 2", len(cfg.Monitor.BotUsers))
+				}
+				if cfg.Monitor.BotUsers[0] != "dependabot" {
+					t.Errorf("Monitor.BotUsers[0] = %q, want %q", cfg.Monitor.BotUsers[0], "dependabot")
+				}
+				if cfg.Monitor.BotUsers[1] != "renovate" {
+					t.Errorf("Monitor.BotUsers[1] = %q, want %q", cfg.Monitor.BotUsers[1], "renovate")
+				}
+				if cfg.Monitor.CODEOWNERS != ".github/CODEOWNERS" {
+					t.Errorf("Monitor.CODEOWNERS = %q, want %q", cfg.Monitor.CODEOWNERS, ".github/CODEOWNERS")
+				}
 			},
 		},
 		{
@@ -111,6 +131,16 @@ func TestLoad(t *testing.T) {
 				}
 				if len(cfg.Repos) != 0 {
 					t.Errorf("len(Repos) = %d, want 0", len(cfg.Repos))
+				}
+				// Monitor config should be zero-valued when not in file.
+				if cfg.Monitor.SelfUser != "" {
+					t.Errorf("Monitor.SelfUser = %q, want empty", cfg.Monitor.SelfUser)
+				}
+				if cfg.Monitor.Profile != "" {
+					t.Errorf("Monitor.Profile = %q, want empty", cfg.Monitor.Profile)
+				}
+				if len(cfg.Monitor.BotUsers) != 0 {
+					t.Errorf("len(Monitor.BotUsers) = %d, want 0", len(cfg.Monitor.BotUsers))
 				}
 			},
 		},
@@ -197,6 +227,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.GitHub.Owner != "your-org" {
 		t.Errorf("GitHub.Owner = %q, want %q", cfg.GitHub.Owner, "your-org")
 	}
+	if cfg.Monitor.SelfUser != "" {
+		t.Errorf("Monitor.SelfUser = %q, want empty (so runMonitor falls back to stub)", cfg.Monitor.SelfUser)
+	}
 }
 
 func TestMarshalRoundTrip(t *testing.T) {
@@ -232,6 +265,74 @@ func TestMarshalRoundTrip(t *testing.T) {
 	}
 	if roundTripped.Repos[0].Name != original.Repos[0].Name {
 		t.Errorf("Repos[0].Name = %q, want %q", roundTripped.Repos[0].Name, original.Repos[0].Name)
+	}
+}
+
+func TestMarshal_EmptySelfUserComment(t *testing.T) {
+	cfg := DefaultConfig()
+	// SelfUser should be empty by default.
+	if cfg.Monitor.SelfUser != "" {
+		t.Fatalf("DefaultConfig().Monitor.SelfUser = %q, want empty", cfg.Monitor.SelfUser)
+	}
+
+	data, err := Marshal(cfg)
+	if err != nil {
+		t.Fatalf("Marshal() error: %v", err)
+	}
+
+	yaml := string(data)
+	if !strings.Contains(yaml, "REQUIRED") {
+		t.Errorf("expected REQUIRED comment in marshalled output when SelfUser is empty, got:\n%s", yaml)
+	}
+	if !strings.Contains(yaml, "self_user") {
+		t.Errorf("expected self_user field in marshalled output, got:\n%s", yaml)
+	}
+
+	// When SelfUser is set, the comment should NOT appear.
+	cfg.Monitor.SelfUser = "my-bot"
+	data, err = Marshal(cfg)
+	if err != nil {
+		t.Fatalf("Marshal() error: %v", err)
+	}
+	yamlSet := string(data)
+	if strings.Contains(yamlSet, "REQUIRED") {
+		t.Errorf("REQUIRED comment should not appear when SelfUser is set, got:\n%s", yamlSet)
+	}
+}
+
+func TestMarshalRoundTrip_MonitorConfig(t *testing.T) {
+	original := DefaultConfig()
+	original.Monitor = MonitorConfig{
+		Profile:    "smart",
+		SelfUser:   "soda-bot",
+		BotUsers:   []string{"dependabot", "renovate"},
+		CODEOWNERS: ".github/CODEOWNERS",
+	}
+
+	data, err := Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal() error: %v", err)
+	}
+
+	var roundTripped Config
+	if err := yaml.Unmarshal(data, &roundTripped); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	if roundTripped.Monitor.Profile != "smart" {
+		t.Errorf("Monitor.Profile = %q, want %q", roundTripped.Monitor.Profile, "smart")
+	}
+	if roundTripped.Monitor.SelfUser != "soda-bot" {
+		t.Errorf("Monitor.SelfUser = %q, want %q", roundTripped.Monitor.SelfUser, "soda-bot")
+	}
+	if len(roundTripped.Monitor.BotUsers) != 2 {
+		t.Fatalf("len(Monitor.BotUsers) = %d, want 2", len(roundTripped.Monitor.BotUsers))
+	}
+	if roundTripped.Monitor.BotUsers[0] != "dependabot" {
+		t.Errorf("Monitor.BotUsers[0] = %q, want %q", roundTripped.Monitor.BotUsers[0], "dependabot")
+	}
+	if roundTripped.Monitor.CODEOWNERS != ".github/CODEOWNERS" {
+		t.Errorf("Monitor.CODEOWNERS = %q, want %q", roundTripped.Monitor.CODEOWNERS, ".github/CODEOWNERS")
 	}
 }
 
