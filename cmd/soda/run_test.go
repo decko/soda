@@ -644,6 +644,39 @@ func TestPrintSummaryBudgetExceeded(t *testing.T) {
 	}
 }
 
+func TestPrintSummaryPhaseBudgetExceeded(t *testing.T) {
+	dir := t.TempDir()
+	state, _ := pipeline.LoadOrCreate(dir, "PROJ-25")
+	meta := state.Meta()
+	meta.Branch = "soda/PROJ-25"
+	meta.TotalCost = 9.00
+
+	meta.Phases["triage"] = &pipeline.PhaseState{Status: pipeline.PhaseCompleted, DurationMs: 10000, Cost: 0.50}
+	meta.Phases["plan"] = &pipeline.PhaseState{Status: pipeline.PhaseCompleted, DurationMs: 20000, Cost: 0.50}
+	meta.Phases["implement"] = &pipeline.PhaseState{Status: pipeline.PhaseFailed, DurationMs: 60000, Cost: 8.00, Error: "phase budget exceeded"}
+
+	phaseBudgetErr := &pipeline.PhaseBudgetExceededError{Limit: 8.00, Actual: 8.00, Phase: "implement"}
+	var buf bytes.Buffer
+	fprintSummary(&buf, state, testPhases(), "Phase budget test", 4*time.Minute, phaseBudgetErr, nil)
+	output := buf.String()
+
+	if !strings.Contains(output, "Next steps") {
+		t.Error("expected next steps section")
+	}
+	if !strings.Contains(output, "Per-phase budget limit ($8.00)") {
+		t.Error("expected per-phase budget limit in output")
+	}
+	if !strings.Contains(output, "limits.max_cost_per_phase") {
+		t.Error("expected config key suggestion")
+	}
+	if !strings.Contains(output, "--from implement") {
+		t.Error("expected --from implement suggestion")
+	}
+	if !strings.Contains(output, "resume with higher per-phase budget") {
+		t.Error("expected parenthetical explaining --from suggestion")
+	}
+}
+
 func TestPrintSummaryTransientError(t *testing.T) {
 	dir := t.TempDir()
 	state, _ := pipeline.LoadOrCreate(dir, "PROJ-30")
