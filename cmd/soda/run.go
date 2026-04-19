@@ -253,25 +253,36 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 		tuiEventCh = make(chan pipeline.Event, 64)
 	}
 
+	// Parse max_pipeline_duration from config. Zero/empty means no limit.
+	var maxPipelineDuration time.Duration
+	if cfg.Limits.MaxPipelineDuration != "" {
+		parsed, parseErr := time.ParseDuration(cfg.Limits.MaxPipelineDuration)
+		if parseErr != nil {
+			return fmt.Errorf("run: invalid max_pipeline_duration %q: %w", cfg.Limits.MaxPipelineDuration, parseErr)
+		}
+		maxPipelineDuration = parsed
+	}
+
 	engineCfg := pipeline.EngineConfig{
-		Pipeline:          pl,
-		Loader:            loader,
-		Ticket:            ticketData,
-		PromptConfig:      promptConfig,
-		PromptContext:     promptContext,
-		DetectedStack:     detectedStack,
-		Model:             cfg.Model,
-		WorkDir:           workDir,
-		WorktreeBase:      filepath.Join(workDir, cfg.WorktreeDir),
-		BaseBranch:        "main",
-		MaxCostUSD:        cfg.Limits.MaxCostPerTicket,
-		MaxCostPerPhase:   cfg.Limits.MaxCostPerPhase,
-		Mode:              mode,
-		PRPoller:          prPoller,
-		SelfUser:          selfUser,
-		BotUsers:          botUsers,
-		MonitorProfile:    monitorProfile,
-		AuthorityResolver: authorityResolver,
+		Pipeline:            pl,
+		Loader:              loader,
+		Ticket:              ticketData,
+		PromptConfig:        promptConfig,
+		PromptContext:       promptContext,
+		DetectedStack:       detectedStack,
+		Model:               cfg.Model,
+		WorkDir:             workDir,
+		WorktreeBase:        filepath.Join(workDir, cfg.WorktreeDir),
+		BaseBranch:          "main",
+		MaxCostUSD:          cfg.Limits.MaxCostPerTicket,
+		MaxCostPerPhase:     cfg.Limits.MaxCostPerPhase,
+		MaxPipelineDuration: maxPipelineDuration,
+		Mode:                mode,
+		PRPoller:            prPoller,
+		SelfUser:            selfUser,
+		BotUsers:            botUsers,
+		MonitorProfile:      monitorProfile,
+		AuthorityResolver:   authorityResolver,
 		OnEvent: func(event pipeline.Event) {
 			if event.Kind == pipeline.EventPhaseSkipped || event.Kind == pipeline.EventMonitorSkipped {
 				skippedPhases[event.Phase] = true
@@ -667,6 +678,17 @@ func handleEvent(ctx context.Context, cancel context.CancelFunc, engine *pipelin
 			limit = l
 		}
 		prog.Message(fmt.Sprintf("  ❌ Phase budget exceeded: $%.2f / $%.2f", phaseCost, limit))
+
+	case pipeline.EventPipelineTimeout:
+		var limit string
+		if l, ok := event.Data["limit"].(string); ok {
+			limit = l
+		}
+		var phase string
+		if p, ok := event.Data["phase"].(string); ok {
+			phase = p
+		}
+		prog.Message(fmt.Sprintf("  ⏹  Pipeline timeout after %s (during %s)", limit, phase))
 	}
 }
 
@@ -978,6 +1000,14 @@ func formatNextSteps(w io.Writer, meta *pipeline.PipelineMeta, phases []pipeline
 	worktree := meta.Worktree
 
 	switch {
+	case isPipelineTimeoutError(runErr):
+		var pte *pipeline.PipelineTimeoutError
+		errors.As(runErr, &pte)
+		fmt.Fprintf(w, "  Pipeline timed out after %s (limit: %s) during phase %q.\n",
+			pte.Elapsed.Truncate(time.Second), pte.Limit.Truncate(time.Second), pte.Phase)
+		fmt.Fprintf(w, "  • Increase the limit in soda.yaml (limits.max_pipeline_duration) and resume:\n")
+		fmt.Fprintf(w, "    soda run %s --from %s  (resume with higher time limit)\n", ticket, pte.Phase)
+
 	case isVerifyGateError(runErr):
 		// Verify gate: the implementation didn't pass verification.
 		fmt.Fprintf(w, "  1. Review the verify output above for failing criteria\n")
@@ -1077,6 +1107,11 @@ func isTransientError(err error) bool {
 func isParseError(err error) bool {
 	var pe *claude.ParseError
 	return errors.As(err, &pe)
+}
+
+func isPipelineTimeoutError(err error) bool {
+	var pte *pipeline.PipelineTimeoutError
+	return errors.As(err, &pte)
 }
 
 func buildPromptConfig(cfg *config.Config) pipeline.PromptConfigData {

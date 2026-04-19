@@ -158,9 +158,12 @@ func (r *Runner) Stream(ctx context.Context, opts RunOpts, onChunk func(string))
 
 	args := BuildArgs(opts, r.model)
 
-	// Apply fallback timeout if caller's context has no deadline
+	// Apply per-phase timeout. When the context already has a deadline
+	// (e.g., from a pipeline-level timeout), use the earlier of the two
+	// deadlines so that per-phase timeouts are not silently disabled.
 	if opts.Timeout > 0 {
-		if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		phaseDeadline := time.Now().Add(opts.Timeout)
+		if existingDeadline, hasDeadline := ctx.Deadline(); !hasDeadline || phaseDeadline.Before(existingDeadline) {
 			var cancel context.CancelFunc
 			ctx, cancel = context.WithTimeout(ctx, opts.Timeout)
 			defer cancel()

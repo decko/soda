@@ -35,6 +35,7 @@ sandbox:
 limits:
   max_cost_per_ticket: 15.00
   max_cost_per_phase: 8.00
+  max_pipeline_duration: "2h"
 worktree_dir: .worktrees
 state_dir: .soda
 context:

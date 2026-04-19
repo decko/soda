@@ -9422,3 +9422,325 @@ func TestEngine_PhaseBudgetRunnerCapSubtractsCumulativeCost(t *testing.T) {
 		t.Errorf("implement called %d times, want 2", implCalls)
 	}
 }
+
+func TestEngine_PipelineTimeout_Run(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 0, Parse: 0, Semantic: 0},
+		},
+		{
+			Name:      "plan",
+			Prompt:    "plan.md",
+			DependsOn: []string{"triage"},
+			Retry:     RetryConfig{Transient: 0, Parse: 0, Semantic: 0},
+		},
+	}
+
+	// The plan phase blocks until context is cancelled, simulating a slow phase
+	// that exceeds the pipeline timeout.
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "triage ok",
+					CostUSD: 0.01,
+				},
+			}},
+			"plan": {{
+				result: nil,
+				err:    context.DeadlineExceeded,
+			}},
+		},
+	}
+
+	var events []Event
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.MaxPipelineDuration = 50 * time.Millisecond
+		cfg.OnEvent = func(ev Event) {
+			events = append(events, ev)
+		}
+	})
+
+	err := engine.Run(context.Background())
+	if err == nil {
+		t.Fatal("expected error from pipeline timeout")
+	}
+
+	var timeoutErr *PipelineTimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("expected PipelineTimeoutError, got: %T: %v", err, err)
+	}
+	if timeoutErr.Limit != 50*time.Millisecond {
+		t.Errorf("Limit = %v, want 50ms", timeoutErr.Limit)
+	}
+	// Phase should be "plan" — that's the phase that was running when the timeout fired.
+	if timeoutErr.Phase != "plan" {
+		t.Errorf("Phase = %q, want %q", timeoutErr.Phase, "plan")
+	}
+	// Elapsed should be > 0 (actual wall-clock time).
+	if timeoutErr.Elapsed <= 0 {
+		t.Errorf("Elapsed = %v, want > 0", timeoutErr.Elapsed)
+	}
+
+	// Verify pipeline_timeout event was emitted.
+	hasTimeoutEvent := false
+	for _, ev := range events {
+		if ev.Kind == EventPipelineTimeout {
+			hasTimeoutEvent = true
+		}
+	}
+	if !hasTimeoutEvent {
+		t.Error("pipeline_timeout event not emitted")
+	}
+}
+
+func TestEngine_PipelineTimeout_Resume(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 0, Parse: 0, Semantic: 0},
+		},
+		{
+			Name:      "plan",
+			Prompt:    "plan.md",
+			DependsOn: []string{"triage"},
+			Retry:     RetryConfig{Transient: 0, Parse: 0, Semantic: 0},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"plan": {{
+				result: nil,
+				err:    context.DeadlineExceeded,
+			}},
+		},
+	}
+
+	var events []Event
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.MaxPipelineDuration = 50 * time.Millisecond
+		cfg.OnEvent = func(ev Event) {
+			events = append(events, ev)
+		}
+	})
+
+	// Pre-complete triage so Resume from plan works.
+	_ = state.MarkRunning("triage")
+	_ = state.WriteResult("triage", json.RawMessage(`{"automatable":true}`))
+	_ = state.WriteArtifact("triage", []byte("done"))
+	_ = state.MarkCompleted("triage")
+
+	err := engine.Resume(context.Background(), "plan")
+	if err == nil {
+		t.Fatal("expected error from pipeline timeout")
+	}
+
+	var timeoutErr *PipelineTimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("expected PipelineTimeoutError, got: %T: %v", err, err)
+	}
+	// Phase should be "plan" — that's the phase that was running when the timeout fired.
+	if timeoutErr.Phase != "plan" {
+		t.Errorf("Phase = %q, want %q", timeoutErr.Phase, "plan")
+	}
+	// Elapsed should be > 0 (actual wall-clock time).
+	if timeoutErr.Elapsed <= 0 {
+		t.Errorf("Elapsed = %v, want > 0", timeoutErr.Elapsed)
+	}
+}
+
+func TestEngine_PipelineTimeout_ResumeWithStaleFailed(t *testing.T) {
+	// Regression test: when resuming from a later phase, earlier phases may
+	// retain stale PhaseFailed status from a prior run. lastRunningPhase must
+	// return the LAST failed phase (the one that just timed out), not the
+	// first failed phase (which is stale).
+	//
+	// Scenario: 3-phase pipeline [triage → implement → review].
+	// Prior run: triage succeeded, implement failed. Now we resume from
+	// implement, which succeeds, but review times out. The stale PhaseFailed
+	// status on implement from the prior run should NOT be returned — review
+	// (the last failed phase) should be returned.
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 0, Parse: 0, Semantic: 0},
+		},
+		{
+			Name:      "implement",
+			Prompt:    "implement.md",
+			DependsOn: []string{"triage"},
+			Retry:     RetryConfig{Transient: 0, Parse: 0, Semantic: 0},
+		},
+		{
+			Name:      "review",
+			Prompt:    "review.md",
+			DependsOn: []string{"implement"},
+			Retry:     RetryConfig{Transient: 0, Parse: 0, Semantic: 0},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"ok":true}`),
+					RawText: "implement ok",
+					CostUSD: 0.01,
+				},
+			}},
+			"review": {{
+				result: nil,
+				err:    context.DeadlineExceeded,
+			}},
+		},
+	}
+
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.MaxPipelineDuration = 200 * time.Millisecond
+	})
+
+	// Pre-complete triage from a prior run.
+	_ = state.MarkRunning("triage")
+	_ = state.WriteResult("triage", json.RawMessage(`{"automatable":true}`))
+	_ = state.WriteArtifact("triage", []byte("done"))
+	_ = state.MarkCompleted("triage")
+
+	// Simulate implement having failed in a prior run (stale PhaseFailed).
+	// MarkRunning creates the phase entry, then MarkFailed sets status=failed.
+	_ = state.MarkRunning("implement")
+	_ = state.MarkFailed("implement", fmt.Errorf("prior run failure"))
+
+	// Resume from implement: implement will succeed (re-run), then review
+	// will return DeadlineExceeded, triggering the pipeline timeout.
+	err := engine.Resume(context.Background(), "implement")
+	if err == nil {
+		t.Fatal("expected error from pipeline timeout")
+	}
+
+	var timeoutErr *PipelineTimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("expected PipelineTimeoutError, got: %T: %v", err, err)
+	}
+	// Phase should be "review" — the phase that actually timed out — not
+	// "implement" which had stale PhaseFailed status from the prior run.
+	if timeoutErr.Phase != "review" {
+		t.Errorf("Phase = %q, want %q (lastRunningPhase returned stale failed phase)", timeoutErr.Phase, "review")
+	}
+}
+
+func TestEngine_PipelineTimeout_ZeroMeansNoLimit(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 0, Parse: 0, Semantic: 0},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "ok",
+					CostUSD: 0.01,
+				},
+			}},
+		},
+	}
+
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.MaxPipelineDuration = 0 // no limit
+	})
+
+	err := engine.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !state.IsCompleted("triage") {
+		t.Error("triage should be completed")
+	}
+}
+
+func TestEngine_PipelineTimeout_NonDeadlineErrorNotWrapped(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 0, Parse: 0, Semantic: 0},
+		},
+	}
+
+	// Return a non-timeout error.
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: nil,
+				err:    fmt.Errorf("some other error"),
+			}},
+		},
+	}
+
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.MaxPipelineDuration = 5 * time.Minute
+	})
+
+	err := engine.Run(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	// Should NOT be wrapped as PipelineTimeoutError since the context
+	// deadline was not exceeded.
+	var timeoutErr *PipelineTimeoutError
+	if errors.As(err, &timeoutErr) {
+		t.Error("non-deadline error should not be wrapped as PipelineTimeoutError")
+	}
+}
+
+func TestEngine_PipelineTimeout_ExternalDeadlineNotWrapped(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 0, Parse: 0, Semantic: 0},
+		},
+	}
+
+	// The phase returns DeadlineExceeded, simulating an external context timeout.
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: nil,
+				err:    context.DeadlineExceeded,
+			}},
+		},
+	}
+
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.MaxPipelineDuration = 10 * time.Minute // large pipeline timeout
+	})
+
+	// Use an external context with a very short deadline (shorter than the pipeline's).
+	externalCtx, externalCancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer externalCancel()
+
+	err := engine.Run(externalCtx)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	// Should NOT be wrapped as PipelineTimeoutError because the deadline
+	// that fired belongs to the external parent context, not the pipeline.
+	var timeoutErr *PipelineTimeoutError
+	if errors.As(err, &timeoutErr) {
+		t.Error("external context deadline should not be wrapped as PipelineTimeoutError")
+	}
+}

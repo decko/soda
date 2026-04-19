@@ -32,30 +32,31 @@ const DefaultMaxReworkCycles = 2
 
 // EngineConfig holds everything needed to construct an Engine.
 type EngineConfig struct {
-	Pipeline          *PhasePipeline
-	Loader            *PromptLoader
-	Ticket            TicketData
-	PromptConfig      PromptConfigData
-	PromptContext     ContextData
-	DetectedStack     DetectedStackData // auto-detected project stack info; zero value if detection was skipped
-	Model             string
-	WorkDir           string
-	WorktreeBase      string
-	BaseBranch        string
-	MaxCostUSD        float64
-	MaxCostPerPhase   float64 // per-phase cost cap; 0 means no per-phase limit
-	MaxReworkCycles   int     // max review→implement rework loops; 0 means use default (2)
-	Mode              Mode
-	OnEvent           func(Event)
-	PauseSignal       <-chan bool // receives true=pause, false=resume from TUI; nil disables
-	SleepFunc         func(time.Duration)
-	JitterFunc        func(max time.Duration) time.Duration
-	PRPoller          PRPoller          // for monitor phase polling; nil disables monitor
-	NowFunc           func() time.Time  // for testability; defaults to time.Now
-	AuthorityResolver AuthorityResolver // for comment authority checks; nil → all authoritative
-	MonitorProfile    *MonitorProfile   // behavioral profile; nil → use polling config as-is
-	SelfUser          string            // PR author username for self-comment filtering
-	BotUsers          []string          // known bot usernames to filter
+	Pipeline            *PhasePipeline
+	Loader              *PromptLoader
+	Ticket              TicketData
+	PromptConfig        PromptConfigData
+	PromptContext       ContextData
+	DetectedStack       DetectedStackData // auto-detected project stack info; zero value if detection was skipped
+	Model               string
+	WorkDir             string
+	WorktreeBase        string
+	BaseBranch          string
+	MaxCostUSD          float64
+	MaxCostPerPhase     float64       // per-phase cost cap; 0 means no per-phase limit
+	MaxPipelineDuration time.Duration // max wall-clock time for the entire pipeline; 0 means no limit
+	MaxReworkCycles     int           // max review→implement rework loops; 0 means use default (2)
+	Mode                Mode
+	OnEvent             func(Event)
+	PauseSignal         <-chan bool // receives true=pause, false=resume from TUI; nil disables
+	SleepFunc           func(time.Duration)
+	JitterFunc          func(max time.Duration) time.Duration
+	PRPoller            PRPoller          // for monitor phase polling; nil disables monitor
+	NowFunc             func() time.Time  // for testability; defaults to time.Now
+	AuthorityResolver   AuthorityResolver // for comment authority checks; nil → all authoritative
+	MonitorProfile      *MonitorProfile   // behavioral profile; nil → use polling config as-is
+	SelfUser            string            // PR author username for self-comment filtering
+	BotUsers            []string          // known bot usernames to filter
 }
 
 // maxReworkCycles returns the configured max rework cycles, defaulting to DefaultMaxReworkCycles.
@@ -78,15 +79,17 @@ func (e *Engine) remoteName() string {
 // Engine orchestrates a pipeline run, tying together the runner,
 // state management, prompt rendering, and retry logic.
 type Engine struct {
-	runner       runner.Runner
-	config       EngineConfig
-	state        *State
-	confirmCh    chan struct{}
-	reranPhases  map[string]bool // phases that ran (not skipped) in this execution
-	pauseMu      sync.Mutex
-	paused       bool
-	pauseCond    *sync.Cond
-	inCheckpoint bool // true while blocked on <-confirmCh; guarded by pauseMu
+	runner           runner.Runner
+	config           EngineConfig
+	state            *State
+	confirmCh        chan struct{}
+	reranPhases      map[string]bool // phases that ran (not skipped) in this execution
+	pauseMu          sync.Mutex
+	paused           bool
+	pauseCond        *sync.Cond
+	inCheckpoint     bool      // true while blocked on <-confirmCh; guarded by pauseMu
+	pipelineStart    time.Time // wall-clock time when applyPipelineTimeout was called
+	pipelineDeadline time.Time // deadline set by applyPipelineTimeout; zero if no timeout
 }
 
 // NewEngine creates an Engine with sensible defaults for sleep and jitter.
@@ -304,6 +307,10 @@ func (e *Engine) Run(ctx context.Context) error {
 	}
 	defer e.state.ReleaseLock()
 
+	// Apply pipeline-level timeout if configured.
+	ctx, cancel := e.applyPipelineTimeout(ctx)
+	defer cancel()
+
 	// Cache ticket summary in meta for soda sessions/history display.
 	if e.state.Meta().Summary == "" && e.config.Ticket.Summary != "" {
 		e.state.Meta().Summary = e.config.Ticket.Summary
@@ -317,7 +324,7 @@ func (e *Engine) Run(ctx context.Context) error {
 	e.emit(Event{Kind: EventEngineStarted})
 
 	if err := e.executePhases(ctx, e.config.Pipeline.Phases, false); err != nil {
-		return err
+		return e.wrapTimeoutError(ctx, err)
 	}
 
 	e.emit(Event{Kind: EventEngineCompleted})
@@ -342,6 +349,10 @@ func (e *Engine) Resume(ctx context.Context, fromPhase string) error {
 	}
 	defer e.state.ReleaseLock()
 
+	// Apply pipeline-level timeout if configured.
+	ctx, cancel := e.applyPipelineTimeout(ctx)
+	defer cancel()
+
 	// Cache ticket summary in meta for soda sessions/history display.
 	if e.state.Meta().Summary == "" && e.config.Ticket.Summary != "" {
 		e.state.Meta().Summary = e.config.Ticket.Summary
@@ -357,7 +368,7 @@ func (e *Engine) Resume(ctx context.Context, fromPhase string) error {
 	// The fromPhase (first in slice) is always re-run, even if completed.
 	// Mark it with forceFirst=true so executePhases skips the shouldSkip check.
 	if err := e.executePhases(ctx, e.config.Pipeline.Phases[startIdx:], true); err != nil {
-		return err
+		return e.wrapTimeoutError(ctx, err)
 	}
 
 	e.emit(Event{Kind: EventEngineCompleted})
@@ -2308,6 +2319,110 @@ func (e *Engine) emitChunk(event Event) {
 	if e.config.OnEvent != nil {
 		e.config.OnEvent(event)
 	}
+}
+
+// applyPipelineTimeout wraps ctx with a deadline when MaxPipelineDuration is
+// configured. It stores pipelineStart and pipelineDeadline so wrapTimeoutError
+// can compute actual elapsed time and distinguish the pipeline's own deadline
+// from an external parent context deadline. Returns the (possibly wrapped)
+// context and a cancel function that must always be deferred.
+func (e *Engine) applyPipelineTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	if e.config.MaxPipelineDuration <= 0 {
+		return ctx, func() {}
+	}
+	now := e.now()
+	e.pipelineStart = now
+	e.pipelineDeadline = now.Add(e.config.MaxPipelineDuration)
+	return context.WithDeadline(ctx, e.pipelineDeadline)
+}
+
+// wrapTimeoutError checks whether err is a context deadline exceeded caused
+// by the pipeline's own timeout (not an external parent context deadline).
+// If so, it emits an EventPipelineTimeout event and returns a
+// PipelineTimeoutError with actual elapsed time. Otherwise it returns err
+// unchanged.
+//
+// To distinguish the pipeline's deadline from an external caller's deadline,
+// the method compares ctx.Deadline() against e.pipelineDeadline. If they
+// don't match (within a small tolerance), the deadline came from an external
+// source (e.g., HTTP handler, CI timeout) and the error is returned as-is.
+func (e *Engine) wrapTimeoutError(ctx context.Context, err error) error {
+	if e.config.MaxPipelineDuration <= 0 {
+		return err
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+
+	// Guard: only wrap if the deadline that fired is the pipeline's own.
+	// An external parent context with a shorter deadline would produce a
+	// different deadline value, and wrapping that as PipelineTimeoutError
+	// would produce misleading diagnostics. Per-phase timeouts create a
+	// child context with an earlier deadline, so they also won't match.
+	// An external parent context with a shorter deadline would produce a
+	// different deadline value, and wrapping that as PipelineTimeoutError
+	// would produce misleading diagnostics.
+	if e.pipelineDeadline.IsZero() {
+		return err
+	}
+	if ctxDeadline, ok := ctx.Deadline(); ok {
+		// Allow 1s tolerance for clock jitter between WithDeadline creation
+		// and this check.
+		diff := ctxDeadline.Sub(e.pipelineDeadline)
+		if diff < -time.Second || diff > time.Second {
+			return err
+		}
+	}
+
+	// Compute actual elapsed time from the stored start time.
+	elapsed := e.now().Sub(e.pipelineStart)
+
+	// Find the phase that was running when the timeout fired.
+	phase := e.lastRunningPhase()
+
+	e.emit(Event{
+		Kind: EventPipelineTimeout,
+		Data: map[string]any{
+			"limit":   e.config.MaxPipelineDuration.String(),
+			"elapsed": elapsed.String(),
+			"phase":   phase,
+		},
+	})
+
+	return &PipelineTimeoutError{
+		Limit:   e.config.MaxPipelineDuration,
+		Elapsed: elapsed,
+		Phase:   phase,
+	}
+}
+
+// lastRunningPhase returns the name of the phase that was active when the
+// pipeline stopped. It checks for PhaseRunning first (preferred), then falls
+// back to PhaseFailed — because runPhase calls MarkFailed before the error
+// propagates to wrapTimeoutError, a timed-out phase will have PhaseFailed
+// status by the time this method runs. Since phases execute sequentially and
+// stop on first error, there will be at most one failed phase.
+// Returns "unknown" if no running or failed phase is found.
+func (e *Engine) lastRunningPhase() string {
+	// Prefer PhaseRunning (e.g., parallel-review goroutines).
+	for _, phase := range e.config.Pipeline.Phases {
+		if ps := e.state.Meta().Phases[phase.Name]; ps != nil && ps.Status == PhaseRunning {
+			return phase.Name
+		}
+	}
+	// Fall back to PhaseFailed — the timed-out phase was marked failed
+	// before the error propagated here. Iterate in reverse because phases
+	// execute sequentially and stop on first error, so the LAST failed
+	// phase in pipeline order is the one that just failed. Earlier phases
+	// may retain stale PhaseFailed status from a prior run (e.g., when
+	// Resume is called from a later phase).
+	for i := len(e.config.Pipeline.Phases) - 1; i >= 0; i-- {
+		phase := e.config.Pipeline.Phases[i]
+		if ps := e.state.Meta().Phases[phase.Name]; ps != nil && ps.Status == PhaseFailed {
+			return phase.Name
+		}
+	}
+	return "unknown"
 }
 
 // emitPhaseFailed emits a phase_failed event with error, duration, and cost
