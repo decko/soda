@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/decko/soda/internal/config"
+	"github.com/decko/soda/internal/detect"
 )
 
 func TestRunInit_WritesDefaultConfig(t *testing.T) {
@@ -150,5 +151,109 @@ func TestResolveInitPath_CustomPath(t *testing.T) {
 	}
 	if filepath.Base(p) != "my-config.yaml" {
 		t.Errorf("base = %q, want my-config.yaml", filepath.Base(p))
+	}
+}
+
+func TestConfigFromDetected_GitHub(t *testing.T) {
+	info := &detect.ProjectInfo{
+		Language:     "go",
+		Forge:        "github",
+		Owner:        "acme",
+		Repo:         "myservice",
+		Formatter:    "gofmt -w .",
+		TestCommand:  "go test ./...",
+		ContextFiles: []string{"AGENTS.md", "CLAUDE.md"},
+	}
+
+	cfg := configFromDetected(info)
+
+	if cfg.TicketSource != "github" {
+		t.Errorf("TicketSource = %q, want %q", cfg.TicketSource, "github")
+	}
+	if cfg.GitHub.Owner != "acme" {
+		t.Errorf("GitHub.Owner = %q, want %q", cfg.GitHub.Owner, "acme")
+	}
+	if cfg.GitHub.Repo != "myservice" {
+		t.Errorf("GitHub.Repo = %q, want %q", cfg.GitHub.Repo, "myservice")
+	}
+	if len(cfg.Context) != 2 || cfg.Context[0] != "AGENTS.md" || cfg.Context[1] != "CLAUDE.md" {
+		t.Errorf("Context = %v, want [AGENTS.md CLAUDE.md]", cfg.Context)
+	}
+	if len(cfg.Repos) != 1 {
+		t.Fatalf("len(Repos) = %d, want 1", len(cfg.Repos))
+	}
+	repo := cfg.Repos[0]
+	if repo.Name != "myservice" {
+		t.Errorf("Repos[0].Name = %q, want %q", repo.Name, "myservice")
+	}
+	if repo.Forge != "github" {
+		t.Errorf("Repos[0].Forge = %q, want %q", repo.Forge, "github")
+	}
+	if repo.PushTo != "acme/myservice" {
+		t.Errorf("Repos[0].PushTo = %q, want %q", repo.PushTo, "acme/myservice")
+	}
+	if repo.Formatter != "gofmt -w ." {
+		t.Errorf("Repos[0].Formatter = %q, want %q", repo.Formatter, "gofmt -w .")
+	}
+	if repo.TestCommand != "go test ./..." {
+		t.Errorf("Repos[0].TestCommand = %q, want %q", repo.TestCommand, "go test ./...")
+	}
+}
+
+func TestConfigFromDetected_NoForge(t *testing.T) {
+	info := &detect.ProjectInfo{
+		Language:    "python",
+		Forge:       "",
+		Owner:       "",
+		Repo:        "",
+		Formatter:   "black .",
+		TestCommand: "pytest",
+	}
+
+	cfg := configFromDetected(info)
+
+	// Should fall back to github ticket source with placeholders.
+	if cfg.TicketSource != "github" {
+		t.Errorf("TicketSource = %q, want %q", cfg.TicketSource, "github")
+	}
+	if len(cfg.Repos) != 1 {
+		t.Fatalf("len(Repos) = %d, want 1", len(cfg.Repos))
+	}
+	repo := cfg.Repos[0]
+	if repo.Name != "your-repo" {
+		t.Errorf("Repos[0].Name = %q, want %q", repo.Name, "your-repo")
+	}
+	if repo.PushTo != "your-user/your-repo" {
+		t.Errorf("Repos[0].PushTo = %q, want %q", repo.PushTo, "your-user/your-repo")
+	}
+	if repo.Formatter != "black ." {
+		t.Errorf("Repos[0].Formatter = %q, want %q", repo.Formatter, "black .")
+	}
+	if repo.TestCommand != "pytest" {
+		t.Errorf("Repos[0].TestCommand = %q, want %q", repo.TestCommand, "pytest")
+	}
+}
+
+func TestConfigFromDetected_GitLab(t *testing.T) {
+	info := &detect.ProjectInfo{
+		Language:    "rust",
+		Forge:       "gitlab",
+		Owner:       "team",
+		Repo:        "backend",
+		Formatter:   "cargo fmt",
+		TestCommand: "cargo test",
+	}
+
+	cfg := configFromDetected(info)
+
+	// GitLab forge should still use github ticket source (gitlab not yet supported).
+	if cfg.TicketSource != "github" {
+		t.Errorf("TicketSource = %q, want %q", cfg.TicketSource, "github")
+	}
+	if len(cfg.Repos) != 1 {
+		t.Fatalf("len(Repos) = %d, want 1", len(cfg.Repos))
+	}
+	if cfg.Repos[0].Forge != "gitlab" {
+		t.Errorf("Repos[0].Forge = %q, want %q", cfg.Repos[0].Forge, "gitlab")
 	}
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/decko/soda/internal/config"
+	"github.com/decko/soda/internal/detect"
 	"github.com/spf13/cobra"
 )
 
@@ -34,7 +36,7 @@ refuses to overwrite an existing file unless --force is given.`,
 	return cmd
 }
 
-// runInit generates a default config and writes it to disk.
+// runInit generates a config (optionally auto-detected) and writes it to disk.
 // Extracted for testability — accepts an io.Writer for output messages.
 func runInit(w io.Writer, output string, force bool) error {
 	// Resolve output path.
@@ -52,8 +54,17 @@ func runInit(w io.Writer, output string, force bool) error {
 		}
 	}
 
-	// Generate default config.
+	// Auto-detect project stack. Detection is best-effort: if it fails
+	// we fall back to DefaultConfig with placeholder values.
 	cfg := config.DefaultConfig()
+	info, detectErr := detect.Detect(context.Background(), ".")
+	if detectErr != nil {
+		fmt.Fprintf(w, "Warning: project detection failed: %v\n", detectErr)
+	}
+	if info != nil {
+		cfg = configFromDetected(info)
+	}
+
 	data, err := config.Marshal(cfg)
 	if err != nil {
 		return fmt.Errorf("init: %w", err)
@@ -72,6 +83,59 @@ func runInit(w io.Writer, output string, force bool) error {
 
 	fmt.Fprintf(w, "Config written to %s\n", destPath)
 	return nil
+}
+
+// configFromDetected creates a Config populated with values from auto-detection.
+// Detected forge, owner, and repo are used to fill in ticket source and repo
+// config. When detection finds nothing useful, the result falls back to
+// DefaultConfig placeholder values for that field.
+func configFromDetected(info *detect.ProjectInfo) *config.Config {
+	cfg := config.DefaultConfig()
+
+	// Forge → ticket source
+	switch info.Forge {
+	case "github":
+		cfg.TicketSource = "github"
+		cfg.GitHub.Owner = info.Owner
+		cfg.GitHub.Repo = info.Repo
+	case "gitlab":
+		cfg.TicketSource = "github" // keep github as default; gitlab ticket source not yet supported
+	}
+
+	// Context files
+	if len(info.ContextFiles) > 0 {
+		cfg.Context = info.ContextFiles
+	}
+
+	// Repos
+	repoName := info.Repo
+	if repoName == "" {
+		repoName = "your-repo"
+	}
+	ownerRepo := info.Owner + "/" + info.Repo
+	if info.Owner == "" || info.Repo == "" {
+		ownerRepo = "your-user/your-repo"
+	}
+	targetRepo := ownerRepo
+	forge := info.Forge
+	if forge == "" {
+		forge = "github"
+	}
+
+	cfg.Repos = []config.RepoConfig{
+		{
+			Name:        repoName,
+			Forge:       forge,
+			PushTo:      ownerRepo,
+			Target:      targetRepo,
+			Description: "Main repository",
+			Formatter:   info.Formatter,
+			TestCommand: info.TestCommand,
+			Labels:      []string{"ai-assisted"},
+		},
+	}
+
+	return cfg
 }
 
 // resolveInitPath returns the destination path for the generated config.
