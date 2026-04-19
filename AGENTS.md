@@ -13,13 +13,12 @@ soda (Go CLI/TUI)
   │
   │  For each phase, SODA:
   │  1. Renders prompt template + handoff artifacts
-  │  2. Writes SandboxRunConfig JSON
-  │  3. Spawns sandboxed Claude Code session
-  │  4. Streams output to TUI
-  │  5. Parses structured JSON response
-  │  6. Writes artifact to .soda/<ticket>/
+  │  2. Spawns Claude Code session (sandboxed via go-arapuca)
+  │  3. Streams output to TUI
+  │  4. Parses structured JSON response
+  │  5. Writes artifact to .soda/<ticket>/
   │
-  └── agent-node sandbox-run (agentic-orchestrator)
+  └── go-arapuca sandbox (library-based)
        ├── Landlock filesystem isolation
        ├── Network namespace (Unix sockets only)
        ├── cgroup resource limits (memory, CPU, PIDs)
@@ -30,22 +29,59 @@ soda (Go CLI/TUI)
 ## Pipeline phases
 
 ```
-Triage → Plan → Implement → Verify → Review → Submit → Monitor
-                    ↑                    │
-                    └── rework ──────────┘ (max 2 cycles)
+Triage → Plan → Implement → [Patch] → Verify → Review → Submit → [Follow-up] → Monitor
+                    ↑           ↑        │         │
+                    │           +- FAIL --+         │
+                    +------ rework ─────────────────+ (max 2 cycles)
 ```
 
-| Phase | Purpose | Tools | Timeout |
-|-------|---------|-------|---------|
-| Triage | Classify ticket, identify repo/files/complexity, route pipeline | Read-only | 3m |
-| Plan | Design approach, break into atomic tasks (skippable if plan exists) | Read-only | 8m |
-| Implement | Write code, run tests, commit | Full | 15m |
-| Verify | Run tests, check acceptance criteria, review code | Read + Bash | 8m |
-| Review | Parallel specialist review (Go + AI harness) | Read + Bash | 12m |
-| Submit | Push branch, create PR/MR | git + gh/glab | 3m |
-| Monitor | Poll PR, respond to review comments, fix CI, auto-rebase | Full | 10m/round |
+Phases in brackets are conditional:
+- **Patch** (type: corrective) — only runs when verify FAILs, auto-routes via `reworkSignal`
+- **Follow-up** (type: post-submit) — only runs when review verdict is `pass-with-follow-ups`
 
-Phase definitions, tools, timeouts, and retry policies are in `phases.yaml`. Output schemas are generated from Go structs in `schemas/` via `go generate ./schemas/...` and resolved automatically at pipeline load time.
+| Phase | Purpose | Tools | Timeout | Model |
+|-------|---------|-------|---------|-------|
+| Triage | Classify ticket, identify repo/files/complexity, route pipeline | Read-only | 3m | global |
+| Plan | Design approach, break into atomic tasks (skippable if plan exists) | Read-only | 8m | global |
+| Implement | Write code, run tests, commit | Full | 25m | global |
+| Patch | Targeted fixes after verify FAIL (corrective, skipped in forward pass) | Full | 8m | claude-sonnet-4-6 |
+| Verify | Run tests, check acceptance criteria, review code | Read + Bash | 8m | global |
+| Review | Parallel specialist review (configurable per-reviewer models) | Read + Bash | 12m | global |
+| Submit | Push branch, create PR/MR | git + gh/glab | 3m | global |
+| Follow-up | Create tickets from minor review findings (post-submit, best-effort) | Bash(gh:*) | 3m | global |
+| Monitor | Poll PR, respond to review comments, fix CI, auto-rebase | Full | 10m/round | global |
+
+Phase definitions, tools, timeouts, and retry policies are in `phases.yaml`. Output schemas are generated from Go structs in `schemas/` via `go generate ./schemas/...` and resolved automatically at pipeline load time. Per-phase model overrides are supported via the `model` field on `PhaseConfig`.
+
+### Rework and corrective routing
+
+The engine uses a unified `reworkSignal` type (with `source` and `target` fields) for all rework routing. Two routing paths exist:
+
+**Review rework** (review → implement):
+
+| Verdict | Condition | Action |
+|---------|-----------|--------|
+| `pass` | No findings | Proceed to submit |
+| `pass-with-follow-ups` | Minor findings only | Proceed to submit, follow-up creates tickets |
+| `rework` | Any critical or major findings | Route back to implement |
+
+At max rework cycles (default 2), if only minor findings remain, the verdict is downgraded to `pass-with-follow-ups` and the pipeline proceeds. If critical/major findings remain, the pipeline stops with `PhaseGateError`.
+
+**Corrective routing** (verify → patch):
+
+When verify FAILs and the verify phase has a `corrective` config block:
+1. Engine returns `reworkSignal{source: "verify", target: "patch"}`
+2. Patch phase runs with verify feedback (targeted fixes only)
+3. Verify re-runs after patch
+4. On regression (new failures introduced) → immediate escalation
+5. On exhaustion (`max_attempts` reached) → check `on_exhausted` policy:
+   - `stop` (default): pipeline stops
+   - `escalate`: route to full implement (one-shot, guarded by `EscalatedFromPatch` flag)
+   - `retry`: allow one extra patch attempt
+
+Feedback injection is config-driven via `feedback_from` on PhaseConfig — no hardcoded phase names.
+
+Cycle counters (`ReworkCycles`, `PatchCycles`) are independent and persisted in `meta.json`.
 
 ### Monitor phase
 
@@ -53,14 +89,16 @@ After PR submission, the monitor phase polls for activity and responds:
 
 1. **Poll cycle**: check PR status (approved/merged/closed), new comments, CI status, merge conflicts
 2. **Comment classification**: each comment is classified (code_change, question, nit, approval, dismissal, bot, self) with authority checks via CODEOWNERS
-3. **Response execution**: when actionable comments are found, a Claude session runs with the monitor prompt to apply fixes, reply to comments, run tests, and push changes
+3. **Response execution**: fix sessions (code changes) vs reply-only sessions (questions) with different tool sets
 4. **Termination**: the phase completes when the PR is approved/merged, max response rounds are reached, or the max polling duration expires
 
 Configuration (in `phases.yaml`):
 - `polling.initial_interval`: time between polls (default 2m, escalates to `max_interval` after `escalate_after`)
-- `polling.max_response_rounds`: max Claude sessions for comment responses (default 3)
+- `polling.max_response_rounds`: max Claude sessions for comment responses (default 3) — counts fix + reply rounds combined
 - `polling.max_duration`: total monitor phase wall-clock limit (default 4h)
 - `timeout`: per-response session timeout (default 10m)
+
+Monitor requires `self_user` in config to distinguish self-authored comments from external ones. Without it, the monitor cannot classify comments and falls back to a stub.
 
 Monitor profiles (`conservative`, `smart`, `aggressive`) control auto-rebase, nit auto-fix, and response to non-authoritative comments.
 
@@ -73,36 +111,28 @@ Triage can detect existing specs and plans from ticket comments (GitHub) or stru
 github:
   fetch_comments: true
   spec:
-    source: comment_marker
-    marker: "<!-- soda:spec -->"
+    start_marker: "<!-- spec:start -->"
+    end_marker: "<!-- spec:end -->"
   plan:
-    source: comment_marker
-    marker: "<!-- soda:plan -->"
+    start_marker: "<!-- plan:start -->"
+    end_marker: "<!-- plan:end -->"
 ```
 
-**Jira:** Configure extraction strategies:
+**Jira:** Configure extraction via fields and markers:
 ```yaml
 jira:
-  spec:
-    source: epic_description
-  plan:
-    source: subtask
-    match: "Implementation Plan"
+  extraction:
+    spec:
+      start_marker: "<!-- spec:start -->"
+      end_marker: "<!-- spec:end -->"
+    plan:
+      start_marker: "<!-- plan:start -->"
+      end_marker: "<!-- plan:end -->"
+    spec_field: customfield_10100
+    plan_field: customfield_10101
 ```
 
 **Issue labels:** Use `spec ready` (has reviewed spec) and `plan ready` (has reviewed spec + plan) to signal readiness. Triage uses these as hints for routing.
-
-### Review rework routing
-
-After the review phase, findings are classified by severity:
-
-| Verdict | Condition | Action |
-|---------|-----------|--------|
-| `pass` | No findings | Proceed to submit |
-| `pass-with-follow-ups` | Minor findings only | Proceed to submit, queue follow-up |
-| `rework` | Any critical or major findings | Route back to implement |
-
-Rework routing: when review verdict is "rework", the engine automatically routes back to implement with the review findings injected into the prompt. The cycle is: implement → verify → review → (check verdict). Max rework cycles default to 2; after that, the engine stops with a `PhaseGateError` for human intervention. The cycle count is persisted in `meta.json` as `rework_cycles`.
 
 ### Worktree-first execution
 
@@ -113,40 +143,97 @@ The pipeline creates a worktree **before any phase runs**. All phases — includ
 - Consistent WorkDir across all phases
 - Enforces "never work on main" convention
 
-The worktree is cleaned up only on explicit `soda clean` or after PR merge — never automatically on failure (human may want to inspect).
+Worktree path: `.worktrees/soda/<ticket-key>`. Cleaned up only on explicit `soda clean` or after PR merge — never automatically on failure (human may want to inspect).
 
 ## Project structure
 
 ```
 soda/
-├── cmd/soda/main.go           # Cobra CLI entrypoint
+├── cmd/
+│   ├── soda/                      # Cobra CLI entrypoint
+│   │   ├── main.go                # Root command, config loading, embedded content
+│   │   ├── run.go                 # soda run command + TUI integration
+│   │   ├── init.go                # soda init (auto-detect project, generate config)
+│   │   ├── plugin.go              # soda plugin install/uninstall
+│   │   ├── status.go              # soda status
+│   │   ├── sessions.go            # soda sessions
+│   │   ├── history.go             # soda history
+│   │   ├── clean.go               # soda clean
+│   │   ├── render.go              # soda render-prompt
+│   │   ├── version.go             # soda version
+│   │   └── embeds/                # go:embed content
+│   │       ├── phases.yaml        # Default pipeline config
+│   │       ├── prompts/           # Phase prompt templates
+│   │       └── plugin/            # Claude Code plugin files
+│   ├── schemagen/main.go          # JSON schema generator
+│   └── tui-demo/main.go           # TUI demo harness
 ├── internal/
-│   ├── config/config.go       # YAML config loading
-│   ├── ticket/                # Pluggable ticket sources
-│   │   ├── source.go          # Source interface
-│   │   ├── jira.go            # Jira via wtmcp CLI
-│   │   └── github.go          # GitHub via gh CLI
+│   ├── claude/                    # Claude Code CLI integration
+│   │   ├── args.go                # CLI argument builder
+│   │   ├── runner.go              # Stream + parse Claude CLI
+│   │   ├── parser.go              # JSON response parser
+│   │   ├── types.go               # Response types
+│   │   └── errors.go              # Parse/transient error types
+│   ├── config/config.go           # YAML config loading
+│   ├── detect/detect.go           # Project stack auto-detection
+│   ├── git/worktree.go            # Worktree management, diff, rebase
 │   ├── pipeline/
-│   │   ├── engine.go          # Phase loop, error handling, events
-│   │   ├── phase.go           # Phase interface + config loading
-│   │   ├── state.go           # Disk state, locking, atomic writes
-│   │   └── phases/            # Phase-specific logic (if needed)
+│   │   ├── engine.go              # Phase loop, rework routing, corrective routing
+│   │   ├── errors.go              # reworkSignal, PhaseGateError, BudgetExceededError
+│   │   ├── events.go              # Structured event log
+│   │   ├── phase.go               # PhaseConfig, CorrectiveConfig, ReviewerConfig
+│   │   ├── prompt.go              # PromptData, ReworkFeedback, template rendering
+│   │   ├── state.go               # Disk state, locking, atomic writes
+│   │   ├── meta.go                # PipelineMeta (cycles, costs, flags)
+│   │   ├── monitor.go             # MonitorState, PRPoller interface
+│   │   ├── monitor_poll.go        # Monitor polling loop, response execution
+│   │   ├── monitor_classifier.go  # Comment classification
+│   │   ├── monitor_authority.go   # CODEOWNERS authority resolution
+│   │   ├── monitor_profile.go     # Monitor behavior profiles
+│   │   ├── github_poller.go       # GitHub PR poller via gh CLI
+│   │   ├── history.go             # Session history queries
+│   │   ├── atomic.go              # Atomic file writes
+│   │   └── lock.go                # flock-based locking
+│   ├── progress/
+│   │   ├── progress.go            # CLI progress display
+│   │   └── summary.go             # Phase summary formatting
+│   ├── runner/
+│   │   ├── runner.go              # Agent-agnostic runner interface
+│   │   ├── claude.go              # Claude Code runner implementation
+│   │   ├── errors.go              # TransientError, ParseError, SemanticError
+│   │   └── mock.go                # Mock runner for testing
 │   ├── sandbox/
-│   │   └── runner.go          # Wraps agent-node sandbox-run
-│   ├── claude/
-│   │   └── command.go         # Claude Code CLI command builder
+│   │   ├── runner.go              # go-arapuca sandbox execution
+│   │   ├── runner_nocgo.go        # Stub when CGO disabled
+│   │   ├── config.go              # Sandbox configuration
+│   │   ├── resolve.go             # Binary resolution
+│   │   ├── helpers.go             # Sandbox helpers
+│   │   └── errors.go              # Sandbox error types
+│   ├── ticket/
+│   │   ├── source.go              # Source interface
+│   │   ├── ticket.go              # Ticket types
+│   │   ├── github.go              # GitHub Issues via gh CLI
+│   │   ├── jira.go                # Jira via wtmcp CLI
+│   │   ├── mcp.go                 # MCP ticket source
+│   │   └── extract.go             # Spec/plan extraction from comments
 │   └── tui/
-│       ├── app.go             # Bubbletea main model
-│       ├── ticket.go          # Ticket display widget
-│       ├── pipeline.go        # Phase progress widget
-│       ├── output.go          # Live streaming output
-│       ├── stats.go           # Cost/tokens/elapsed
-│       ├── picker.go          # Interactive ticket picker
-│       └── styles.go          # Lipgloss styles
-├── prompts/                   # Phase prompt templates (go:embed)
-├── schemas/                   # Structured output schemas (Go structs + generated JSON schemas)
-├── phases.yaml                # Phase pipeline configuration
-├── config.example.yaml        # Example user config
+│       ├── app.go                 # Bubbletea main model
+│       ├── ticket.go              # Ticket display widget
+│       ├── pipeline.go            # Phase progress widget
+│       ├── output.go              # Live streaming output
+│       ├── stats.go               # Cost/tokens/elapsed
+│       ├── keys.go                # Keybinding display
+│       ├── sessions.go            # Session list view
+│       └── styles.go              # Lipgloss styles
+├── schemas/                       # Structured output schemas
+│   ├── gen.go                     # go:generate directive
+│   ├── generated.go               # Auto-generated JSON schemas
+│   ├── lookup.go                  # Phase → schema mapping
+│   ├── triage.go, plan.go, ...    # Per-phase Go struct definitions
+│   ├── patch.go                   # PatchOutput, FixResult
+│   └── followup.go               # FollowUpOutput, FollowUpAction
+├── phases.yaml                    # Root pipeline config (overrides embedded)
+├── config.example.yaml            # Example user config
 ├── go.mod
 └── go.sum
 ```
@@ -156,10 +243,11 @@ soda/
 - **Language**: Go 1.25
 - **TUI**: bubbletea + lipgloss + bubbles
 - **CLI**: cobra
-- **Config**: YAML (viper or raw `gopkg.in/yaml.v3`)
+- **Config**: YAML (`gopkg.in/yaml.v3`)
 - **Templates**: Go `text/template` with `go:embed`
-- **Sandbox**: agentic-orchestrator (`agent-node sandbox-run`)
+- **Sandbox**: go-arapuca (library-based, Landlock + seccomp + cgroups)
 - **Agent**: Claude Code CLI (`claude --print --bare`)
+- **Runner abstraction**: `internal/runner/` decouples engine from Claude CLI specifics
 
 ## Claude Code CLI flags (critical)
 
@@ -168,7 +256,7 @@ Every phase invokes Claude Code with these flags:
 ```
 claude --print --bare --output-format json --json-schema <schema> \
        --system-prompt-file <prompt> --model <model> \
-       --max-budget-usd <budget> --permission-mode bypassPermissions
+       [--max-budget-usd <budget>] --permission-mode bypassPermissions
 ```
 
 | Flag | Why |
@@ -178,19 +266,21 @@ claude --print --bare --output-format json --json-schema <schema> \
 | `--output-format json` | Structured response with `structured_output`, `total_cost_usd`, `usage`, `duration_ms` |
 | `--json-schema` | Enforce structured output. CLI validates against schema. No regex parsing needed. |
 | `--system-prompt-file` | Phase role + context as system prompt from file |
-| `--max-budget-usd` | Hard cost cap per phase |
+| `--max-budget-usd` | Hard cost cap per phase (omitted when no budget configured) |
 | `--permission-mode bypassPermissions` | No interactive permission prompts (essential for unattended execution) |
 
 Per-phase tool scoping via `--allowed-tools`:
 - Triage/Plan: `Read Glob Grep Bash(git:*) Bash(ls:*)`
-- Implement: `Read Write Edit Glob Grep Bash`
+- Implement/Patch: `Read Write Edit Glob Grep Bash`
 - Verify: `Read Glob Grep Bash`
 - Submit: `Bash(git:*) Bash(gh:*) Bash(glab:*)`
-- Monitor: `Read Write Edit Glob Grep Bash` (per response session)
+- Follow-up: `Bash(gh:*)`
+- Monitor fix sessions: `Read Write Edit Glob Grep Bash`
+- Monitor reply-only: `Read Glob Grep Bash(git log:*) Bash(git diff:*) Bash(git show:*) Bash(git status:*) Bash(go test:*) Bash(ls:*)`
 
 ## Error handling
 
-Three error categories with different retry strategies:
+Three error categories with different retry strategies (types in `internal/runner/errors.go`):
 
 | Category | Example | Action | Default retries |
 |----------|---------|--------|----------------|
@@ -198,29 +288,51 @@ Three error categories with different retry strategies:
 | Parse | Output doesn't match JSON schema | Retry with error message appended | 1 |
 | Semantic | Plan has no tasks, verify finds no tests | Retry with corrective feedback | 1 (0 for implement) |
 
+Additional engine-level errors:
+- `PhaseGateError` — domain gating failed (triage: not automatable, verify: FAIL, review: max rework)
+- `BudgetExceededError` — per-ticket or per-phase budget exceeded
+- `DependencyNotMetError` — required upstream phase not completed
+- `reworkSignal` — internal sentinel (not terminal) for rework routing
+
 ## State on disk
 
 ```
 .soda/<ticket>/
-├── meta.json           # ticket, phase, worktree, branch, budget, generation
-├── lock                # flock-based, contains PID + timestamp
-├── triage.json         # structured output (from --json-schema)
+├── meta.json              # ticket, worktree, branch, costs, cycles, flags
+├── lock                   # flock-based, contains PID + timestamp
+├── triage.json            # structured output (from --json-schema)
 ├── plan.json
 ├── implement.json
+├── patch.json             # corrective phase output (if ran)
 ├── verify.json
+├── review.json            # merged review output
 ├── submit.json
-├── monitor.json        # monitor response output (latest round)
-├── monitor_state.json  # monitor polling state (poll count, rounds, last comment ID)
-├── events.jsonl        # structured event log
+├── follow-up.json         # follow-up actions (if ran)
+├── monitor.json           # monitor response output (latest round)
+├── monitor_state.json     # monitor polling state (poll count, rounds, last comment ID)
+├── events.jsonl           # structured event log
 └── logs/
     ├── triage_prompt.md
     ├── triage_response.md
-    ├── monitor_response_1_prompt.md
-    ├── monitor_response_1_output.md
+    ├── review/
+    │   ├── prompt_go-specialist.md
+    │   └── prompt_ai-harness.md
+    ├── monitor/
+    │   ├── response_0_prompt.md
+    │   ├── response_0_output.md
+    │   ├── reply_0_prompt.md
+    │   └── reply_0_output.md
     └── ...
 ```
 
 Atomic writes: always write to `.tmp` then rename. Archive on re-run (`verify.json` → `verify.json.1`).
+
+`meta.json` key fields:
+- `rework_cycles` — review rework counter
+- `patch_cycles` — corrective patch counter
+- `escalated_from_patch` — one-shot escalation flag
+- `previous_failures` — criteria IDs for regression detection
+- Per-phase `cumulative_cost` — survives across generations
 
 ## Key design decisions
 
@@ -229,14 +341,20 @@ Atomic writes: always write to `.tmp` then rename. Archive on re-run (`verify.js
 - **Disk state over in-memory**: crash recovery for free. Resume works by reading `.soda/<ticket>/`. No daemon needed.
 - **Config-driven phases**: users can add, remove, or reorder phases via `phases.yaml`. Engine doesn't hardcode phase names.
 - **Prompt overrides**: `~/.config/soda/prompts/<phase>.md` overrides embedded prompts without forking.
-- **Root `phases.yaml` overrides embedded**: `resolvePhasesPath()` checks for a local `phases.yaml` in the working directory first, then falls back to the embedded copy. When changing pipeline config, update BOTH `cmd/soda/embeds/phases.yaml` (compiled into binary) AND the root `phases.yaml` (runtime override). Or just update the root file for immediate effect without rebuild.
+- **Root `phases.yaml` overrides embedded**: `resolvePhasesPath()` checks for a local `phases.yaml` in the working directory first, then falls back to the embedded copy.
+- **Per-phase model override**: phases can specify their own model (e.g., patch uses Sonnet), enabling cost-aware model selection.
+- **FeedbackFrom for generic feedback injection**: phases declare which upstream results provide rework feedback via `feedback_from` field, decoupled from hardcoded phase names.
+- **Corrective vs rework routing**: two distinct loops — corrective (verify→patch, same-cycle) and rework (review→implement, full re-run) with separate cycle counters and a unified `reworkSignal` type.
+- **Regression detection**: prevents patch from introducing new failures by comparing criteria between verify cycles.
+- **Post-submit best-effort**: follow-up phase failures are swallowed, not terminal. Pipeline succeeds even if follow-up can't create tickets.
+- **Agent-agnostic runner**: `internal/runner/` decouples the engine from Claude Code CLI specifics, enabling future backend swaps.
 
 ## Git workflow
 
 - **NEVER commit directly on main.** Always use a feature branch.
 - **Always work in worktrees**: `git worktree add .worktrees/<branch> -b <branch> main`
-- **Worktree directory**: `.worktrees/<branch>/` (gitignored)
-- **Branch naming**: `feat/<issue-slug>`, `fix/<issue-slug>`, `chore/<issue-slug>`
+- **Worktree directory**: `.worktrees/soda/<ticket-key>/` (gitignored)
+- **Branch naming**: `feat/<issue-slug>`, `fix/<issue-slug>`, `chore/<issue-slug>`, `soda/<ticket-key>` (pipeline-created)
 - **One PR per issue.** Reference the issue in the PR title.
 - **Push to origin**, PR against `main`.
 - Only stage specific files with `git add <file>`, never `git add .` or `git add -A`.
@@ -264,12 +382,16 @@ Atomic writes: always write to `.tmp` then rename. Archive on re-run (`verify.js
 1. **`--bare` conflicts with CLAUDE.md instructions**: AGENTS.md may contain "don't start coding until asked" — with `--bare`, this is not loaded. But if you inline AGENTS.md sections into prompts, be careful not to include conflicting instructions.
 2. **Claude Code CLI output format is not a stable API**: wrap all response parsing in a dedicated parser with tests against fixture files. Degrade gracefully (show "N/A" for cost) rather than crash.
 3. **`--json-schema` may trigger tool use**: even with `--bare`, Claude may try to explore the codebase before answering. For pure classification phases (triage), consider `--tools ""` to disable all tools.
-4. **Landlock requires `agent-sandbox` wrapper binary**: it's a separate binary in the agentic-orchestrator. Must be on PATH.
+4. **Sandbox requires CGO**: The sandbox runner uses `go-arapuca` which requires `cgo` (build tag `//go:build cgo`). When building with `CGO_ENABLED=0`, `runner_nocgo.go` provides a stub that returns an error at runtime.
 5. **Network namespace requires unprivileged user namespaces**: test with `unshare --user --net --map-current-user -- /bin/true`. If it fails, sandbox falls back to seccomp-only.
 6. **File locks are per-machine, not cross-machine**: `flock` on `.soda/<ticket>/lock` prevents concurrent runs on the same host but not across machines.
 7. **Lock files persist after clean exit**: `ReleaseLock()` releases the flock but does not delete the lock file (intentional — avoids TOCTOU race). `soda status` derives terminal status from phase state, not lock presence.
 8. **Root `phases.yaml` overrides embedded**: a `phases.yaml` in the project root takes precedence over the compiled-in version. Changes to the embedded file require a rebuild; the root file takes effect immediately.
 9. **Always run `soda` from the main repo checkout**: running from inside a worktree used to create nested worktrees (fixed in #156), but it's still good practice to run from the root.
+10. **Monitor requires `self_user` config**: without `self_user` set, the monitor cannot distinguish self-authored comments from external ones and will not respond to PR comments.
+11. **`max_cost_per_phase` is cumulative**: `CumulativeCost` on `PhaseState` accumulates across rework/patch generations, not just the current generation.
+12. **Patch regression detection uses criterion text**: if acceptance criteria text changes between verify runs, regression detection may produce false negatives.
+13. **CI git config isolation**: tests that create git repos must set `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_SYSTEM=/dev/null` (via `t.Setenv`) to prevent `url.*.insteadOf` rewrites on CI runners.
 
 ## Implementation workflow
 
@@ -279,12 +401,13 @@ Atomic writes: always write to `.tmp` then rename. Archive on re-run (`verify.js
 
 For non-trivial tickets, the recommended workflow is:
 
-1. **Write a spec** — post it on the issue (in body or as a comment with `<!-- soda:spec -->` markers)
-2. **Get specialist reviews** — dispatch Go Specialist + AI Harness agents in parallel to review the spec
-3. **Incorporate feedback** — update the spec based on review findings
+1. **Write a spec** — post it on the issue body (not committed to repo)
+2. **Get specialist reviews** — dispatch Go Specialist + AI Harness + SRE agents in parallel to review the spec
+3. **Incorporate feedback** — update the spec on the issue based on review findings
 4. **Write a plan** — post it on the issue with `<!-- soda:plan -->` markers
-5. **Label the issue** — `spec ready` or `plan ready`
-6. **Run soda** — `soda run <ticket>`. Triage detects the existing plan and skips the plan phase.
+5. **Break into sub-issues** — for large features, create a milestone and break into sub-issues with dependencies
+6. **Label the issue** — `spec ready` or `plan ready`
+7. **Run soda** — `soda run <ticket>`. Triage detects the existing plan and skips the plan phase.
 
 For small/trivial tickets, skip the spec/plan and let soda handle everything end-to-end.
 
@@ -314,10 +437,12 @@ Every output must be reviewed before moving to the next step. Reviews run as **s
 
 ### How to review
 
-Dispatch two subagents **in parallel** using the Agent tool:
+Dispatch subagents **in parallel** using the Agent tool:
 
 1. **Go Specialist Agent**: review for Go idioms, error handling, interface design, test quality, performance, and correctness.
 2. **AI Harness Agent**: review for prompt engineering, context budget impact, Claude Code CLI integration, sandbox compatibility, and structured output reliability.
+3. **SRE Agent** (for operational features): review for budget safety, observability, timeout cascading, circuit breakers, failure modes.
+4. **AI/ML Agent** (for LLM-facing features): review for model reliability, cost optimization, prompt effectiveness.
 
 Each subagent receives:
 - The code or spec to review (keep concise — send only the relevant files, not the whole repo)
@@ -418,21 +543,6 @@ When asked to triage an issue:
 
 If the issue lacks acceptance criteria, add them. If the scope is ambiguous, list the open questions in the issue and ask the maintainer.
 
-## Build sequence
-
-Issues are numbered in dependency order:
-
-1. `claude/command.go` — Claude Code CLI wrapper (#1)
-2. `sandbox/runner.go` — agentic-orchestrator integration (#2, depends on #1)
-3. `pipeline/state.go` — disk state with locking (#3, parallel with #1)
-4. `pipeline/engine.go` — phase loop (#4, depends on #1-#3)
-5. E2E triage + implement (#5, depends on #1-#4)
-6. `ticket/` — Jira source (#6, parallel with #1-#3)
-7. CLI commands (#7, depends on #3-#6)
-8. TUI (#8, depends on #4, #7)
-
-Parallelizable: #1, #3, and #6 have no dependencies on each other.
-
 ## Follow-up issues
 
 When discovering bugs, tech debt, or improvement opportunities during a task, file them as separate GitHub issues with the `triage-needed` label. Do not fix them inline — stay focused on the current ticket's scope.
@@ -441,7 +551,7 @@ When discovering bugs, tech debt, or improvement opportunities during a task, fi
 
 When creating a new issue, check whether any existing docs need updating as part of the work:
 
-- Does the change affect `AGENTS.md`? (architecture, conventions, project structure, build sequence, gotchas)
+- Does the change affect `AGENTS.md`? (architecture, conventions, project structure, gotchas)
 - Does it add/change CLI commands or flags? (update `config.example.yaml`, help text)
 - Does it change phase behavior? (update `phases.yaml` docs, prompt templates)
 - Does it affect the state format? (update "State on disk" section in `AGENTS.md`)
@@ -452,23 +562,25 @@ If yes, include a "Docs to update" section in the issue body listing the files t
 
 | Command | Purpose |
 |---------|---------|
-| `soda init [-o path] [--force]` | Generate a starter config file (`~/.config/soda/config.yaml`) |
+| `soda init [--yes] [--force] [--dry-run] [--phases] [--no-gitignore]` | Auto-detect project stack and generate `soda.yaml` |
 | `soda run <ticket>` | Run the pipeline for a ticket |
-| `soda run <ticket> --from <phase>` | Resume from a specific phase |
-| `soda status` | Show active and recent pipelines (sorted by status group, then submission time) |
+| `soda run <ticket> --from <phase>` | Resume from a specific phase (`last` auto-resolves to last running/failed) |
+| `soda run <ticket> --dry-run` | Render prompts without executing |
+| `soda run <ticket> --mode checkpoint` | Pause after each phase for confirmation |
+| `soda status` | Show active and recent pipelines |
 | `soda history <ticket>` | Show phase details for a ticket |
 | `soda history <ticket> --detail` | Show full structured JSON output per phase |
 | `soda history <ticket> --phase <name>` | Drill down into a specific phase |
-| `soda sessions` | List all previous pipeline runs with filtering and sorting |
-| `soda clean <ticket>` | Remove completed/failed pipeline state and worktrees |
+| `soda sessions` | List all previous pipeline runs |
+| `soda clean <ticket>` | Remove pipeline state and worktree for a ticket |
+| `soda clean --all [--dry-run]` | Clean all completed/failed sessions |
 | `soda plugin install [--global] [--force]` | Install the SODA Claude Code plugin |
 | `soda plugin uninstall [--global]` | Remove the SODA Claude Code plugin |
-| `soda render-prompt <phase> <ticket>` | Render a phase prompt template for debugging |
+| `soda render-prompt --phase <phase> --ticket <key>` | Render a phase prompt template for debugging |
+| `soda version` | Show version |
 
 ## What NOT to do
 
 - Do not hardcode project-specific references (repo names, Jira projects, ticket keys)
-- Do not build a plugin system for phases — config-driven is enough for now
-- Do not build an adapter/abstraction over multiple agent backends — build for Claude Code CLI first
 - Do not put business logic in the TUI — it's a view layer over engine events
 - Do not build the TUI and engine simultaneously — get headless working first (`--no-tui`)
