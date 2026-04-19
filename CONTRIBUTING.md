@@ -11,6 +11,9 @@
 git clone <repo-url>
 cd soda
 ./scripts/setup-hooks.sh
+
+# Create a project config (if one doesn't exist yet)
+soda init
 ```
 
 If you work in [worktrees](https://git-scm.com/docs/git-worktree), run
