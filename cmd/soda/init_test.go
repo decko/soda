@@ -17,7 +17,7 @@ func TestRunInit_WritesDefaultConfig(t *testing.T) {
 	dest := filepath.Join(dir, "soda.yaml")
 
 	var buf bytes.Buffer
-	if err := runInit(&buf, dest, false); err != nil {
+	if err := runInit(&buf, dest, false, false); err != nil {
 		t.Fatalf("runInit() error: %v", err)
 	}
 
@@ -52,7 +52,7 @@ func TestRunInit_CreatesParentDirs(t *testing.T) {
 	dir := t.TempDir()
 	dest := filepath.Join(dir, "deep", "nested", "soda.yaml")
 
-	if err := runInit(io.Discard, dest, false); err != nil {
+	if err := runInit(io.Discard, dest, false, false); err != nil {
 		t.Fatalf("runInit() error: %v", err)
 	}
 
@@ -70,7 +70,7 @@ func TestRunInit_RefusesOverwrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := runInit(io.Discard, dest, false)
+	err := runInit(io.Discard, dest, false, false)
 	if err == nil {
 		t.Fatal("expected error when file exists, got nil")
 	}
@@ -94,7 +94,7 @@ func TestRunInit_ForceOverwrites(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := runInit(io.Discard, dest, true); err != nil {
+	if err := runInit(io.Discard, dest, true, false); err != nil {
 		t.Fatalf("runInit(force=true) error: %v", err)
 	}
 
@@ -119,7 +119,7 @@ func TestRunInit_StatErrorNotErrNotExist(t *testing.T) {
 	t.Cleanup(func() { os.Chmod(noPerms, 0755) })
 
 	dest := filepath.Join(noPerms, "soda.yaml")
-	err := runInit(io.Discard, dest, false)
+	err := runInit(io.Discard, dest, false, false)
 	if err == nil {
 		t.Fatal("expected error for inaccessible path, got nil")
 	}
@@ -151,6 +151,30 @@ func TestResolveInitPath_CustomPath(t *testing.T) {
 	}
 	if filepath.Base(p) != "my-config.yaml" {
 		t.Errorf("base = %q, want my-config.yaml", filepath.Base(p))
+	}
+}
+
+func TestRunInit_DryRun(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "soda.yaml")
+
+	var buf bytes.Buffer
+	if err := runInit(&buf, dest, false, true); err != nil {
+		t.Fatalf("runInit(dryRun=true) error: %v", err)
+	}
+
+	// File must NOT be written.
+	if _, err := os.Stat(dest); err == nil {
+		t.Fatal("dry-run should not write a file")
+	}
+
+	// Output must contain valid YAML config.
+	output := buf.String()
+	if !strings.Contains(output, "ticket_source") {
+		t.Errorf("dry-run output missing ticket_source, got: %s", output)
+	}
+	if !strings.Contains(output, "mode:") {
+		t.Errorf("dry-run output missing mode field, got: %s", output)
 	}
 }
 

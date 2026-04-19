@@ -26,34 +26,22 @@ refuses to overwrite an existing file unless --force is given.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			output, _ := cmd.Flags().GetString("output")
 			force, _ := cmd.Flags().GetBool("force")
-			return runInit(cmd.OutOrStdout(), output, force)
+			dryRun, _ := cmd.Flags().GetBool("dry-run")
+			return runInit(cmd.OutOrStdout(), output, force, dryRun)
 		},
 	}
 
 	cmd.Flags().StringP("output", "o", "", "output path (default: soda.yaml)")
 	cmd.Flags().Bool("force", false, "overwrite existing config file")
+	cmd.Flags().Bool("dry-run", false, "print generated config to stdout without writing")
 
 	return cmd
 }
 
 // runInit generates a config (optionally auto-detected) and writes it to disk.
+// When dryRun is true the generated YAML is printed to w without writing files.
 // Extracted for testability — accepts an io.Writer for output messages.
-func runInit(w io.Writer, output string, force bool) error {
-	// Resolve output path.
-	destPath, err := resolveInitPath(output)
-	if err != nil {
-		return err
-	}
-
-	// Check for existing file unless --force.
-	if !force {
-		if _, err := os.Stat(destPath); err == nil {
-			return fmt.Errorf("config file already exists: %s (use --force to overwrite)", destPath)
-		} else if !errors.Is(err, fs.ErrNotExist) {
-			return fmt.Errorf("init: stat %s: %w", destPath, err)
-		}
-	}
-
+func runInit(w io.Writer, output string, force bool, dryRun bool) error {
 	// Auto-detect project stack. Detection is best-effort: if it fails
 	// we fall back to DefaultConfig with placeholder values.
 	cfg := config.DefaultConfig()
@@ -68,6 +56,27 @@ func runInit(w io.Writer, output string, force bool) error {
 	data, err := config.Marshal(cfg)
 	if err != nil {
 		return fmt.Errorf("init: %w", err)
+	}
+
+	// Dry-run: print config to writer and return without writing files.
+	if dryRun {
+		_, writeErr := w.Write(data)
+		return writeErr
+	}
+
+	// Resolve output path.
+	destPath, err := resolveInitPath(output)
+	if err != nil {
+		return err
+	}
+
+	// Check for existing file unless --force.
+	if !force {
+		if _, err := os.Stat(destPath); err == nil {
+			return fmt.Errorf("config file already exists: %s (use --force to overwrite)", destPath)
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("init: stat %s: %w", destPath, err)
+		}
 	}
 
 	// Ensure parent directory exists.
