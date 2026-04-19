@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -46,6 +47,33 @@ type PipelineMeta struct {
 	PatchRetryUsed     bool                   `json:"patch_retry_used,omitempty"`
 	PreviousFailures   []string               `json:"previous_failures,omitempty"`
 	Phases             map[string]*PhaseState `json:"phases"`
+}
+
+// CumulativeCost scans all session directories under stateDir and returns the
+// sum of TotalCost from every meta.json. Directories without a valid meta.json
+// are silently skipped. Returns 0 if the directory does not exist or is empty.
+func CumulativeCost(stateDir string) (float64, error) {
+	entries, err := os.ReadDir(stateDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("pipeline: read state dir for cumulative cost: %w", err)
+	}
+
+	var total float64
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		metaPath := filepath.Join(stateDir, entry.Name(), "meta.json")
+		meta, readErr := ReadMeta(metaPath)
+		if readErr != nil {
+			continue
+		}
+		total += meta.TotalCost
+	}
+	return total, nil
 }
 
 // ReadMeta reads and unmarshals a meta.json file.
