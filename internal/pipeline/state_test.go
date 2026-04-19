@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -415,6 +416,88 @@ func TestReadResult_NotExist(t *testing.T) {
 	if !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("expected os.ErrNotExist, got %v", err)
 	}
+}
+
+func TestReadArchivedResult(t *testing.T) {
+	t.Run("reads_archived_generation", func(t *testing.T) {
+		dir := t.TempDir()
+		state, _ := LoadOrCreate(dir, "T-ARC")
+
+		// First generation
+		state.MarkRunning("review")
+		state.WriteResult("review", json.RawMessage(`{"verdict":"rework","findings":[{"severity":"major","issue":"bad pattern"}]}`))
+		state.MarkCompleted("review")
+
+		// Re-run archives generation 1
+		state.MarkRunning("review")
+		state.WriteResult("review", json.RawMessage(`{"verdict":"pass","findings":[]}`))
+		state.MarkCompleted("review")
+
+		// Read archived generation 1
+		archived, err := state.ReadArchivedResult("review", 1)
+		if err != nil {
+			t.Fatalf("ReadArchivedResult: %v", err)
+		}
+		if !strings.Contains(string(archived), "bad pattern") {
+			t.Errorf("archived result should contain first-gen findings, got: %s", archived)
+		}
+
+		// Current result should be the pass
+		current, err := state.ReadResult("review")
+		if err != nil {
+			t.Fatalf("ReadResult: %v", err)
+		}
+		if !strings.Contains(string(current), `"pass"`) {
+			t.Errorf("current result should contain pass verdict, got: %s", current)
+		}
+	})
+
+	t.Run("returns_error_for_missing_generation", func(t *testing.T) {
+		dir := t.TempDir()
+		state, _ := LoadOrCreate(dir, "T-ARC2")
+
+		_, err := state.ReadArchivedResult("review", 99)
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("expected os.ErrNotExist, got %v", err)
+		}
+	})
+
+	t.Run("reads_multiple_archived_generations", func(t *testing.T) {
+		dir := t.TempDir()
+		state, _ := LoadOrCreate(dir, "T-ARC3")
+
+		// Generation 1
+		state.MarkRunning("verify")
+		state.WriteResult("verify", json.RawMessage(`{"verdict":"FAIL","fixes_required":["fix A"]}`))
+		state.MarkCompleted("verify")
+
+		// Generation 2 (archives gen 1)
+		state.MarkRunning("verify")
+		state.WriteResult("verify", json.RawMessage(`{"verdict":"FAIL","fixes_required":["fix B"]}`))
+		state.MarkCompleted("verify")
+
+		// Generation 3 (archives gen 2)
+		state.MarkRunning("verify")
+		state.WriteResult("verify", json.RawMessage(`{"verdict":"PASS"}`))
+		state.MarkCompleted("verify")
+
+		// Read archived generations
+		gen1, err := state.ReadArchivedResult("verify", 1)
+		if err != nil {
+			t.Fatalf("ReadArchivedResult gen 1: %v", err)
+		}
+		if !strings.Contains(string(gen1), "fix A") {
+			t.Errorf("gen 1 should contain 'fix A', got: %s", gen1)
+		}
+
+		gen2, err := state.ReadArchivedResult("verify", 2)
+		if err != nil {
+			t.Fatalf("ReadArchivedResult gen 2: %v", err)
+		}
+		if !strings.Contains(string(gen2), "fix B") {
+			t.Errorf("gen 2 should contain 'fix B', got: %s", gen2)
+		}
+	})
 }
 
 func TestWriteLog(t *testing.T) {

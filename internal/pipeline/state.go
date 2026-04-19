@@ -211,6 +211,18 @@ func (s *State) ReadResult(phase string) (json.RawMessage, error) {
 	return json.RawMessage(data), nil
 }
 
+// ReadArchivedResult reads an archived result file (<phase>.json.<generation>).
+// Archived results are created by MarkRunning when a phase is re-run,
+// preserving the previous generation's output for history and context.
+func (s *State) ReadArchivedResult(phase string, generation int) (json.RawMessage, error) {
+	path := fmt.Sprintf("%s.%d", filepath.Join(s.dir, phase+".json"), generation)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(data), nil
+}
+
 // WriteLog writes a debug log file (logs/<phase>_<suffix>.md).
 func (s *State) WriteLog(phase, suffix string, content []byte) error {
 	logsDir := filepath.Join(s.dir, "logs")
