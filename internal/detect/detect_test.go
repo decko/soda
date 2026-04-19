@@ -13,6 +13,8 @@ import (
 func initGitRepo(t *testing.T, dir, url string) {
 	t.Helper()
 	run(t, dir, "git", "init")
+	run(t, dir, "git", "config", "user.email", "test@test.com")
+	run(t, dir, "git", "config", "user.name", "Test")
 	run(t, dir, "git", "commit", "--allow-empty", "-m", "init")
 	if url != "" {
 		run(t, dir, "git", "remote", "add", "origin", url)
