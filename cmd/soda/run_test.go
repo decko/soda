@@ -857,6 +857,50 @@ func TestBuildPromptConfigDetectDefaults(t *testing.T) {
 	})
 }
 
+func TestHandleEventMonitorWarning(t *testing.T) {
+	dir := t.TempDir()
+	state, _ := pipeline.LoadOrCreate(dir, "T-1")
+
+	var buf bytes.Buffer
+	prog := progress.New(&buf, false)
+
+	event := pipeline.Event{
+		Kind: pipeline.EventMonitorWarning,
+		Data: map[string]any{
+			"warning": "self_user not configured; falling back to stub (required for comment classification)",
+		},
+	}
+	handleEvent(context.Background(), nil, nil, state, prog, event)
+
+	output := buf.String()
+	if !strings.Contains(output, "self_user not configured") {
+		t.Errorf("expected warning message in output, got %q", output)
+	}
+	if !strings.Contains(output, "⚠️") {
+		t.Errorf("expected ⚠️ emoji in output, got %q", output)
+	}
+}
+
+func TestHandleEventMonitorWarningMissingData(t *testing.T) {
+	dir := t.TempDir()
+	state, _ := pipeline.LoadOrCreate(dir, "T-1")
+
+	var buf bytes.Buffer
+	prog := progress.New(&buf, false)
+
+	// Event with no "warning" key should not panic or output anything.
+	event := pipeline.Event{
+		Kind: pipeline.EventMonitorWarning,
+		Data: map[string]any{},
+	}
+	handleEvent(context.Background(), nil, nil, state, prog, event)
+
+	output := buf.String()
+	if strings.Contains(output, "⚠️") {
+		t.Errorf("expected no output for missing warning data, got %q", output)
+	}
+}
+
 func TestHandleEventPatchExhaustedCycles(t *testing.T) {
 	// Verify that handleEvent correctly extracts patch_cycles as int
 	// (native Go type from the engine) and falls back to float64 (JSON).

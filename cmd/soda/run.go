@@ -525,6 +525,11 @@ func handleEvent(ctx context.Context, cancel context.CancelFunc, engine *pipelin
 		}
 		prog.Message(fmt.Sprintf("Created worktree: %s (%s)", wt, branch))
 
+	case pipeline.EventMonitorWarning:
+		if w, ok := event.Data["warning"].(string); ok {
+			prog.Message(fmt.Sprintf("  ⚠️  %s", w))
+		}
+
 	case pipeline.EventMonitorSkipped:
 		prog.PhaseSkipped("monitor")
 
