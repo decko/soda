@@ -12,6 +12,10 @@ import (
 // pointing at the given URL. If url is empty the remote is skipped.
 func initGitRepo(t *testing.T, dir, url string) {
 	t.Helper()
+	// Isolate from host git config to prevent url.*.insteadOf rewrites
+	// on CI runners. t.Setenv restores on cleanup.
+	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
 	run(t, dir, "git", "init")
 	run(t, dir, "git", "config", "user.email", "test@test.com")
 	run(t, dir, "git", "config", "user.name", "Test")
