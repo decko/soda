@@ -22,6 +22,16 @@ type Config struct {
 	Context      []string            `yaml:"context"`
 	PhaseContext map[string][]string `yaml:"phase_context"`
 	Repos        []RepoConfig        `yaml:"repos"`
+	Monitor      MonitorConfig       `yaml:"monitor"`
+}
+
+// MonitorConfig holds monitor phase settings loaded from the config file.
+// These values are wired into EngineConfig at startup.
+type MonitorConfig struct {
+	Profile    string   `yaml:"profile"`    // monitor profile preset: conservative, smart, aggressive
+	SelfUser   string   `yaml:"self_user"`  // PR author username for self-comment filtering
+	BotUsers   []string `yaml:"bot_users"`  // known bot usernames to filter out
+	CODEOWNERS string   `yaml:"codeowners"` // path to CODEOWNERS file for authority resolution
 }
 
 // JiraConfig holds Jira ticket source settings.

@@ -100,6 +100,25 @@ func TestLoad(t *testing.T) {
 				if cfg.GitHub.Plan.EndMarker != "<!-- plan:end -->" {
 					t.Errorf("GitHub.Plan.EndMarker = %q, want %q", cfg.GitHub.Plan.EndMarker, "<!-- plan:end -->")
 				}
+				// Monitor config
+				if cfg.Monitor.Profile != "smart" {
+					t.Errorf("Monitor.Profile = %q, want %q", cfg.Monitor.Profile, "smart")
+				}
+				if cfg.Monitor.SelfUser != "soda-bot" {
+					t.Errorf("Monitor.SelfUser = %q, want %q", cfg.Monitor.SelfUser, "soda-bot")
+				}
+				if len(cfg.Monitor.BotUsers) != 2 {
+					t.Fatalf("len(Monitor.BotUsers) = %d, want 2", len(cfg.Monitor.BotUsers))
+				}
+				if cfg.Monitor.BotUsers[0] != "dependabot" {
+					t.Errorf("Monitor.BotUsers[0] = %q, want %q", cfg.Monitor.BotUsers[0], "dependabot")
+				}
+				if cfg.Monitor.BotUsers[1] != "renovate" {
+					t.Errorf("Monitor.BotUsers[1] = %q, want %q", cfg.Monitor.BotUsers[1], "renovate")
+				}
+				if cfg.Monitor.CODEOWNERS != ".github/CODEOWNERS" {
+					t.Errorf("Monitor.CODEOWNERS = %q, want %q", cfg.Monitor.CODEOWNERS, ".github/CODEOWNERS")
+				}
 			},
 		},
 		{

@@ -56,3 +56,10 @@ repos:
       - ai-assisted
     trailers:
       - "Assisted-by: SODA <noreply@soda.dev>"
+monitor:
+  profile: smart
+  self_user: soda-bot
+  bot_users:
+    - dependabot
+    - renovate
+  codeowners: .github/CODEOWNERS
