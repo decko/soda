@@ -460,6 +460,8 @@ If yes, include a "Docs to update" section in the issue body listing the files t
 | `soda history <ticket> --phase <name>` | Drill down into a specific phase |
 | `soda sessions` | List all previous pipeline runs with filtering and sorting |
 | `soda clean <ticket>` | Remove completed/failed pipeline state and worktrees |
+| `soda plugin install [--global] [--force]` | Install the SODA Claude Code plugin |
+| `soda plugin uninstall [--global]` | Remove the SODA Claude Code plugin |
 | `soda render-prompt <phase> <ticket>` | Render a phase prompt template for debugging |
 
 ## What NOT to do

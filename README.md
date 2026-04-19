@@ -32,6 +32,39 @@ soda (Go TUI + Pipeline Engine)
 - `schemas/` — Structured output schemas per phase (Go structs → JSON Schema)
 - `config.example.yaml` — User configuration example
 
+## Claude Code Integration
+
+SODA ships an embedded Claude Code plugin that gives Claude knowledge of SODA
+pipelines and quick access to soda commands.
+
+### Install
+
+```bash
+soda plugin install              # project-local: .claude/plugins/soda/
+soda plugin install --global     # global: ~/.claude/plugins/soda/
+```
+
+### Uninstall
+
+```bash
+soda plugin uninstall            # remove project-local plugin
+soda plugin uninstall --global   # remove global plugin
+```
+
+### What the plugin provides
+
+| Component | Description |
+|-----------|-------------|
+| **Skill: `soda-pipeline`** | Teaches Claude about pipeline architecture, phase lifecycle, state management, and troubleshooting |
+| **`/soda:run <ticket>`** | Run the pipeline for a ticket |
+| **`/soda:status`** | Show current pipeline status |
+| **`/soda:sessions`** | List previous pipeline sessions |
+| **Agent: `pipeline-architect`** | Design-only agent that proposes a `phases.yaml` for the current project |
+
+The plugin is auto-discovered by Claude Code from `.claude/plugins/`. Plugin
+files are embedded in the soda binary and version-matched — updates come with
+`go install`.
+
 ## Key Design Decisions
 
 - **Go + bubbletea** for the CLI/TUI
