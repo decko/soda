@@ -6,6 +6,7 @@
 package detect
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -53,8 +54,9 @@ var contextFileNames = []string{
 
 // Detect scans repoDir and returns a ProjectInfo describing the project.
 // It is safe to call on directories that are not git repositories; forge
-// information will simply be empty in that case.
-func Detect(repoDir string) (*ProjectInfo, error) {
+// information will simply be empty in that case. The context is used for
+// subprocess cancellation (e.g. git remote lookup).
+func Detect(ctx context.Context, repoDir string) (*ProjectInfo, error) {
 	if _, err := os.Stat(repoDir); err != nil {
 		return nil, fmt.Errorf("detect: stat %s: %w", repoDir, err)
 	}
@@ -64,7 +66,7 @@ func Detect(repoDir string) (*ProjectInfo, error) {
 	}
 
 	detectLanguage(repoDir, info)
-	detectForge(repoDir, info)
+	detectForge(ctx, repoDir, info)
 	detectContextFiles(repoDir, info)
 	inferTooling(info)
 
@@ -92,8 +94,11 @@ func detectLanguage(repoDir string, info *ProjectInfo) {
 }
 
 // detectForge runs "git remote get-url origin" and parses the result.
-func detectForge(repoDir string, info *ProjectInfo) {
-	cmd := exec.Command("git", "remote", "get-url", "origin")
+// Uses exec.CommandContext so the call respects pipeline-level timeouts
+// and cancellation, consistent with other subprocess invocations in the
+// codebase.
+func detectForge(ctx context.Context, repoDir string, info *ProjectInfo) {
+	cmd := exec.CommandContext(ctx, "git", "remote", "get-url", "origin")
 	cmd.Dir = repoDir
 	out, err := cmd.Output()
 	if err != nil {

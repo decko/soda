@@ -1,6 +1,7 @@
 package detect
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -242,7 +243,7 @@ func TestDetect(t *testing.T) {
 				writeFile(t, filepath.Join(dir, path), content)
 			}
 
-			info, err := Detect(dir)
+			info, err := Detect(context.Background(), dir)
 			if err != nil {
 				t.Fatalf("Detect() error: %v", err)
 			}
@@ -281,7 +282,7 @@ func TestDetect(t *testing.T) {
 }
 
 func TestDetect_InvalidDir(t *testing.T) {
-	_, err := Detect("/nonexistent/path/that/does/not/exist")
+	_, err := Detect(context.Background(), "/nonexistent/path/that/does/not/exist")
 	if err == nil {
 		t.Fatal("expected error for nonexistent directory, got nil")
 	}
@@ -292,7 +293,7 @@ func TestDetect_NotAGitRepo(t *testing.T) {
 	// No git init -- just a plain directory with a go.mod.
 	writeFile(t, filepath.Join(dir, "go.mod"), "module m\n\ngo 1.22\n")
 
-	info, err := Detect(dir)
+	info, err := Detect(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("Detect() error: %v", err)
 	}
