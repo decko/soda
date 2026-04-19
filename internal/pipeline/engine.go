@@ -2357,6 +2357,10 @@ func (e *Engine) wrapTimeoutError(ctx context.Context, err error) error {
 	// Guard: only wrap if the deadline that fired is the pipeline's own.
 	// An external parent context with a shorter deadline would produce a
 	// different deadline value, and wrapping that as PipelineTimeoutError
+	// would produce misleading diagnostics. Per-phase timeouts create a
+	// child context with an earlier deadline, so they also won't match.
+	// An external parent context with a shorter deadline would produce a
+	// different deadline value, and wrapping that as PipelineTimeoutError
 	// would produce misleading diagnostics.
 	if e.pipelineDeadline.IsZero() {
 		return err
