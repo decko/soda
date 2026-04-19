@@ -4,4 +4,5 @@
 # tracked .githooks/ directory and they share .git/config.
 set -euo pipefail
 git config core.hooksPath .githooks
+chmod +x .githooks/*
 printf "Git hooks path set to .githooks\n"
