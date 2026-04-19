@@ -606,10 +606,24 @@ func TestConfigFromDetected_GitLab(t *testing.T) {
 	if cfg.TicketSource != "github" {
 		t.Errorf("TicketSource = %q, want %q", cfg.TicketSource, "github")
 	}
+
+	// GitHub ticket config should be populated with detected owner/repo so
+	// that the config is internally consistent (ticket source points at the
+	// same repo as cfg.Repos[0]).
+	if cfg.GitHub.Owner != "team" {
+		t.Errorf("GitHub.Owner = %q, want %q", cfg.GitHub.Owner, "team")
+	}
+	if cfg.GitHub.Repo != "backend" {
+		t.Errorf("GitHub.Repo = %q, want %q", cfg.GitHub.Repo, "backend")
+	}
+
 	if len(cfg.Repos) != 1 {
 		t.Fatalf("len(Repos) = %d, want 1", len(cfg.Repos))
 	}
 	if cfg.Repos[0].Forge != "gitlab" {
 		t.Errorf("Repos[0].Forge = %q, want %q", cfg.Repos[0].Forge, "gitlab")
+	}
+	if cfg.Repos[0].PushTo != "team/backend" {
+		t.Errorf("Repos[0].PushTo = %q, want %q", cfg.Repos[0].PushTo, "team/backend")
 	}
 }

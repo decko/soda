@@ -265,6 +265,8 @@ func configFromDetected(info *detect.ProjectInfo) *config.Config {
 		cfg.GitHub.Repo = info.Repo
 	case "gitlab":
 		cfg.TicketSource = "github" // keep github as default; gitlab ticket source not yet supported
+		cfg.GitHub.Owner = info.Owner
+		cfg.GitHub.Repo = info.Repo
 	}
 
 	// Context files
