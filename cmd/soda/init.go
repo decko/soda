@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/decko/soda/internal/config"
 	"github.com/decko/soda/internal/detect"
@@ -77,7 +78,9 @@ func runInit(w io.Writer, stdin io.Reader, isTTY bool, opts initOptions) error {
 	// Auto-detect project stack. Detection is best-effort: if it fails
 	// we fall back to DefaultConfig with placeholder values.
 	cfg := config.DefaultConfig()
-	info, detectErr := detect.Detect(context.Background(), ".")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	info, detectErr := detect.Detect(ctx, ".")
 	if detectErr != nil {
 		fmt.Fprintln(w, colorMsg("33", fmt.Sprintf("Warning: project detection failed: %v", detectErr)))
 	}
