@@ -10,6 +10,21 @@ if [ "${SKIP_HOOKS:-0}" = "1" ]; then
     exit 0
 fi
 
+# --- worktree guard ---
+# Block commits on main/master and from the main checkout (non-worktree).
+branch=$(git symbolic-ref --short HEAD 2>/dev/null || true)
+if [ "$branch" = "main" ] || [ "$branch" = "master" ]; then
+    printf "pre-commit: commits on '%s' are not allowed. Use a worktree branch.\n" "$branch"
+    exit 1
+fi
+
+git_dir=$(git rev-parse --git-dir 2>/dev/null)
+if [[ "$git_dir" != *"/worktrees/"* ]]; then
+    printf "pre-commit: commits outside a worktree are not allowed.\n"
+    printf "Use: git worktree add .worktrees/<branch> -b <branch> main\n"
+    exit 1
+fi
+
 # Collect staged .go files (added, copied, modified only).
 # Uses a while-read loop instead of mapfile for Bash 3.2 compatibility (macOS).
 staged_files=()
