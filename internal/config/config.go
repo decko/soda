@@ -95,6 +95,57 @@ type RepoConfig struct {
 	Trailers    []string `yaml:"trailers"`
 }
 
+// DefaultConfig returns a Config populated with sensible starter defaults.
+// The caller can modify the returned value before marshalling it to disk.
+func DefaultConfig() *Config {
+	return &Config{
+		TicketSource: "github",
+		GitHub: GitHubTicketConfig{
+			Owner:         "your-org",
+			Repo:          "your-repo",
+			FetchComments: true,
+			Spec: ExtractionStrategy{
+				StartMarker: "<!-- spec:start -->",
+				EndMarker:   "<!-- spec:end -->",
+			},
+			Plan: ExtractionStrategy{
+				StartMarker: "<!-- plan:start -->",
+				EndMarker:   "<!-- plan:end -->",
+			},
+		},
+		Mode:        "autonomous",
+		Model:       "claude-sonnet-4-20250514",
+		WorktreeDir: ".worktrees",
+		StateDir:    ".soda",
+		Limits: LimitsConfig{
+			MaxCostPerTicket: 15.00,
+			MaxCostPerPhase:  8.00,
+		},
+		Context: []string{"AGENTS.md"},
+		Repos: []RepoConfig{
+			{
+				Name:        "your-repo",
+				Forge:       "github",
+				PushTo:      "your-user/your-repo",
+				Target:      "your-org/your-repo",
+				Description: "Main repository",
+				Formatter:   "gofmt -w .",
+				TestCommand: "go test ./...",
+				Labels:      []string{"ai-assisted"},
+			},
+		},
+	}
+}
+
+// Marshal serialises a Config to YAML bytes.
+func Marshal(cfg *Config) ([]byte, error) {
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("config: marshal: %w", err)
+	}
+	return data, nil
+}
+
 // Load reads and parses a YAML config file.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)

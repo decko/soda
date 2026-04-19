@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/decko/soda/internal/pipeline"
+	"gopkg.in/yaml.v3"
 )
 
 func TestLoad(t *testing.T) {
@@ -160,6 +161,77 @@ func TestDefaultPath(t *testing.T) {
 	}
 	if filepath.Base(path) != "config.yaml" {
 		t.Errorf("DefaultPath() base = %q, want config.yaml", filepath.Base(path))
+	}
+}
+
+func TestDefaultConfig(t *testing.T) {
+	cfg := DefaultConfig()
+
+	if cfg.TicketSource != "github" {
+		t.Errorf("TicketSource = %q, want %q", cfg.TicketSource, "github")
+	}
+	if cfg.Mode != "autonomous" {
+		t.Errorf("Mode = %q, want %q", cfg.Mode, "autonomous")
+	}
+	if cfg.Model == "" {
+		t.Error("Model is empty")
+	}
+	if cfg.StateDir != ".soda" {
+		t.Errorf("StateDir = %q, want %q", cfg.StateDir, ".soda")
+	}
+	if cfg.WorktreeDir != ".worktrees" {
+		t.Errorf("WorktreeDir = %q, want %q", cfg.WorktreeDir, ".worktrees")
+	}
+	if cfg.Limits.MaxCostPerTicket <= 0 {
+		t.Errorf("MaxCostPerTicket = %f, want > 0", cfg.Limits.MaxCostPerTicket)
+	}
+	if cfg.Limits.MaxCostPerPhase <= 0 {
+		t.Errorf("MaxCostPerPhase = %f, want > 0", cfg.Limits.MaxCostPerPhase)
+	}
+	if len(cfg.Repos) != 1 {
+		t.Fatalf("len(Repos) = %d, want 1", len(cfg.Repos))
+	}
+	if cfg.Repos[0].Forge != "github" {
+		t.Errorf("Repos[0].Forge = %q, want %q", cfg.Repos[0].Forge, "github")
+	}
+	if cfg.GitHub.Owner != "your-org" {
+		t.Errorf("GitHub.Owner = %q, want %q", cfg.GitHub.Owner, "your-org")
+	}
+}
+
+func TestMarshalRoundTrip(t *testing.T) {
+	original := DefaultConfig()
+
+	data, err := Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal() error: %v", err)
+	}
+	if len(data) == 0 {
+		t.Fatal("Marshal() returned empty data")
+	}
+
+	var roundTripped Config
+	if err := yaml.Unmarshal(data, &roundTripped); err != nil {
+		t.Fatalf("Unmarshal round-tripped data: %v", err)
+	}
+
+	if roundTripped.TicketSource != original.TicketSource {
+		t.Errorf("TicketSource = %q, want %q", roundTripped.TicketSource, original.TicketSource)
+	}
+	if roundTripped.Mode != original.Mode {
+		t.Errorf("Mode = %q, want %q", roundTripped.Mode, original.Mode)
+	}
+	if roundTripped.Model != original.Model {
+		t.Errorf("Model = %q, want %q", roundTripped.Model, original.Model)
+	}
+	if roundTripped.StateDir != original.StateDir {
+		t.Errorf("StateDir = %q, want %q", roundTripped.StateDir, original.StateDir)
+	}
+	if len(roundTripped.Repos) != len(original.Repos) {
+		t.Fatalf("len(Repos) = %d, want %d", len(roundTripped.Repos), len(original.Repos))
+	}
+	if roundTripped.Repos[0].Name != original.Repos[0].Name {
+		t.Errorf("Repos[0].Name = %q, want %q", roundTripped.Repos[0].Name, original.Repos[0].Name)
 	}
 }
 
