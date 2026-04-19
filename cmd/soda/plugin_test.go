@@ -33,6 +33,7 @@ func TestInstallPlugin(t *testing.T) {
 		".claude-plugin/plugin.json",
 		"skills/soda-pipeline/SKILL.md",
 		"commands/run.md",
+		"commands/resume.md",
 		"commands/status.md",
 		"commands/sessions.md",
 		"agents/pipeline-architect.md",
