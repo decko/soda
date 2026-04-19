@@ -99,6 +99,26 @@ func TestRunInit_ForceOverwrites(t *testing.T) {
 	}
 }
 
+func TestRunInit_StatErrorNotErrNotExist(t *testing.T) {
+	dir := t.TempDir()
+	// Create a parent dir with no read/execute permission so Stat fails
+	// with a permission error, not ErrNotExist.
+	noPerms := filepath.Join(dir, "noperm")
+	if err := os.Mkdir(noPerms, 0000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(noPerms, 0755) })
+
+	dest := filepath.Join(noPerms, "config.yaml")
+	err := runInit(dest, false)
+	if err == nil {
+		t.Fatal("expected error for inaccessible path, got nil")
+	}
+	if !strings.Contains(err.Error(), "stat") {
+		t.Errorf("error = %q, want stat context", err)
+	}
+}
+
 func TestResolveInitPath_DefaultPath(t *testing.T) {
 	p, err := resolveInitPath("")
 	if err != nil {
