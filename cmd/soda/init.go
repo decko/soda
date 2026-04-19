@@ -82,12 +82,12 @@ func runInit(w io.Writer, stdin io.Reader, isTTY bool, opts initOptions) error {
 	defer cancel()
 	info, detectErr := detect.Detect(ctx, ".")
 	if detectErr != nil {
-		fmt.Fprintln(w, colorMsg("33", fmt.Sprintf("Warning: project detection failed: %v", detectErr)))
+		fmt.Fprintln(os.Stderr, colorMsg("33", fmt.Sprintf("Warning: project detection failed: %v", detectErr)))
 	}
 	if info != nil {
 		cfg = configFromDetected(info)
 		if info.Forge == "gitlab" {
-			fmt.Fprintln(w, colorMsg("33", "Warning: GitLab detected but only GitHub ticket source is currently supported. Edit ticket_source in the generated config if needed."))
+			fmt.Fprintln(os.Stderr, colorMsg("33", "Warning: GitLab detected but only GitHub ticket source is currently supported. Edit ticket_source in the generated config if needed."))
 		}
 	}
 
