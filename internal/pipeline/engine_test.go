@@ -9476,6 +9476,14 @@ func TestEngine_PipelineTimeout_Run(t *testing.T) {
 	if timeoutErr.Limit != 50*time.Millisecond {
 		t.Errorf("Limit = %v, want 50ms", timeoutErr.Limit)
 	}
+	// Phase should be "plan" — that's the phase that was running when the timeout fired.
+	if timeoutErr.Phase != "plan" {
+		t.Errorf("Phase = %q, want %q", timeoutErr.Phase, "plan")
+	}
+	// Elapsed should be > 0 (actual wall-clock time).
+	if timeoutErr.Elapsed <= 0 {
+		t.Errorf("Elapsed = %v, want > 0", timeoutErr.Elapsed)
+	}
 
 	// Verify pipeline_timeout event was emitted.
 	hasTimeoutEvent := false
@@ -9535,6 +9543,14 @@ func TestEngine_PipelineTimeout_Resume(t *testing.T) {
 	var timeoutErr *PipelineTimeoutError
 	if !errors.As(err, &timeoutErr) {
 		t.Fatalf("expected PipelineTimeoutError, got: %T: %v", err, err)
+	}
+	// Phase should be "plan" — that's the phase that was running when the timeout fired.
+	if timeoutErr.Phase != "plan" {
+		t.Errorf("Phase = %q, want %q", timeoutErr.Phase, "plan")
+	}
+	// Elapsed should be > 0 (actual wall-clock time).
+	if timeoutErr.Elapsed <= 0 {
+		t.Errorf("Elapsed = %v, want > 0", timeoutErr.Elapsed)
 	}
 }
 
@@ -9606,5 +9622,45 @@ func TestEngine_PipelineTimeout_NonDeadlineErrorNotWrapped(t *testing.T) {
 	var timeoutErr *PipelineTimeoutError
 	if errors.As(err, &timeoutErr) {
 		t.Error("non-deadline error should not be wrapped as PipelineTimeoutError")
+	}
+}
+
+func TestEngine_PipelineTimeout_ExternalDeadlineNotWrapped(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 0, Parse: 0, Semantic: 0},
+		},
+	}
+
+	// The phase returns DeadlineExceeded, simulating an external context timeout.
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: nil,
+				err:    context.DeadlineExceeded,
+			}},
+		},
+	}
+
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.MaxPipelineDuration = 10 * time.Minute // large pipeline timeout
+	})
+
+	// Use an external context with a very short deadline (shorter than the pipeline's).
+	externalCtx, externalCancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer externalCancel()
+
+	err := engine.Run(externalCtx)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	// Should NOT be wrapped as PipelineTimeoutError because the deadline
+	// that fired belongs to the external parent context, not the pipeline.
+	var timeoutErr *PipelineTimeoutError
+	if errors.As(err, &timeoutErr) {
+		t.Error("external context deadline should not be wrapped as PipelineTimeoutError")
 	}
 }

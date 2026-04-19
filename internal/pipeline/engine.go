@@ -79,15 +79,17 @@ func (e *Engine) remoteName() string {
 // Engine orchestrates a pipeline run, tying together the runner,
 // state management, prompt rendering, and retry logic.
 type Engine struct {
-	runner       runner.Runner
-	config       EngineConfig
-	state        *State
-	confirmCh    chan struct{}
-	reranPhases  map[string]bool // phases that ran (not skipped) in this execution
-	pauseMu      sync.Mutex
-	paused       bool
-	pauseCond    *sync.Cond
-	inCheckpoint bool // true while blocked on <-confirmCh; guarded by pauseMu
+	runner           runner.Runner
+	config           EngineConfig
+	state            *State
+	confirmCh        chan struct{}
+	reranPhases      map[string]bool // phases that ran (not skipped) in this execution
+	pauseMu          sync.Mutex
+	paused           bool
+	pauseCond        *sync.Cond
+	inCheckpoint     bool      // true while blocked on <-confirmCh; guarded by pauseMu
+	pipelineStart    time.Time // wall-clock time when applyPipelineTimeout was called
+	pipelineDeadline time.Time // deadline set by applyPipelineTimeout; zero if no timeout
 }
 
 // NewEngine creates an Engine with sensible defaults for sleep and jitter.
@@ -2320,18 +2322,30 @@ func (e *Engine) emitChunk(event Event) {
 }
 
 // applyPipelineTimeout wraps ctx with a deadline when MaxPipelineDuration is
-// configured. Returns the (possibly wrapped) context and a cancel function
-// that must always be deferred.
+// configured. It stores pipelineStart and pipelineDeadline so wrapTimeoutError
+// can compute actual elapsed time and distinguish the pipeline's own deadline
+// from an external parent context deadline. Returns the (possibly wrapped)
+// context and a cancel function that must always be deferred.
 func (e *Engine) applyPipelineTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
 	if e.config.MaxPipelineDuration <= 0 {
 		return ctx, func() {}
 	}
-	return context.WithTimeout(ctx, e.config.MaxPipelineDuration)
+	now := e.now()
+	e.pipelineStart = now
+	e.pipelineDeadline = now.Add(e.config.MaxPipelineDuration)
+	return context.WithDeadline(ctx, e.pipelineDeadline)
 }
 
 // wrapTimeoutError checks whether err is a context deadline exceeded caused
-// by the pipeline-level timeout. If so, it emits an EventPipelineTimeout
-// event and returns a PipelineTimeoutError. Otherwise it returns err unchanged.
+// by the pipeline's own timeout (not an external parent context deadline).
+// If so, it emits an EventPipelineTimeout event and returns a
+// PipelineTimeoutError with actual elapsed time. Otherwise it returns err
+// unchanged.
+//
+// To distinguish the pipeline's deadline from an external caller's deadline,
+// the method compares ctx.Deadline() against e.pipelineDeadline. If they
+// don't match (within a small tolerance), the deadline came from an external
+// source (e.g., HTTP handler, CI timeout) and the error is returned as-is.
 func (e *Engine) wrapTimeoutError(ctx context.Context, err error) error {
 	if e.config.MaxPipelineDuration <= 0 {
 		return err
@@ -2340,12 +2354,24 @@ func (e *Engine) wrapTimeoutError(ctx context.Context, err error) error {
 		return err
 	}
 
-	// Determine elapsed time.
-	elapsed := e.config.MaxPipelineDuration // best approximation when timeout fires
-	if deadline, ok := ctx.Deadline(); ok {
-		// The deadline already passed, so elapsed ≈ timeout duration.
-		_ = deadline // silence unused
+	// Guard: only wrap if the deadline that fired is the pipeline's own.
+	// An external parent context with a shorter deadline would produce a
+	// different deadline value, and wrapping that as PipelineTimeoutError
+	// would produce misleading diagnostics.
+	if e.pipelineDeadline.IsZero() {
+		return err
 	}
+	if ctxDeadline, ok := ctx.Deadline(); ok {
+		// Allow 1s tolerance for clock jitter between WithDeadline creation
+		// and this check.
+		diff := ctxDeadline.Sub(e.pipelineDeadline)
+		if diff < -time.Second || diff > time.Second {
+			return err
+		}
+	}
+
+	// Compute actual elapsed time from the stored start time.
+	elapsed := e.now().Sub(e.pipelineStart)
 
 	// Find the phase that was running when the timeout fired.
 	phase := e.lastRunningPhase()
@@ -2366,11 +2392,24 @@ func (e *Engine) wrapTimeoutError(ctx context.Context, err error) error {
 	}
 }
 
-// lastRunningPhase returns the name of the phase that has status "running"
-// in the pipeline meta, or "unknown" if none is found.
+// lastRunningPhase returns the name of the phase that was active when the
+// pipeline stopped. It checks for PhaseRunning first (preferred), then falls
+// back to PhaseFailed — because runPhase calls MarkFailed before the error
+// propagates to wrapTimeoutError, a timed-out phase will have PhaseFailed
+// status by the time this method runs. Since phases execute sequentially and
+// stop on first error, there will be at most one failed phase.
+// Returns "unknown" if no running or failed phase is found.
 func (e *Engine) lastRunningPhase() string {
+	// Prefer PhaseRunning (e.g., parallel-review goroutines).
 	for _, phase := range e.config.Pipeline.Phases {
 		if ps := e.state.Meta().Phases[phase.Name]; ps != nil && ps.Status == PhaseRunning {
+			return phase.Name
+		}
+	}
+	// Fall back to PhaseFailed — the timed-out phase was marked failed
+	// before the error propagated here.
+	for _, phase := range e.config.Pipeline.Phases {
+		if ps := e.state.Meta().Phases[phase.Name]; ps != nil && ps.Status == PhaseFailed {
 			return phase.Name
 		}
 	}
