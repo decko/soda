@@ -17,7 +17,7 @@ func TestRunInit_WritesDefaultConfig(t *testing.T) {
 	dest := filepath.Join(dir, "soda.yaml")
 
 	var buf bytes.Buffer
-	if err := runInit(&buf, dest, false, false); err != nil {
+	if err := runInit(&buf, dest, false, false, false); err != nil {
 		t.Fatalf("runInit() error: %v", err)
 	}
 
@@ -52,7 +52,7 @@ func TestRunInit_CreatesParentDirs(t *testing.T) {
 	dir := t.TempDir()
 	dest := filepath.Join(dir, "deep", "nested", "soda.yaml")
 
-	if err := runInit(io.Discard, dest, false, false); err != nil {
+	if err := runInit(io.Discard, dest, false, false, false); err != nil {
 		t.Fatalf("runInit() error: %v", err)
 	}
 
@@ -70,7 +70,7 @@ func TestRunInit_RefusesOverwrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := runInit(io.Discard, dest, false, false)
+	err := runInit(io.Discard, dest, false, false, false)
 	if err == nil {
 		t.Fatal("expected error when file exists, got nil")
 	}
@@ -94,7 +94,7 @@ func TestRunInit_ForceOverwrites(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := runInit(io.Discard, dest, true, false); err != nil {
+	if err := runInit(io.Discard, dest, true, false, false); err != nil {
 		t.Fatalf("runInit(force=true) error: %v", err)
 	}
 
@@ -119,7 +119,7 @@ func TestRunInit_StatErrorNotErrNotExist(t *testing.T) {
 	t.Cleanup(func() { os.Chmod(noPerms, 0755) })
 
 	dest := filepath.Join(noPerms, "soda.yaml")
-	err := runInit(io.Discard, dest, false, false)
+	err := runInit(io.Discard, dest, false, false, false)
 	if err == nil {
 		t.Fatal("expected error for inaccessible path, got nil")
 	}
@@ -159,7 +159,7 @@ func TestRunInit_DryRun(t *testing.T) {
 	dest := filepath.Join(dir, "soda.yaml")
 
 	var buf bytes.Buffer
-	if err := runInit(&buf, dest, false, true); err != nil {
+	if err := runInit(&buf, dest, false, true, false); err != nil {
 		t.Fatalf("runInit(dryRun=true) error: %v", err)
 	}
 
@@ -175,6 +175,92 @@ func TestRunInit_DryRun(t *testing.T) {
 	}
 	if !strings.Contains(output, "mode:") {
 		t.Errorf("dry-run output missing mode field, got: %s", output)
+	}
+}
+
+func TestRunInit_PhasesWritten(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "soda.yaml")
+
+	var buf bytes.Buffer
+	if err := runInit(&buf, dest, false, false, true); err != nil {
+		t.Fatalf("runInit(phases=true) error: %v", err)
+	}
+
+	// Config must exist.
+	if _, err := os.Stat(dest); err != nil {
+		t.Fatalf("config not created: %v", err)
+	}
+
+	// phases.yaml must exist alongside the config.
+	phasesPath := filepath.Join(dir, "phases.yaml")
+	phasesData, err := os.ReadFile(phasesPath)
+	if err != nil {
+		t.Fatalf("phases.yaml not created: %v", err)
+	}
+	if len(phasesData) == 0 {
+		t.Fatal("phases.yaml is empty")
+	}
+
+	// Output must mention both files.
+	output := buf.String()
+	if !strings.Contains(output, "Config written") {
+		t.Errorf("output missing config confirmation: %s", output)
+	}
+	if !strings.Contains(output, "Phases written") {
+		t.Errorf("output missing phases confirmation: %s", output)
+	}
+}
+
+func TestRunInit_PhasesRefusesOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "soda.yaml")
+
+	// Pre-create phases.yaml.
+	phasesPath := filepath.Join(dir, "phases.yaml")
+	if err := os.WriteFile(phasesPath, []byte("existing"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runInit(io.Discard, dest, false, false, true)
+	if err == nil {
+		t.Fatal("expected error when phases.yaml exists, got nil")
+	}
+	if !strings.Contains(err.Error(), "phases file already exists") {
+		t.Errorf("error = %q, want phases file already exists", err.Error())
+	}
+
+	// Original phases content must be preserved.
+	data, _ := os.ReadFile(phasesPath)
+	if string(data) != "existing" {
+		t.Errorf("phases.yaml was modified: got %q", string(data))
+	}
+}
+
+func TestRunInit_PhasesForceOverwrites(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "soda.yaml")
+
+	// Pre-create phases.yaml with dummy content.
+	phasesPath := filepath.Join(dir, "phases.yaml")
+	if err := os.WriteFile(phasesPath, []byte("old-content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runInit(io.Discard, dest, true, false, true); err != nil {
+		t.Fatalf("runInit(force=true, phases=true) error: %v", err)
+	}
+
+	// phases.yaml must be overwritten with embedded content.
+	data, err := os.ReadFile(phasesPath)
+	if err != nil {
+		t.Fatalf("read phases.yaml: %v", err)
+	}
+	if string(data) == "old-content" {
+		t.Error("phases.yaml was not overwritten")
+	}
+	if len(data) == 0 {
+		t.Error("phases.yaml is empty after overwrite")
 	}
 }
 

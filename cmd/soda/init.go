@@ -27,21 +27,24 @@ refuses to overwrite an existing file unless --force is given.`,
 			output, _ := cmd.Flags().GetString("output")
 			force, _ := cmd.Flags().GetBool("force")
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
-			return runInit(cmd.OutOrStdout(), output, force, dryRun)
+			phases, _ := cmd.Flags().GetBool("phases")
+			return runInit(cmd.OutOrStdout(), output, force, dryRun, phases)
 		},
 	}
 
 	cmd.Flags().StringP("output", "o", "", "output path (default: soda.yaml)")
 	cmd.Flags().Bool("force", false, "overwrite existing config file")
 	cmd.Flags().Bool("dry-run", false, "print generated config to stdout without writing")
+	cmd.Flags().Bool("phases", false, "also write phases.yaml alongside the config")
 
 	return cmd
 }
 
 // runInit generates a config (optionally auto-detected) and writes it to disk.
 // When dryRun is true the generated YAML is printed to w without writing files.
+// When phases is true the embedded phases.yaml is written alongside the config.
 // Extracted for testability — accepts an io.Writer for output messages.
-func runInit(w io.Writer, output string, force bool, dryRun bool) error {
+func runInit(w io.Writer, output string, force bool, dryRun bool, phases bool) error {
 	// Auto-detect project stack. Detection is best-effort: if it fails
 	// we fall back to DefaultConfig with placeholder values.
 	cfg := config.DefaultConfig()
@@ -91,6 +94,34 @@ func runInit(w io.Writer, output string, force bool, dryRun bool) error {
 	}
 
 	fmt.Fprintf(w, "Config written to %s\n", destPath)
+
+	// Write phases.yaml alongside the config when --phases is set.
+	if phases {
+		phasesPath := filepath.Join(filepath.Dir(destPath), "phases.yaml")
+		if err := writePhases(w, phasesPath, force); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// writePhases writes the embedded phases.yaml to phasesPath.
+// It refuses to overwrite an existing file unless force is true.
+func writePhases(w io.Writer, phasesPath string, force bool) error {
+	if !force {
+		if _, err := os.Stat(phasesPath); err == nil {
+			return fmt.Errorf("phases file already exists: %s (use --force to overwrite)", phasesPath)
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("init: stat %s: %w", phasesPath, err)
+		}
+	}
+
+	if err := os.WriteFile(phasesPath, embeddedPhases, 0644); err != nil {
+		return fmt.Errorf("init: write phases.yaml: %w", err)
+	}
+
+	fmt.Fprintf(w, "Phases written to %s\n", phasesPath)
 	return nil
 }
 
