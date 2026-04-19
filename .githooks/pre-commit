@@ -25,6 +25,33 @@ if [[ "$git_dir" != *"/worktrees/"* ]]; then
     exit 1
 fi
 
+# --- author email check ---
+# Enforce commits use an allowed email domain.
+# Check env vars first (GIT_AUTHOR_EMAIL, GIT_COMMITTER_EMAIL) then git config.
+author_email="${GIT_AUTHOR_EMAIL:-${GIT_COMMITTER_EMAIL:-$(git config user.email 2>/dev/null || true)}}"
+if [ -z "$author_email" ]; then
+    printf "pre-commit: git user.email is not configured.\n"
+    printf "Run: git config user.email your@email.com\n"
+    exit 1
+fi
+
+allowed_domains="redhat.com"
+email_domain="${author_email##*@}"
+allowed=false
+for domain in $allowed_domains; do
+    if [ "$email_domain" = "$domain" ]; then
+        allowed=true
+        break
+    fi
+done
+
+if [ "$allowed" = false ]; then
+    printf "pre-commit: author email '%s' is not from an allowed domain.\n" "$author_email"
+    printf "Allowed domains: %s\n" "$allowed_domains"
+    printf "Run: git config user.email your@redhat.com\n"
+    exit 1
+fi
+
 # Collect staged .go files (added, copied, modified only).
 # Uses a while-read loop instead of mapfile for Bash 3.2 compatibility (macOS).
 staged_files=()

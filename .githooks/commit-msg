@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Commit-msg hook: enforces conventional commit format and Assisted-by trailer.
+# Install via: ./scripts/setup-hooks.sh (same core.hooksPath config)
+# Skip via:    git commit --no-verify   OR   SKIP_HOOKS=1 git commit
+
+set -euo pipefail
+
+if [ "${SKIP_HOOKS:-0}" = "1" ]; then
+    exit 0
+fi
+
+msg_file="$1"
+clean_msg=$(grep -v '^#' "$msg_file" || true)
+
+# Reject empty commit messages.
+if [ -z "$(printf '%s' "$clean_msg" | tr -d '[:space:]')" ]; then
+    printf "commit-msg: empty commit message.\n"
+    exit 1
+fi
+
+first_line=$(printf '%s\n' "$clean_msg" | head -n1)
+
+# Allow merge commits, fixup/squash/amend commits.
+if printf '%s\n' "$first_line" | grep -qE '^(Merge (branch|pull request|tag|remote-tracking)|fixup|squash|amend)(!| )'; then
+    exit 0
+fi
+
+# --- conventional commit format ---
+# First line must match: type[(scope)][!]: description
+pattern="^(feat|fix|chore|docs|test|refactor|perf|ci|build|style|revert)(\(.+\))?!?:[[:space:]].+"
+if ! printf '%s\n' "$first_line" | grep -qE "$pattern"; then
+    printf "commit-msg: invalid commit message format.\n"
+    printf "Expected: <type>[(scope)][!]: <description>\n"
+    printf "Types: feat, fix, chore, docs, test, refactor, perf, ci, build, style, revert\n"
+    printf "Got: %s\n" "$first_line"
+    exit 1
+fi
+
+# --- Assisted-by trailer ---
+# Validate format if present. Human-only commits without the trailer are valid.
+if printf '%s\n' "$clean_msg" | grep -qiE "^Assisted-by:"; then
+    if ! printf '%s\n' "$clean_msg" | grep -qE "^Assisted-by: .+$"; then
+        printf "commit-msg: malformed Assisted-by trailer.\n"
+        printf "Expected: Assisted-by: <model name>\n"
+        exit 1
+    fi
+fi
