@@ -452,6 +452,7 @@ If yes, include a "Docs to update" section in the issue body listing the files t
 
 | Command | Purpose |
 |---------|---------|
+| `soda init` | Create a starter `soda.config.yaml` in the current directory |
 | `soda run <ticket>` | Run the pipeline for a ticket |
 | `soda run <ticket> --from <phase>` | Resume from a specific phase |
 | `soda status` | Show active and recent pipelines (sorted by status group, then submission time) |
