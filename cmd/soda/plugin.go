@@ -106,6 +106,8 @@ func installPlugin(destDir string, force bool) error {
 		if err := os.RemoveAll(destDir); err != nil {
 			return fmt.Errorf("plugin: remove existing installation: %w", err)
 		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("plugin: stat destination: %w", err)
 	}
 
 	// Walk the embedded filesystem and copy files
