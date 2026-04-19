@@ -110,7 +110,7 @@ phases:
       - Glob
       - Grep
       - Bash
-    timeout: 5m
+    timeout: 12m
     retry:
       transient: 2
       parse: 1

@@ -118,8 +118,8 @@ func DefaultConfig() *Config {
 		WorktreeDir: ".worktrees",
 		StateDir:    ".soda",
 		Limits: LimitsConfig{
-			MaxCostPerTicket: 15.00,
-			MaxCostPerPhase:  8.00,
+			MaxCostPerTicket: 30.00,
+			MaxCostPerPhase:  15.00,
 		},
 		Context: []string{"AGENTS.md"},
 		Repos: []RepoConfig{
