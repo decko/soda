@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,9 +13,10 @@ import (
 
 func TestRunInit_WritesDefaultConfig(t *testing.T) {
 	dir := t.TempDir()
-	dest := filepath.Join(dir, "config.yaml")
+	dest := filepath.Join(dir, "soda.yaml")
 
-	if err := runInit(dest, false); err != nil {
+	var buf bytes.Buffer
+	if err := runInit(&buf, dest, false); err != nil {
 		t.Fatalf("runInit() error: %v", err)
 	}
 
@@ -37,13 +40,18 @@ func TestRunInit_WritesDefaultConfig(t *testing.T) {
 	if cfg.Mode == "" {
 		t.Error("loaded config has empty Mode")
 	}
+
+	// Output message must mention the path.
+	if !strings.Contains(buf.String(), dest) {
+		t.Errorf("output = %q, want to mention %q", buf.String(), dest)
+	}
 }
 
 func TestRunInit_CreatesParentDirs(t *testing.T) {
 	dir := t.TempDir()
-	dest := filepath.Join(dir, "deep", "nested", "config.yaml")
+	dest := filepath.Join(dir, "deep", "nested", "soda.yaml")
 
-	if err := runInit(dest, false); err != nil {
+	if err := runInit(io.Discard, dest, false); err != nil {
 		t.Fatalf("runInit() error: %v", err)
 	}
 
@@ -54,14 +62,14 @@ func TestRunInit_CreatesParentDirs(t *testing.T) {
 
 func TestRunInit_RefusesOverwrite(t *testing.T) {
 	dir := t.TempDir()
-	dest := filepath.Join(dir, "config.yaml")
+	dest := filepath.Join(dir, "soda.yaml")
 
 	// Write a dummy file.
 	if err := os.WriteFile(dest, []byte("existing"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	err := runInit(dest, false)
+	err := runInit(io.Discard, dest, false)
 	if err == nil {
 		t.Fatal("expected error when file exists, got nil")
 	}
@@ -78,14 +86,14 @@ func TestRunInit_RefusesOverwrite(t *testing.T) {
 
 func TestRunInit_ForceOverwrites(t *testing.T) {
 	dir := t.TempDir()
-	dest := filepath.Join(dir, "config.yaml")
+	dest := filepath.Join(dir, "soda.yaml")
 
 	// Write a dummy file.
 	if err := os.WriteFile(dest, []byte("old"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := runInit(dest, true); err != nil {
+	if err := runInit(io.Discard, dest, true); err != nil {
 		t.Fatalf("runInit(force=true) error: %v", err)
 	}
 
@@ -109,8 +117,8 @@ func TestRunInit_StatErrorNotErrNotExist(t *testing.T) {
 	}
 	t.Cleanup(func() { os.Chmod(noPerms, 0755) })
 
-	dest := filepath.Join(noPerms, "config.yaml")
-	err := runInit(dest, false)
+	dest := filepath.Join(noPerms, "soda.yaml")
+	err := runInit(io.Discard, dest, false)
 	if err == nil {
 		t.Fatal("expected error for inaccessible path, got nil")
 	}
@@ -127,8 +135,8 @@ func TestResolveInitPath_DefaultPath(t *testing.T) {
 	if !filepath.IsAbs(p) {
 		t.Errorf("path %q is not absolute", p)
 	}
-	if filepath.Base(p) != "config.yaml" {
-		t.Errorf("base = %q, want config.yaml", filepath.Base(p))
+	if filepath.Base(p) != "soda.yaml" {
+		t.Errorf("base = %q, want soda.yaml", filepath.Base(p))
 	}
 }
 

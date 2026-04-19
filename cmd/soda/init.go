@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -14,29 +15,28 @@ import (
 func newInitCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "init",
-		Short: "Generate a starter config file",
-		Long: `Generate a starter soda config file with sensible defaults.
+		Short: "Auto-detect project stack and generate soda.yaml",
+		Long: `Auto-detect the project stack and generate a soda config file.
 
-By default the config is written to the standard location
-(~/.config/soda/config.yaml). Use --output to choose a
-different path. The command refuses to overwrite an existing
-file unless --force is given.`,
+By default the config is written to soda.yaml in the current
+directory. Use --output to choose a different path. The command
+refuses to overwrite an existing file unless --force is given.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			output, _ := cmd.Flags().GetString("output")
 			force, _ := cmd.Flags().GetBool("force")
-			return runInit(output, force)
+			return runInit(cmd.OutOrStdout(), output, force)
 		},
 	}
 
-	cmd.Flags().StringP("output", "o", "", "output path (default: ~/.config/soda/config.yaml)")
+	cmd.Flags().StringP("output", "o", "", "output path (default: soda.yaml)")
 	cmd.Flags().Bool("force", false, "overwrite existing config file")
 
 	return cmd
 }
 
 // runInit generates a default config and writes it to disk.
-// Extracted for testability.
-func runInit(output string, force bool) error {
+// Extracted for testability — accepts an io.Writer for output messages.
+func runInit(w io.Writer, output string, force bool) error {
 	// Resolve output path.
 	destPath, err := resolveInitPath(output)
 	if err != nil {
@@ -70,12 +70,12 @@ func runInit(output string, force bool) error {
 		return fmt.Errorf("init: write config: %w", err)
 	}
 
-	fmt.Printf("Config written to %s\n", destPath)
+	fmt.Fprintf(w, "Config written to %s\n", destPath)
 	return nil
 }
 
 // resolveInitPath returns the destination path for the generated config.
-// If output is empty, the default config path is used.
+// If output is empty, defaults to soda.yaml in the current directory.
 func resolveInitPath(output string) (string, error) {
 	if output != "" {
 		abs, err := filepath.Abs(output)
@@ -84,9 +84,9 @@ func resolveInitPath(output string) (string, error) {
 		}
 		return abs, nil
 	}
-	p, err := config.DefaultPath()
+	abs, err := filepath.Abs("soda.yaml")
 	if err != nil {
-		return "", fmt.Errorf("init: %w", err)
+		return "", fmt.Errorf("init: resolve path: %w", err)
 	}
-	return p, nil
+	return abs, nil
 }
