@@ -24,6 +24,9 @@ func TestInstallPlugin(t *testing.T) {
 	if !contains(output, "soda-pipeline") {
 		t.Errorf("expected output to mention soda-pipeline skill")
 	}
+	if !contains(output, "/soda:render") {
+		t.Errorf("expected output to mention /soda:render command")
+	}
 	if contains(output, "/soda:init") {
 		t.Errorf("output should not reference /soda:init (command does not exist)")
 	}
@@ -38,6 +41,7 @@ func TestInstallPlugin(t *testing.T) {
 		"commands/sessions.md",
 		"commands/clean.md",
 		"commands/history.md",
+		"commands/render.md",
 		"agents/pipeline-architect.md",
 	}
 
