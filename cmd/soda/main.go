@@ -46,6 +46,7 @@ func newRootCmd() *cobra.Command {
 		newHistoryCmd(),
 		newCleanCmd(),
 		newRenderCmd(),
+		newPluginCmd(),
 		newVersionCmd(),
 	)
 
