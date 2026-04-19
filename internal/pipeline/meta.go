@@ -79,13 +79,13 @@ func CumulativeCost(stateDir string) (float64, error) {
 		if !entry.IsDir() {
 			continue
 		}
-		if inLedger[entry.Name()] {
-			continue // already counted via ledger; skip to avoid double-counting
-		}
 		metaPath := filepath.Join(stateDir, entry.Name(), "meta.json")
 		meta, readErr := ReadMeta(metaPath)
 		if readErr != nil {
 			continue
+		}
+		if inLedger[meta.Ticket] {
+			continue // already counted via ledger; skip to avoid double-counting
 		}
 		total += meta.TotalCost
 	}

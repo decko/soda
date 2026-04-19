@@ -162,3 +162,32 @@ func TestCumulativeCost_NoDoubleCounting(t *testing.T) {
 		t.Errorf("CumulativeCost = %f, want 1.00 (no double-count)", cost)
 	}
 }
+
+func TestCumulativeCost_NoDoubleCountingSlugifiedDir(t *testing.T) {
+	dir := t.TempDir()
+
+	// Ledger entry uses the canonical ticket key "PROJ-42".
+	if err := AppendCostEntry(dir, CostEntry{Ticket: "PROJ-42", Timestamp: time.Now(), Cost: 3.00, Success: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	// On-disk directory is a slugified variant ("proj-42-slugified"), but
+	// meta.json inside it records the canonical ticket key "PROJ-42".
+	// CumulativeCost must match on meta.Ticket (not the dir name) to avoid
+	// double-counting.
+	writeTestMeta(t, filepath.Join(dir, "proj-42-slugified"), &PipelineMeta{
+		Ticket:    "PROJ-42",
+		TotalCost: 3.00,
+		StartedAt: time.Now(),
+		Phases:    map[string]*PhaseState{},
+	})
+
+	cost, err := CumulativeCost(dir)
+	if err != nil {
+		t.Fatalf("CumulativeCost: %v", err)
+	}
+	// The session should NOT be double-counted; only the ledger entry counts.
+	if cost != 3.00 {
+		t.Errorf("CumulativeCost = %f, want 3.00 (no double-count for slugified dir)", cost)
+	}
+}
