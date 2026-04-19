@@ -1,4 +1,5 @@
 # ~/.config/soda/config.yaml
+# Generate a starter config with: soda init
 
 # Ticket source
 ticket_source: jira
