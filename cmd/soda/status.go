@@ -122,7 +122,19 @@ func runStatus(stateDir string) error {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", r.ticket, r.phase, status, r.submitted, r.elapsed, r.cost)
 	}
 
-	return tw.Flush()
+	if err := tw.Flush(); err != nil {
+		return fmt.Errorf("status: flush output: %w", err)
+	}
+
+	// Cumulative cost footer.
+	cumulativeCost, costErr := pipeline.CumulativeCost(stateDir)
+	if costErr != nil {
+		return fmt.Errorf("status: compute cumulative cost: %w", costErr)
+	}
+	fmt.Println()
+	fmt.Printf("Total cost across all sessions: $%.2f\n", cumulativeCost)
+
+	return nil
 }
 
 // currentPhaseStatus returns the most advanced phase name and its status string.

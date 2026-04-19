@@ -1,6 +1,10 @@
 package main
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -157,6 +161,79 @@ func TestFormatSubmitted(t *testing.T) {
 				t.Errorf("formatSubmitted() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestRunStatus_CumulativeCostFooter(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create two sessions with known costs.
+	writeStatusMeta(t, filepath.Join(dir, "TICKET-1"), &pipeline.PipelineMeta{
+		Ticket:    "TICKET-1",
+		StartedAt: time.Now().Add(-1 * time.Hour),
+		TotalCost: 2.50,
+		Phases: map[string]*pipeline.PhaseState{
+			"triage": {Status: pipeline.PhaseCompleted, DurationMs: 5000, Cost: 2.50},
+		},
+	})
+	writeStatusMeta(t, filepath.Join(dir, "TICKET-2"), &pipeline.PipelineMeta{
+		Ticket:    "TICKET-2",
+		StartedAt: time.Now().Add(-30 * time.Minute),
+		TotalCost: 3.75,
+		Phases: map[string]*pipeline.PhaseState{
+			"triage":    {Status: pipeline.PhaseCompleted, DurationMs: 3000, Cost: 1.00},
+			"implement": {Status: pipeline.PhaseCompleted, DurationMs: 10000, Cost: 2.75},
+		},
+	})
+
+	// Capture stdout.
+	oldStdout := os.Stdout
+	readPipe, writePipe, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = writePipe
+
+	runErr := runStatus(dir)
+
+	writePipe.Close()
+	os.Stdout = oldStdout
+
+	var buf strings.Builder
+	data := make([]byte, 4096)
+	for {
+		n, readErr := readPipe.Read(data)
+		if n > 0 {
+			buf.Write(data[:n])
+		}
+		if readErr != nil {
+			break
+		}
+	}
+	readPipe.Close()
+
+	if runErr != nil {
+		t.Fatalf("runStatus error: %v", runErr)
+	}
+
+	output := buf.String()
+	wantFooter := "Total cost across all sessions: $6.25"
+	if !strings.Contains(output, wantFooter) {
+		t.Errorf("output does not contain cumulative cost footer.\nwant: %q\ngot:\n%s", wantFooter, output)
+	}
+}
+
+func writeStatusMeta(t *testing.T, dir string, meta *pipeline.PipelineMeta) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	data, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "meta.json"), data, 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
 	}
 }
 
