@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -45,6 +47,8 @@ func runInit(output string, force bool) error {
 	if !force {
 		if _, err := os.Stat(destPath); err == nil {
 			return fmt.Errorf("config file already exists: %s (use --force to overwrite)", destPath)
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("init: stat %s: %w", destPath, err)
 		}
 	}
 
