@@ -111,6 +111,34 @@ func TestRunInit_CreatesParentDirs(t *testing.T) {
 	}
 }
 
+func TestRunInit_StatErrorNotErrNotExist(t *testing.T) {
+	// When the parent directory is unreadable (e.g., permission denied),
+	// os.Stat returns an error other than ErrNotExist. The init command
+	// should surface that error instead of silently falling through.
+	dir := t.TempDir()
+	nested := filepath.Join(dir, "noperm")
+	if err := os.Mkdir(nested, 0000); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(nested, 0755) })
+
+	// Point --dir at a path inside the unreadable directory so that
+	// os.Stat on the target file fails with a permission error.
+	target := filepath.Join(nested, "sub")
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"init", "--dir", target})
+	err := cmd.Execute()
+
+	if err == nil {
+		t.Fatal("expected error due to permission denied, got nil")
+	}
+
+	if strings.Contains(err.Error(), "already exists") {
+		t.Errorf("error should not say 'already exists': %v", err)
+	}
+}
+
 func TestRunInit_DefaultDir(t *testing.T) {
 	// Run init with default dir (current directory).
 	// Change to a temp directory to avoid polluting the repo.

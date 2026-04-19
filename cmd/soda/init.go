@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -101,6 +102,8 @@ func runInit(dir string, force bool, cmd *cobra.Command) error {
 	if !force {
 		if _, err := os.Stat(dest); err == nil {
 			return fmt.Errorf("init: %s already exists (use --force to overwrite)", dest)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("init: check %s: %w", dest, err)
 		}
 	}
 
