@@ -40,6 +40,7 @@ refuses to overwrite an existing file unless --force is given.`,
 	cmd.Flags().Bool("dry-run", false, "print generated config to stdout without writing")
 	cmd.Flags().Bool("phases", false, "also write phases.yaml alongside the config")
 	cmd.Flags().Bool("no-gitignore", false, "skip adding .soda and .worktrees to .gitignore")
+	cmd.Flags().BoolP("yes", "y", false, "accept all defaults without prompting")
 
 	return cmd
 }

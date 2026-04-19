@@ -368,6 +368,18 @@ func TestEnsureGitignore_ExistingEntriesWithoutSlash(t *testing.T) {
 	}
 }
 
+func TestNewInitCmd_YesFlagAccepted(t *testing.T) {
+	cmd := newInitCmd()
+	// Verify the --yes / -y flag is registered.
+	flag := cmd.Flags().Lookup("yes")
+	if flag == nil {
+		t.Fatal("--yes flag not registered")
+	}
+	if flag.Shorthand != "y" {
+		t.Errorf("--yes shorthand = %q, want %q", flag.Shorthand, "y")
+	}
+}
+
 func TestConfigFromDetected_GitHub(t *testing.T) {
 	info := &detect.ProjectInfo{
 		Language:     "go",
