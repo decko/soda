@@ -3,6 +3,20 @@
 // package.json, etc.) to determine the language, and parses the git
 // remote URL to identify the forge, owner, and repo name. It also
 // checks for well-known context files (AGENTS.md, CLAUDE.md).
+//
+// # Pipeline integration (TODO)
+//
+// This package is currently standalone. The planned integration points are:
+//
+//  1. Call Detect(ctx, workDir) in runPipeline() (cmd/soda/run.go) after
+//     resolving the worktree via git.RepoRoot.
+//  2. Populate PromptConfigData.Formatter and PromptConfigData.TestCommand
+//     from ProjectInfo when they are not already set in the user's
+//     config.yaml (i.e. detected values act as defaults, explicit config
+//     takes precedence).
+//  3. Optionally add a DetectedStack field to pipeline.PromptData so that
+//     prompt templates can reference the detected language, forge, and
+//     context files directly.
 package detect
 
 import (
