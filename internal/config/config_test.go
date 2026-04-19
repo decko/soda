@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/decko/soda/internal/pipeline"
@@ -226,8 +227,8 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.GitHub.Owner != "your-org" {
 		t.Errorf("GitHub.Owner = %q, want %q", cfg.GitHub.Owner, "your-org")
 	}
-	if cfg.Monitor.SelfUser != "your-bot-username" {
-		t.Errorf("Monitor.SelfUser = %q, want %q", cfg.Monitor.SelfUser, "your-bot-username")
+	if cfg.Monitor.SelfUser != "" {
+		t.Errorf("Monitor.SelfUser = %q, want empty (so runMonitor falls back to stub)", cfg.Monitor.SelfUser)
 	}
 }
 
@@ -264,6 +265,38 @@ func TestMarshalRoundTrip(t *testing.T) {
 	}
 	if roundTripped.Repos[0].Name != original.Repos[0].Name {
 		t.Errorf("Repos[0].Name = %q, want %q", roundTripped.Repos[0].Name, original.Repos[0].Name)
+	}
+}
+
+func TestMarshal_EmptySelfUserComment(t *testing.T) {
+	cfg := DefaultConfig()
+	// SelfUser should be empty by default.
+	if cfg.Monitor.SelfUser != "" {
+		t.Fatalf("DefaultConfig().Monitor.SelfUser = %q, want empty", cfg.Monitor.SelfUser)
+	}
+
+	data, err := Marshal(cfg)
+	if err != nil {
+		t.Fatalf("Marshal() error: %v", err)
+	}
+
+	yaml := string(data)
+	if !strings.Contains(yaml, "REQUIRED") {
+		t.Errorf("expected REQUIRED comment in marshalled output when SelfUser is empty, got:\n%s", yaml)
+	}
+	if !strings.Contains(yaml, "self_user") {
+		t.Errorf("expected self_user field in marshalled output, got:\n%s", yaml)
+	}
+
+	// When SelfUser is set, the comment should NOT appear.
+	cfg.Monitor.SelfUser = "my-bot"
+	data, err = Marshal(cfg)
+	if err != nil {
+		t.Fatalf("Marshal() error: %v", err)
+	}
+	yamlSet := string(data)
+	if strings.Contains(yamlSet, "REQUIRED") {
+		t.Errorf("REQUIRED comment should not appear when SelfUser is set, got:\n%s", yamlSet)
 	}
 }
 
