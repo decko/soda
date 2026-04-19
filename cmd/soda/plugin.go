@@ -143,7 +143,7 @@ func installPlugin(w io.Writer, destDir string, force bool) error {
 
 	fmt.Fprintf(w, "Installed soda plugin to %s/\n", destDir)
 	fmt.Fprintln(w, "  Skill:    soda-pipeline")
-	fmt.Fprintln(w, "  Commands: /soda:run, /soda:resume, /soda:status, /soda:sessions, /soda:clean, /soda:history")
+	fmt.Fprintln(w, "  Commands: /soda:run, /soda:resume, /soda:status, /soda:sessions, /soda:clean, /soda:history, /soda:render")
 	fmt.Fprintln(w, "  Agent:    pipeline-architect")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Enable in Claude Code: the plugin is auto-discovered from .claude/plugins/")
