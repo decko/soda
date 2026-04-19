@@ -25,6 +25,9 @@ func run(t *testing.T, dir string, name string, args ...string) {
 	t.Helper()
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
+	// Isolate from host git config to prevent url.*.insteadOf rewrites
+	// that can change HTTPS remotes to SSH on CI.
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("%s %v failed: %s: %v", name, args, out, err)
