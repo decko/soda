@@ -214,6 +214,34 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 	// Set up PR poller for monitor phase.
 	prPoller := pipeline.NewGitHubPRPoller("")
 
+	// Wire monitor config: self_user, bot_users, profile, CODEOWNERS.
+	selfUser := cfg.Monitor.SelfUser
+	botUsers := cfg.Monitor.BotUsers
+
+	var monitorProfile *pipeline.MonitorProfile
+	if cfg.Monitor.Profile != "" {
+		profile, profileErr := pipeline.GetMonitorProfile(pipeline.MonitorProfileName(cfg.Monitor.Profile))
+		if profileErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: invalid monitor profile %q: %v\n", cfg.Monitor.Profile, profileErr)
+		} else {
+			monitorProfile = profile
+		}
+	}
+
+	var authorityResolver pipeline.AuthorityResolver
+	if cfg.Monitor.CODEOWNERS != "" {
+		coPath := cfg.Monitor.CODEOWNERS
+		if !filepath.IsAbs(coPath) {
+			coPath = filepath.Join(workDir, coPath)
+		}
+		rules, coErr := pipeline.ParseCODEOWNERS(coPath)
+		if coErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not load CODEOWNERS %q: %v\n", cfg.Monitor.CODEOWNERS, coErr)
+		} else {
+			authorityResolver = pipeline.NewCODEOWNERSAuthority(rules)
+		}
+	}
+
 	// When TUI mode is active, create a bidirectional pause channel and an
 	// event channel. The send end of the pause channel goes to the TUI, the
 	// receive end to the engine. The event channel bridges engine events to
@@ -226,20 +254,24 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 	}
 
 	engineCfg := pipeline.EngineConfig{
-		Pipeline:        pl,
-		Loader:          loader,
-		Ticket:          ticketData,
-		PromptConfig:    promptConfig,
-		PromptContext:   promptContext,
-		DetectedStack:   detectedStack,
-		Model:           cfg.Model,
-		WorkDir:         workDir,
-		WorktreeBase:    filepath.Join(workDir, cfg.WorktreeDir),
-		BaseBranch:      "main",
-		MaxCostUSD:      cfg.Limits.MaxCostPerTicket,
-		MaxCostPerPhase: cfg.Limits.MaxCostPerPhase,
-		Mode:            mode,
-		PRPoller:        prPoller,
+		Pipeline:          pl,
+		Loader:            loader,
+		Ticket:            ticketData,
+		PromptConfig:      promptConfig,
+		PromptContext:     promptContext,
+		DetectedStack:     detectedStack,
+		Model:             cfg.Model,
+		WorkDir:           workDir,
+		WorktreeBase:      filepath.Join(workDir, cfg.WorktreeDir),
+		BaseBranch:        "main",
+		MaxCostUSD:        cfg.Limits.MaxCostPerTicket,
+		MaxCostPerPhase:   cfg.Limits.MaxCostPerPhase,
+		Mode:              mode,
+		PRPoller:          prPoller,
+		SelfUser:          selfUser,
+		BotUsers:          botUsers,
+		MonitorProfile:    monitorProfile,
+		AuthorityResolver: authorityResolver,
 		OnEvent: func(event pipeline.Event) {
 			if event.Kind == pipeline.EventPhaseSkipped || event.Kind == pipeline.EventMonitorSkipped {
 				skippedPhases[event.Phase] = true
