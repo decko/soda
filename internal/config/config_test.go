@@ -131,6 +131,16 @@ func TestLoad(t *testing.T) {
 				if len(cfg.Repos) != 0 {
 					t.Errorf("len(Repos) = %d, want 0", len(cfg.Repos))
 				}
+				// Monitor config should be zero-valued when not in file.
+				if cfg.Monitor.SelfUser != "" {
+					t.Errorf("Monitor.SelfUser = %q, want empty", cfg.Monitor.SelfUser)
+				}
+				if cfg.Monitor.Profile != "" {
+					t.Errorf("Monitor.Profile = %q, want empty", cfg.Monitor.Profile)
+				}
+				if len(cfg.Monitor.BotUsers) != 0 {
+					t.Errorf("len(Monitor.BotUsers) = %d, want 0", len(cfg.Monitor.BotUsers))
+				}
 			},
 		},
 		{
@@ -251,6 +261,42 @@ func TestMarshalRoundTrip(t *testing.T) {
 	}
 	if roundTripped.Repos[0].Name != original.Repos[0].Name {
 		t.Errorf("Repos[0].Name = %q, want %q", roundTripped.Repos[0].Name, original.Repos[0].Name)
+	}
+}
+
+func TestMarshalRoundTrip_MonitorConfig(t *testing.T) {
+	original := DefaultConfig()
+	original.Monitor = MonitorConfig{
+		Profile:    "smart",
+		SelfUser:   "soda-bot",
+		BotUsers:   []string{"dependabot", "renovate"},
+		CODEOWNERS: ".github/CODEOWNERS",
+	}
+
+	data, err := Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal() error: %v", err)
+	}
+
+	var roundTripped Config
+	if err := yaml.Unmarshal(data, &roundTripped); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	if roundTripped.Monitor.Profile != "smart" {
+		t.Errorf("Monitor.Profile = %q, want %q", roundTripped.Monitor.Profile, "smart")
+	}
+	if roundTripped.Monitor.SelfUser != "soda-bot" {
+		t.Errorf("Monitor.SelfUser = %q, want %q", roundTripped.Monitor.SelfUser, "soda-bot")
+	}
+	if len(roundTripped.Monitor.BotUsers) != 2 {
+		t.Fatalf("len(Monitor.BotUsers) = %d, want 2", len(roundTripped.Monitor.BotUsers))
+	}
+	if roundTripped.Monitor.BotUsers[0] != "dependabot" {
+		t.Errorf("Monitor.BotUsers[0] = %q, want %q", roundTripped.Monitor.BotUsers[0], "dependabot")
+	}
+	if roundTripped.Monitor.CODEOWNERS != ".github/CODEOWNERS" {
+		t.Errorf("Monitor.CODEOWNERS = %q, want %q", roundTripped.Monitor.CODEOWNERS, ".github/CODEOWNERS")
 	}
 }
 
