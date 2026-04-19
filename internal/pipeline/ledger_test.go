@@ -3,6 +3,7 @@ package pipeline
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -160,6 +161,46 @@ func TestCumulativeCost_NoDoubleCounting(t *testing.T) {
 	// Only ledger is used for T-1; meta.json is skipped to avoid double-counting.
 	if cost != 1.00 {
 		t.Errorf("CumulativeCost = %f, want 1.00 (no double-count)", cost)
+	}
+}
+
+// TestAppendCostEntry_ConcurrentWrites verifies that the flock-based
+// serialization in AppendCostEntry prevents lost updates when multiple
+// goroutines write concurrently.
+func TestAppendCostEntry_ConcurrentWrites(t *testing.T) {
+	dir := t.TempDir()
+
+	const n = 20
+	var wg sync.WaitGroup
+	wg.Add(n)
+	errs := make(chan error, n)
+
+	for i := 0; i < n; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			if err := AppendCostEntry(dir, CostEntry{
+				Ticket:    "T-CONCURRENT",
+				Timestamp: time.Now(),
+				Cost:      1.00,
+				Success:   true,
+			}); err != nil {
+				errs <- err
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		t.Fatalf("AppendCostEntry failed during concurrent writes: %v", err)
+	}
+
+	entries, err := ReadCostLedger(dir)
+	if err != nil {
+		t.Fatalf("ReadCostLedger: %v", err)
+	}
+	if len(entries) != n {
+		t.Errorf("len(entries) = %d, want %d (lost updates under concurrency)", len(entries), n)
 	}
 }
 
