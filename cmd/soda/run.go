@@ -306,6 +306,9 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 
 	engine = pipeline.NewEngine(r, state, engineCfg)
 
+	// Snapshot cost before this run so the ledger records only the delta.
+	costBefore := state.Meta().TotalCost
+
 	// Run or resume
 	fromPhase, _ := cmd.Flags().GetString("from")
 	startTime := time.Now()
@@ -337,7 +340,7 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 	if ledgerErr := pipeline.AppendCostEntry(stateDir, pipeline.CostEntry{
 		Ticket:    ticketKey,
 		Timestamp: time.Now(),
-		Cost:      state.Meta().TotalCost,
+		Cost:      state.Meta().TotalCost - costBefore,
 		Success:   runErr == nil,
 	}); ledgerErr != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to record cost entry: %v\n", ledgerErr)
