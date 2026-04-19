@@ -32,6 +32,28 @@ soda (Go TUI + Pipeline Engine)
 - `schemas/` — Structured output schemas per phase (Go structs → JSON Schema)
 - `config.example.yaml` — User configuration example
 
+## Quick Start
+
+```bash
+# Initialize a project config
+soda init
+
+# Edit soda.config.yaml with your project's details (owner, repo, etc.)
+$EDITOR soda.config.yaml
+
+# Run the pipeline for a ticket
+soda run <ticket>
+```
+
+`soda init` creates a `soda.config.yaml` in the current directory with
+sensible defaults and placeholder values. See `config.example.yaml` for
+the full set of options.
+
+| Flag | Description |
+|------|-------------|
+| `--force` | Overwrite an existing `soda.config.yaml` |
+| `--dir <path>` | Create the config in a different directory |
+
 ## Key Design Decisions
 
 - **Go + bubbletea** for the CLI/TUI
