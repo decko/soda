@@ -17,6 +17,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/decko/soda/internal/claude"
 	"github.com/decko/soda/internal/config"
+	"github.com/decko/soda/internal/detect"
 	"github.com/decko/soda/internal/git"
 	"github.com/decko/soda/internal/pipeline"
 	"github.com/decko/soda/internal/progress"
@@ -127,6 +128,23 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 		return fmt.Errorf("run: resolve repo root: %w", err)
 	}
 
+	// Auto-detect project stack from the repo. Detection is best-effort:
+	// errors are logged but do not block the pipeline.
+	var detectedStack pipeline.DetectedStackData
+	projectInfo, detectErr := detect.Detect(ctx, workDir)
+	if detectErr != nil {
+		fmt.Fprintf(os.Stderr, "Warning: project detection failed: %v\n", detectErr)
+	}
+	if projectInfo != nil {
+		detectedStack = pipeline.DetectedStackData{
+			Language:     projectInfo.Language,
+			Forge:        projectInfo.Forge,
+			Owner:        projectInfo.Owner,
+			Repo:         projectInfo.Repo,
+			ContextFiles: projectInfo.ContextFiles,
+		}
+	}
+
 	// Resolve StateDir relative to repo root.
 	stateDir := cfg.StateDir
 	if !filepath.IsAbs(stateDir) {
@@ -167,8 +185,17 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 		r = claudeRunner
 	}
 
-	// Build prompt config from repos
+	// Build prompt config from repos, using detected values as defaults
+	// when the user's config does not specify them explicitly.
 	promptConfig := buildPromptConfig(cfg)
+	if projectInfo != nil {
+		if promptConfig.Formatter == "" {
+			promptConfig.Formatter = projectInfo.Formatter
+		}
+		if promptConfig.TestCommand == "" {
+			promptConfig.TestCommand = projectInfo.TestCommand
+		}
+	}
 
 	// Load project context files
 	promptContext := buildPromptContext(cfg)
@@ -204,6 +231,7 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 		Ticket:          ticketData,
 		PromptConfig:    promptConfig,
 		PromptContext:   promptContext,
+		DetectedStack:   detectedStack,
 		Model:           cfg.Model,
 		WorkDir:         workDir,
 		WorktreeBase:    filepath.Join(workDir, cfg.WorktreeDir),

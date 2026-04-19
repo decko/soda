@@ -2298,6 +2298,154 @@ RepoConventions: {{.Context.RepoConventions}}
 	}
 }
 
+func TestEngine_BuildPromptDataIncludesDetectedStack(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage done",
+					CostUSD: 0.05,
+				},
+			}},
+		},
+	}
+
+	// Write a prompt template that renders DetectedStack fields.
+	stateDir := t.TempDir()
+	promptDir := t.TempDir()
+	workDir := t.TempDir()
+
+	tmpl := `Language: {{.DetectedStack.Language}}
+Forge: {{.DetectedStack.Forge}}
+Owner: {{.DetectedStack.Owner}}
+Repo: {{.DetectedStack.Repo}}
+{{range .DetectedStack.ContextFiles}}Context: {{.}}
+{{end}}`
+	if err := os.WriteFile(filepath.Join(promptDir, "triage.md"), []byte(tmpl), 0644); err != nil {
+		t.Fatalf("write prompt: %v", err)
+	}
+
+	state, err := LoadOrCreate(stateDir, "DETECT-1")
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+
+	cfg := EngineConfig{
+		Pipeline: &PhasePipeline{Phases: phases},
+		Loader:   NewPromptLoader(promptDir),
+		Ticket:   TicketData{Key: "DETECT-1", Summary: "Detect stack test"},
+		DetectedStack: DetectedStackData{
+			Language:     "go",
+			Forge:        "github",
+			Owner:        "decko",
+			Repo:         "soda",
+			ContextFiles: []string{"AGENTS.md"},
+		},
+		Model:      "test-model",
+		WorkDir:    workDir,
+		MaxCostUSD: 0,
+		Mode:       Autonomous,
+		SleepFunc:  func(time.Duration) {},
+		JitterFunc: func(time.Duration) time.Duration { return 0 },
+	}
+
+	engine := NewEngine(mock, state, cfg)
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if len(mock.calls) != 1 {
+		t.Fatalf("runner called %d times, want 1", len(mock.calls))
+	}
+
+	rendered := mock.calls[0].SystemPrompt
+
+	for _, want := range []string{
+		"Language: go",
+		"Forge: github",
+		"Owner: decko",
+		"Repo: soda",
+		"Context: AGENTS.md",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("rendered prompt missing %q;\ngot: %s", want, rendered)
+		}
+	}
+}
+
+func TestEngine_BuildPromptDataOmitsDetectedStackWhenEmpty(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage done",
+					CostUSD: 0.05,
+				},
+			}},
+		},
+	}
+
+	stateDir := t.TempDir()
+	promptDir := t.TempDir()
+	workDir := t.TempDir()
+
+	tmpl := `{{- if .DetectedStack.Language}}HAS_LANG{{- end}}REST`
+	if err := os.WriteFile(filepath.Join(promptDir, "triage.md"), []byte(tmpl), 0644); err != nil {
+		t.Fatalf("write prompt: %v", err)
+	}
+
+	state, err := LoadOrCreate(stateDir, "DETECT-2")
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+
+	cfg := EngineConfig{
+		Pipeline: &PhasePipeline{Phases: phases},
+		Loader:   NewPromptLoader(promptDir),
+		Ticket:   TicketData{Key: "DETECT-2", Summary: "No detect test"},
+		// DetectedStack intentionally left as zero value
+		Model:      "test-model",
+		WorkDir:    workDir,
+		MaxCostUSD: 0,
+		Mode:       Autonomous,
+		SleepFunc:  func(time.Duration) {},
+		JitterFunc: func(time.Duration) time.Duration { return 0 },
+	}
+
+	engine := NewEngine(mock, state, cfg)
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	rendered := mock.calls[0].SystemPrompt
+	if strings.Contains(rendered, "HAS_LANG") {
+		t.Errorf("rendered prompt should not contain HAS_LANG when DetectedStack is empty;\ngot: %s", rendered)
+	}
+	if !strings.Contains(rendered, "REST") {
+		t.Errorf("rendered prompt should contain REST;\ngot: %s", rendered)
+	}
+}
+
 func TestEngine_ResumeInvalidatesDownstreamPhases(t *testing.T) {
 	// Pipeline: implement -> verify -> submit (linear dependency chain).
 	// Bug: --from implement re-runs implement but skips verify/submit

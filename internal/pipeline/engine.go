@@ -37,6 +37,7 @@ type EngineConfig struct {
 	Ticket            TicketData
 	PromptConfig      PromptConfigData
 	PromptContext     ContextData
+	DetectedStack     DetectedStackData // auto-detected project stack info; zero value if detection was skipped
 	Model             string
 	WorkDir           string
 	WorktreeBase      string
@@ -934,12 +935,13 @@ func (e *Engine) checkPhaseBudget(phase PhaseConfig) error {
 // buildPromptData constructs the PromptData for a phase from its dependencies.
 func (e *Engine) buildPromptData(phase PhaseConfig) (PromptData, error) {
 	data := PromptData{
-		Ticket:       e.config.Ticket,
-		Config:       e.config.PromptConfig,
-		Context:      e.config.PromptContext,
-		WorktreePath: e.state.Meta().Worktree,
-		Branch:       e.state.Meta().Branch,
-		BaseBranch:   e.config.BaseBranch,
+		Ticket:        e.config.Ticket,
+		Config:        e.config.PromptConfig,
+		Context:       e.config.PromptContext,
+		DetectedStack: e.config.DetectedStack,
+		WorktreePath:  e.state.Meta().Worktree,
+		Branch:        e.state.Meta().Branch,
+		BaseBranch:    e.config.BaseBranch,
 	}
 
 	for _, dep := range phase.DependsOn {
