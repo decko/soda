@@ -20,12 +20,25 @@ type PromptData struct {
 	Config         PromptConfigData
 	Artifacts      ArtifactData
 	Context        ContextData
+	DetectedStack  DetectedStackData
 	WorktreePath   string
 	Branch         string
 	BaseBranch     string
 	ReviewComments string
 	ReworkFeedback *ReworkFeedback
 	DiffContext    string // git diff of current branch vs base, injected for monitor and corrective phases
+}
+
+// DetectedStackData holds auto-detected project stack information from the
+// repository. Populated by detect.Detect and injected into prompts so
+// templates can adapt behaviour based on the detected language, forge, and
+// context files. Use {{if .DetectedStack.Language}} guards in templates.
+type DetectedStackData struct {
+	Language     string   // e.g. "go", "python", "typescript", "unknown"
+	Forge        string   // e.g. "github", "gitlab", or ""
+	Owner        string   // repository owner/org
+	Repo         string   // repository name
+	ContextFiles []string // well-known files found (e.g. "AGENTS.md", "CLAUDE.md")
 }
 
 // ReworkFeedback holds selective feedback from a failed verify phase
