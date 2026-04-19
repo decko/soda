@@ -8906,6 +8906,417 @@ func TestEngine_PhaseBudgetCumulativePreRunCheck(t *testing.T) {
 	}
 }
 
+func TestEngine_ReworkFeedbackIncludesPriorReviewCycles(t *testing.T) {
+	// When review produces "rework" and routes back to implement, the
+	// implement prompt should include prior cycle context from archived
+	// review results. This test simulates two review cycles: the first
+	// produces a rework, and the second (after re-implement) also produces
+	// a rework. The second implement should see prior cycle context from
+	// the first review.
+	phases := []PhaseConfig{
+		{
+			Name:         "implement",
+			Prompt:       "implement.md",
+			Retry:        RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			FeedbackFrom: []string{"review"},
+		},
+		{
+			Name:      "review",
+			Type:      "parallel-review",
+			DependsOn: []string{"implement"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Rework:    &ReworkConfig{Target: "implement"},
+			Reviewers: []ReviewerConfig{
+				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+			},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {
+				// First implement.
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true}`),
+					RawText: "impl1",
+					CostUSD: 0.10,
+				}},
+				// Second implement (after first rework).
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true}`),
+					RawText: "impl2",
+					CostUSD: 0.10,
+				}},
+				// Third implement (after second rework).
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true}`),
+					RawText: "impl3",
+					CostUSD: 0.10,
+				}},
+			},
+			"review/go-specialist": {
+				// First review: rework with critical finding.
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[{"severity":"critical","file":"handler.go","line":42,"issue":"nil deref","suggestion":"add nil check"}]}`),
+					RawText: "critical issue",
+					CostUSD: 0.15,
+				}},
+				// Second review: rework with different finding.
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[{"severity":"major","file":"util.go","line":10,"issue":"unchecked error","suggestion":"check return value"}]}`),
+					RawText: "major issue",
+					CostUSD: 0.15,
+				}},
+				// Third review: pass.
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[]}`),
+					RawText: "no issues",
+					CostUSD: 0.15,
+				}},
+			},
+		},
+	}
+
+	stateDir := t.TempDir()
+	promptDir := t.TempDir()
+	workDir := t.TempDir()
+
+	// Template that renders PriorCycles.
+	implTmpl := `Phase: implement
+Ticket: {{.Ticket.Key}}
+{{- if .ReworkFeedback}}
+REWORK:
+Source: {{.ReworkFeedback.Source}}
+Verdict: {{.ReworkFeedback.Verdict}}
+{{- range .ReworkFeedback.ReviewFindings}}
+Finding: [{{.Severity}}] {{.File}}:{{.Line}} — {{.Issue}}
+{{- end}}
+{{- if .ReworkFeedback.PriorCycles}}
+PRIOR_CYCLES:
+{{- range .ReworkFeedback.PriorCycles}}
+Cycle{{.Cycle}}: [{{.Source}}] {{.Verdict}} — {{.Summary}}
+{{- end}}
+{{- end}}
+{{- end}}
+`
+	if err := os.WriteFile(filepath.Join(promptDir, "implement.md"), []byte(implTmpl), 0644); err != nil {
+		t.Fatal(err)
+	}
+	reviewPromptDir := filepath.Join(promptDir, "prompts")
+	if err := os.MkdirAll(reviewPromptDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(reviewPromptDir, "review-go.md"), []byte("Reviewer: go-specialist\nTicket: {{.Ticket.Key}}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := LoadOrCreate(stateDir, "PRIOR-1")
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+
+	var events []Event
+	cfg := EngineConfig{
+		Pipeline:        &PhasePipeline{Phases: phases},
+		Loader:          NewPromptLoader(promptDir),
+		Ticket:          TicketData{Key: "PRIOR-1", Summary: "Prior cycles test"},
+		Model:           "test-model",
+		WorkDir:         workDir,
+		MaxCostUSD:      0,
+		MaxReworkCycles: 3,
+		Mode:            Autonomous,
+		SleepFunc:       func(time.Duration) {},
+		JitterFunc:      func(time.Duration) time.Duration { return 0 },
+		OnEvent: func(e Event) {
+			events = append(events, e)
+		},
+	}
+
+	engine := NewEngine(mock, state, cfg)
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Find the implement runner calls.
+	var implPrompts []string
+	for _, call := range mock.calls {
+		if call.Phase == "implement" {
+			implPrompts = append(implPrompts, call.SystemPrompt)
+		}
+	}
+
+	if len(implPrompts) < 3 {
+		t.Fatalf("expected 3 implement calls, got %d", len(implPrompts))
+	}
+
+	// First implement: no rework feedback.
+	if strings.Contains(implPrompts[0], "REWORK:") {
+		t.Error("first implement should not have rework feedback")
+	}
+
+	// Second implement: rework feedback from first review, no prior cycles.
+	if !strings.Contains(implPrompts[1], "REWORK:") {
+		t.Error("second implement should have rework feedback")
+	}
+	if !strings.Contains(implPrompts[1], "nil deref") {
+		t.Error("second implement should reference nil deref finding")
+	}
+	if strings.Contains(implPrompts[1], "PRIOR_CYCLES:") {
+		t.Error("second implement should NOT have prior cycles (first rework)")
+	}
+
+	// Third implement: rework feedback from second review, WITH prior cycle context.
+	if !strings.Contains(implPrompts[2], "REWORK:") {
+		t.Error("third implement should have rework feedback")
+	}
+	if !strings.Contains(implPrompts[2], "unchecked error") {
+		t.Error("third implement should reference unchecked error finding")
+	}
+	if !strings.Contains(implPrompts[2], "PRIOR_CYCLES:") {
+		t.Error("third implement should have prior cycles")
+	}
+	if !strings.Contains(implPrompts[2], "nil deref") {
+		t.Error("third implement prior cycles should reference nil deref from cycle 1")
+	}
+}
+
+func TestEngine_ReworkFeedbackIncludesPriorVerifyCycles(t *testing.T) {
+	// When verify produces "FAIL" and routes to patch (corrective),
+	// the patch prompt should include prior cycle context from archived
+	// verify results.
+	phases := []PhaseConfig{
+		{
+			Name:   "implement",
+			Prompt: "implement.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:         "patch",
+			Type:         "corrective",
+			Prompt:       "patch.md",
+			DependsOn:    []string{"implement"},
+			FeedbackFrom: []string{"verify"},
+			Retry:        RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "verify",
+			Prompt:    "verify.md",
+			DependsOn: []string{"implement"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Corrective: &CorrectiveConfig{
+				Phase:       "patch",
+				MaxAttempts: 3,
+				OnExhausted: "stop",
+			},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true}`),
+					RawText: "impl",
+					CostUSD: 0.10,
+				},
+			}},
+			"patch": {
+				// First patch.
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"ticket_key":"TEST-1","fix_results":[],"files_changed":[],"tests_passed":true,"too_complex":false}`),
+					RawText: "patched1",
+					CostUSD: 0.10,
+				}},
+				// Second patch.
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"ticket_key":"TEST-1","fix_results":[],"files_changed":[],"tests_passed":true,"too_complex":false}`),
+					RawText: "patched2",
+					CostUSD: 0.10,
+				}},
+			},
+			"verify": {
+				// First verify: FAIL with test A.
+				{result: &runner.RunResult{
+					Output: json.RawMessage(`{
+						"verdict":"FAIL",
+						"fixes_required":["fix test A"],
+						"criteria_results":[{"criterion":"tests pass","passed":false,"evidence":"exit code 1"}],
+						"command_results":[]
+					}`),
+					RawText: "fail",
+					CostUSD: 0.05,
+				}},
+				// Second verify (after first patch): FAIL with same criterion but new fix.
+				{result: &runner.RunResult{
+					Output: json.RawMessage(`{
+						"verdict":"FAIL",
+						"fixes_required":["fix test B"],
+						"criteria_results":[{"criterion":"tests pass","passed":false,"evidence":"assertion error"}],
+						"command_results":[]
+					}`),
+					RawText: "fail2",
+					CostUSD: 0.05,
+				}},
+				// Third verify (after second patch): PASS.
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"verdict":"PASS","criteria_results":[],"command_results":[]}`),
+					RawText: "pass",
+					CostUSD: 0.05,
+				}},
+			},
+		},
+	}
+
+	stateDir := t.TempDir()
+	promptDir := t.TempDir()
+	workDir := t.TempDir()
+
+	implTmpl := "Phase: implement\nTicket: {{.Ticket.Key}}\n"
+	verifyTmpl := "Phase: verify\nTicket: {{.Ticket.Key}}\n"
+	patchTmpl := `Phase: patch
+Ticket: {{.Ticket.Key}}
+{{- if .ReworkFeedback}}
+REWORK:
+Source: {{.ReworkFeedback.Source}}
+Verdict: {{.ReworkFeedback.Verdict}}
+{{- range .ReworkFeedback.FixesRequired}}
+Fix: {{.}}
+{{- end}}
+{{- if .ReworkFeedback.PriorCycles}}
+PRIOR_CYCLES:
+{{- range .ReworkFeedback.PriorCycles}}
+Cycle{{.Cycle}}: [{{.Source}}] {{.Verdict}} — {{.Summary}}
+{{- end}}
+{{- end}}
+{{- end}}
+`
+	if err := os.WriteFile(filepath.Join(promptDir, "implement.md"), []byte(implTmpl), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(promptDir, "verify.md"), []byte(verifyTmpl), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(promptDir, "patch.md"), []byte(patchTmpl), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := LoadOrCreate(stateDir, "VPRIOR-1")
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+
+	cfg := EngineConfig{
+		Pipeline:   &PhasePipeline{Phases: phases},
+		Loader:     NewPromptLoader(promptDir),
+		Ticket:     TicketData{Key: "VPRIOR-1", Summary: "Verify prior cycles test"},
+		Model:      "test-model",
+		WorkDir:    workDir,
+		MaxCostUSD: 0,
+		Mode:       Autonomous,
+		SleepFunc:  func(time.Duration) {},
+		JitterFunc: func(time.Duration) time.Duration { return 0 },
+	}
+
+	engine := NewEngine(mock, state, cfg)
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Find the patch runner calls.
+	var patchPrompts []string
+	for _, call := range mock.calls {
+		if call.Phase == "patch" {
+			patchPrompts = append(patchPrompts, call.SystemPrompt)
+		}
+	}
+
+	if len(patchPrompts) < 2 {
+		t.Fatalf("expected 2 patch calls, got %d", len(patchPrompts))
+	}
+
+	// First patch: rework feedback from first verify, no prior cycles.
+	if !strings.Contains(patchPrompts[0], "fix test A") {
+		t.Error("first patch should reference 'fix test A'")
+	}
+	if strings.Contains(patchPrompts[0], "PRIOR_CYCLES:") {
+		t.Error("first patch should NOT have prior cycles")
+	}
+
+	// Second patch: rework feedback from second verify, WITH prior cycle context.
+	if !strings.Contains(patchPrompts[1], "fix test B") {
+		t.Error("second patch should reference 'fix test B'")
+	}
+	if !strings.Contains(patchPrompts[1], "PRIOR_CYCLES:") {
+		t.Error("second patch should have prior cycles")
+	}
+	if !strings.Contains(patchPrompts[1], "fix test A") {
+		t.Error("second patch prior cycles should reference 'fix test A' from cycle 1")
+	}
+}
+
+func TestSummarizeReviewFindings(t *testing.T) {
+	t.Run("includes_critical_and_major", func(t *testing.T) {
+		findings := []schemas.ReviewFinding{
+			{Severity: "critical", File: "handler.go", Line: 42, Issue: "nil deref"},
+			{Severity: "major", File: "util.go", Issue: "unchecked error"},
+			{Severity: "minor", File: "style.go", Issue: "unused import"},
+		}
+		summary := summarizeReviewFindings(findings)
+		if !strings.Contains(summary, "nil deref") {
+			t.Errorf("summary should contain critical finding, got: %s", summary)
+		}
+		if !strings.Contains(summary, "unchecked error") {
+			t.Errorf("summary should contain major finding, got: %s", summary)
+		}
+		if strings.Contains(summary, "unused import") {
+			t.Errorf("summary should NOT contain minor finding, got: %s", summary)
+		}
+	})
+
+	t.Run("empty_when_no_critical_or_major", func(t *testing.T) {
+		findings := []schemas.ReviewFinding{
+			{Severity: "minor", File: "style.go", Issue: "unused import"},
+		}
+		if summary := summarizeReviewFindings(findings); summary != "" {
+			t.Errorf("summary should be empty for minor-only findings, got: %s", summary)
+		}
+	})
+
+	t.Run("empty_when_no_findings", func(t *testing.T) {
+		if summary := summarizeReviewFindings(nil); summary != "" {
+			t.Errorf("summary should be empty for nil findings, got: %s", summary)
+		}
+	})
+
+	t.Run("includes_line_numbers", func(t *testing.T) {
+		findings := []schemas.ReviewFinding{
+			{Severity: "critical", File: "x.go", Line: 10, Issue: "bad"},
+		}
+		summary := summarizeReviewFindings(findings)
+		if !strings.Contains(summary, "x.go:10") {
+			t.Errorf("summary should contain line number, got: %s", summary)
+		}
+	})
+}
+
+func TestSummarizeVerifyFailures(t *testing.T) {
+	t.Run("joins_fixes", func(t *testing.T) {
+		fixes := []string{"fix A", "fix B"}
+		summary := summarizeVerifyFailures(fixes)
+		if summary != "fix A; fix B" {
+			t.Errorf("summary = %q, want %q", summary, "fix A; fix B")
+		}
+	})
+
+	t.Run("empty_when_no_fixes", func(t *testing.T) {
+		if summary := summarizeVerifyFailures(nil); summary != "" {
+			t.Errorf("summary should be empty for nil fixes, got: %s", summary)
+		}
+	})
+}
+
 func TestEngine_PhaseBudgetRunnerCapSubtractsCumulativeCost(t *testing.T) {
 	// When a phase re-runs via rework, the runner's MaxBudgetUSD should
 	// reflect the remaining per-phase budget (MaxCostPerPhase - CumulativeCost),

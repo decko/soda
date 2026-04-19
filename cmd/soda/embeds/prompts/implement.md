@@ -21,6 +21,17 @@ Summary: {{.Ticket.Summary}}
 {{- end}}
 
 {{- if .ReworkFeedback}}
+{{- if .ReworkFeedback.PriorCycles}}
+
+## Context: Prior Review Cycles
+
+The following issues were reported in earlier rework cycles. Some may have been fixed already.
+Use this context to avoid re-introducing previously-fixed issues or repeating the same mistakes.
+
+{{- range .ReworkFeedback.PriorCycles}}
+- **Cycle {{.Cycle}}** ({{.Source}}, verdict: {{.Verdict}}): {{.Summary}}
+{{- end}}
+{{- end}}
 {{- if eq .ReworkFeedback.Source "review"}}
 
 ## MANDATORY: Specialist Review Findings (MUST address)

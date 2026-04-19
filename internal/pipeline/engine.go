@@ -1028,12 +1028,11 @@ func (e *Engine) extractFeedbackFrom(source string) *ReworkFeedback {
 // exists, the verdict is not FAIL, or the plan has changed since verify
 // ran (staleness guard).
 //
-// This function always reads the current verify.json, not archived
-// generations. On each rework cycle (patch retry), verify re-runs after
-// implement (because verify depends on implement), overwriting
-// verify.json with the latest results. The next call to
-// extractVerifyFeedback therefore returns only the most recent
-// failures — previous failures that were fixed are no longer present.
+// The top-level fields (Verdict, FixesRequired, etc.) always reflect
+// only the most recent verify.json. PriorCycles is populated from
+// archived results (verify.json.1, verify.json.2, ...) so the LLM
+// has context about what was previously reported.
+//
 // Only critical/major code issues and failed criteria/commands are
 // included to keep prompt context focused.
 func (e *Engine) extractVerifyFeedback() *ReworkFeedback {
@@ -1128,6 +1127,9 @@ func (e *Engine) extractVerifyFeedback() *ReworkFeedback {
 		}
 	}
 
+	// Collect prior cycle context from archived verify results.
+	fb.PriorCycles = e.collectPriorVerifyCycles()
+
 	return fb
 }
 
@@ -1135,11 +1137,10 @@ func (e *Engine) extractVerifyFeedback() *ReworkFeedback {
 // feedback when the verdict is "rework". Returns nil if no review result
 // exists or the verdict is not "rework".
 //
-// Like extractVerifyFeedback, this reads the current review.json which
-// is overwritten each time the review phase re-runs. On a patch retry
-// (rework cycle), review re-runs after implement, so the next
-// extraction sees only the latest findings — previously reported issues
-// that were fixed will not appear. Only critical/major findings are
+// The top-level fields (Verdict, ReviewFindings) reflect the most recent
+// review.json. PriorCycles is populated from archived results
+// (review.json.1, review.json.2, ...) so the LLM has context about
+// what was previously reported. Only critical/major findings are
 // included to keep prompt context focused.
 func (e *Engine) extractReviewFeedback() *ReworkFeedback {
 	raw, err := e.state.ReadResult("review")
@@ -1168,7 +1169,129 @@ func (e *Engine) extractReviewFeedback() *ReworkFeedback {
 		}
 	}
 
+	// Collect prior cycle context from archived review results.
+	fb.PriorCycles = e.collectPriorReviewCycles()
+
 	return fb
+}
+
+// collectPriorReviewCycles reads archived review results (review.json.1,
+// review.json.2, ...) and builds PriorCycle summaries. Only cycles with
+// a "rework" verdict are included (pass cycles don't carry useful context
+// for rework). Returns nil if no prior cycles exist.
+func (e *Engine) collectPriorReviewCycles() []PriorCycle {
+	reviewPS := e.state.Meta().Phases["review"]
+	if reviewPS == nil || reviewPS.Generation <= 1 {
+		return nil
+	}
+
+	var priors []PriorCycle
+	for gen := 1; gen < reviewPS.Generation; gen++ {
+		raw, err := e.state.ReadArchivedResult("review", gen)
+		if err != nil {
+			continue
+		}
+
+		var result schemas.ReviewOutput
+		if err := json.Unmarshal(raw, &result); err != nil {
+			continue
+		}
+
+		// Only include rework cycles — pass cycles don't carry useful context.
+		if !strings.EqualFold(result.Verdict, "rework") {
+			continue
+		}
+
+		summary := summarizeReviewFindings(result.Findings)
+		if summary == "" {
+			continue
+		}
+
+		priors = append(priors, PriorCycle{
+			Cycle:   gen,
+			Source:  "review",
+			Verdict: result.Verdict,
+			Summary: summary,
+		})
+	}
+	return priors
+}
+
+// collectPriorVerifyCycles reads archived verify results (verify.json.1,
+// verify.json.2, ...) and builds PriorCycle summaries. Only cycles with
+// a FAIL verdict are included. Returns nil if no prior cycles exist.
+func (e *Engine) collectPriorVerifyCycles() []PriorCycle {
+	verifyPS := e.state.Meta().Phases["verify"]
+	if verifyPS == nil || verifyPS.Generation <= 1 {
+		return nil
+	}
+
+	var priors []PriorCycle
+	for gen := 1; gen < verifyPS.Generation; gen++ {
+		raw, err := e.state.ReadArchivedResult("verify", gen)
+		if err != nil {
+			continue
+		}
+
+		var result struct {
+			Verdict       string   `json:"verdict"`
+			FixesRequired []string `json:"fixes_required"`
+		}
+		if err := json.Unmarshal(raw, &result); err != nil {
+			continue
+		}
+
+		// Only include FAIL cycles.
+		if !strings.EqualFold(result.Verdict, "FAIL") {
+			continue
+		}
+
+		summary := summarizeVerifyFailures(result.FixesRequired)
+		if summary == "" {
+			continue
+		}
+
+		priors = append(priors, PriorCycle{
+			Cycle:   gen,
+			Source:  "verify",
+			Verdict: result.Verdict,
+			Summary: summary,
+		})
+	}
+	return priors
+}
+
+// summarizeReviewFindings produces a concise summary of review findings
+// for prior cycle context. Includes only critical/major findings.
+func summarizeReviewFindings(findings []schemas.ReviewFinding) string {
+	var parts []string
+	for _, f := range findings {
+		sev := strings.ToLower(f.Severity)
+		if sev == "critical" || sev == "major" {
+			loc := f.File
+			if f.Line > 0 {
+				loc = fmt.Sprintf("%s:%d", f.File, f.Line)
+			}
+			if loc != "" {
+				parts = append(parts, fmt.Sprintf("[%s] %s — %s", f.Severity, loc, f.Issue))
+			} else {
+				parts = append(parts, fmt.Sprintf("[%s] %s", f.Severity, f.Issue))
+			}
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, "; ")
+}
+
+// summarizeVerifyFailures produces a concise summary of verify failures
+// for prior cycle context.
+func summarizeVerifyFailures(fixesRequired []string) string {
+	if len(fixesRequired) == 0 {
+		return ""
+	}
+	return strings.Join(fixesRequired, "; ")
 }
 
 // computeDiffContext returns the git diff of the current branch against the

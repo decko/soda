@@ -311,6 +311,13 @@ func TestValidateTemplate(t *testing.T) {
 		}
 	})
 
+	t.Run("valid_template_with_prior_cycles", func(t *testing.T) {
+		tmpl := `{{- if .ReworkFeedback}}{{- if .ReworkFeedback.PriorCycles}}{{range .ReworkFeedback.PriorCycles}}Cycle {{.Cycle}}: {{.Summary}}{{end}}{{- end}}{{- end}}`
+		if err := ValidateTemplate(tmpl); err != nil {
+			t.Fatalf("ValidateTemplate: %v", err)
+		}
+	})
+
 	t.Run("valid_template_with_existing_spec_and_plan", func(t *testing.T) {
 		tmpl := `{{- if .Ticket.ExistingSpec}}Spec: {{.Ticket.ExistingSpec}}{{- end}}
 {{- if .Ticket.ExistingPlan}}Plan: {{.Ticket.ExistingPlan}}{{- end}}`
@@ -866,6 +873,132 @@ Context: {{.}}
 		// Without feedback, should not have FIXES REQUIRED section.
 		if strings.Contains(result, "FIXES REQUIRED") {
 			t.Error("patch prompt should NOT contain FIXES REQUIRED when no feedback")
+		}
+	})
+
+	t.Run("renders_implement_prompt_with_prior_review_cycles", func(t *testing.T) {
+		tmplBytes, err := os.ReadFile(filepath.Join("..", "..", "cmd", "soda", "embeds", "prompts", "implement.md"))
+		if err != nil {
+			t.Skipf("skipping: cannot read embedded implement.md: %v", err)
+		}
+		tmpl := string(tmplBytes)
+
+		data := PromptData{
+			Ticket:       TicketData{Key: "TEST-241", Summary: "prior cycles test"},
+			WorktreePath: "/tmp/wt",
+			Branch:       "soda/TEST-241",
+			BaseBranch:   "main",
+			Config:       PromptConfigData{Formatter: "gofmt -w .", TestCommand: "go test ./..."},
+			ReworkFeedback: &ReworkFeedback{
+				Source:  "review",
+				Verdict: "rework",
+				ReviewFindings: []schemas.ReviewFinding{
+					{Severity: "major", File: "handler.go", Line: 20, Issue: "missing error check", Suggestion: "add error handling", Source: "go-specialist"},
+				},
+				PriorCycles: []PriorCycle{
+					{Cycle: 1, Source: "review", Verdict: "rework", Summary: "[critical] handler.go:42 — nil deref"},
+				},
+			},
+		}
+
+		result, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+
+		// Should contain prior cycles section.
+		if !strings.Contains(result, "Prior Review Cycles") {
+			t.Errorf("implement prompt should contain 'Prior Review Cycles' header;\ngot: %s", result)
+		}
+		if !strings.Contains(result, "Cycle 1") {
+			t.Errorf("implement prompt should contain 'Cycle 1';\ngot: %s", result)
+		}
+		if !strings.Contains(result, "nil deref") {
+			t.Errorf("implement prompt should contain prior cycle summary;\ngot: %s", result)
+		}
+		// Should also contain current findings.
+		if !strings.Contains(result, "missing error check") {
+			t.Errorf("implement prompt should contain current finding;\ngot: %s", result)
+		}
+	})
+
+	t.Run("renders_implement_prompt_without_prior_cycles_on_first_rework", func(t *testing.T) {
+		tmplBytes, err := os.ReadFile(filepath.Join("..", "..", "cmd", "soda", "embeds", "prompts", "implement.md"))
+		if err != nil {
+			t.Skipf("skipping: cannot read embedded implement.md: %v", err)
+		}
+		tmpl := string(tmplBytes)
+
+		data := PromptData{
+			Ticket:       TicketData{Key: "TEST-241", Summary: "no prior cycles"},
+			WorktreePath: "/tmp/wt",
+			Branch:       "soda/TEST-241",
+			BaseBranch:   "main",
+			Config:       PromptConfigData{Formatter: "gofmt -w .", TestCommand: "go test ./..."},
+			ReworkFeedback: &ReworkFeedback{
+				Source:  "review",
+				Verdict: "rework",
+				ReviewFindings: []schemas.ReviewFinding{
+					{Severity: "critical", File: "x.go", Line: 1, Issue: "bad", Suggestion: "fix", Source: "go-specialist"},
+				},
+				// No PriorCycles on first rework.
+			},
+		}
+
+		result, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+
+		// Should NOT contain prior cycles section.
+		if strings.Contains(result, "Prior Review Cycles") {
+			t.Errorf("implement prompt should NOT contain 'Prior Review Cycles' on first rework;\ngot: %s", result)
+		}
+		// Should contain current findings.
+		if !strings.Contains(result, "bad") {
+			t.Errorf("implement prompt should contain current finding;\ngot: %s", result)
+		}
+	})
+
+	t.Run("renders_patch_prompt_with_prior_verify_cycles", func(t *testing.T) {
+		tmplBytes, err := os.ReadFile(filepath.Join("..", "..", "cmd", "soda", "embeds", "prompts", "patch.md"))
+		if err != nil {
+			t.Skipf("skipping: cannot read embedded patch.md: %v", err)
+		}
+		tmpl := string(tmplBytes)
+
+		data := PromptData{
+			Ticket:       TicketData{Key: "TEST-241", Summary: "patch prior cycles"},
+			WorktreePath: "/tmp/wt",
+			Branch:       "soda/TEST-241",
+			BaseBranch:   "main",
+			Config:       PromptConfigData{Formatter: "gofmt -w .", TestCommand: "go test ./..."},
+			DiffContext:  "--- a/file.go\n+++ b/file.go\n@@ -1 +1 @@\n-old\n+new",
+			ReworkFeedback: &ReworkFeedback{
+				Source:        "verify",
+				Verdict:       "FAIL",
+				FixesRequired: []string{"fix the remaining test"},
+				PriorCycles: []PriorCycle{
+					{Cycle: 1, Source: "verify", Verdict: "FAIL", Summary: "fix the original test"},
+				},
+			},
+		}
+
+		result, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+
+		// Should contain prior cycles section.
+		if !strings.Contains(result, "Prior Verification Cycles") {
+			t.Errorf("patch prompt should contain 'Prior Verification Cycles' header;\ngot: %s", result)
+		}
+		if !strings.Contains(result, "fix the original test") {
+			t.Errorf("patch prompt should contain prior cycle summary;\ngot: %s", result)
+		}
+		// Should also contain current fix.
+		if !strings.Contains(result, "fix the remaining test") {
+			t.Errorf("patch prompt should contain current fix;\ngot: %s", result)
 		}
 	})
 }

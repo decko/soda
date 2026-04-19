@@ -44,16 +44,16 @@ type DetectedStackData struct {
 // ReworkFeedback holds selective feedback from a failed verify phase
 // or a review-rework verdict, injected into implement's prompt on resume.
 //
-// Reset behavior on patch retry: ReworkFeedback is rebuilt from scratch
-// on every rework cycle — it is never accumulated across cycles. When
-// the engine routes back to implement (patch retry), buildPromptData
-// calls extractVerifyFeedback / extractReviewFeedback which read the
-// CURRENT verify.json or review.json result on disk. After implement
-// re-runs, verify and review re-run too (they depend on implement),
-// overwriting the previous result files. So on the next rework cycle,
-// implement sees only the latest failures, not a union of all prior
-// failures. This ensures the LLM focuses on remaining issues rather
-// than re-fixing already-resolved ones.
+// Current-cycle feedback is rebuilt from the latest verify.json or
+// review.json on each rework cycle. After implement re-runs, verify
+// and review re-run too (they depend on implement), overwriting the
+// previous result files. So the top-level fields (Verdict, FixesRequired,
+// etc.) always reflect only the most recent failures.
+//
+// PriorCycles preserves summarized context from earlier rework cycles
+// (read from archived results like review.json.1, verify.json.2, etc.)
+// so the LLM can see what was previously flagged and avoid repeating
+// mistakes or regressing on issues that were already fixed.
 type ReworkFeedback struct {
 	Verdict        string
 	Source         string // "verify" or "review"
@@ -62,6 +62,17 @@ type ReworkFeedback struct {
 	CodeIssues     []ReworkCodeIssue
 	FailedCommands []FailedCommand
 	ReviewFindings []schemas.ReviewFinding
+	PriorCycles    []PriorCycle
+}
+
+// PriorCycle holds a summarized snapshot of feedback from a previous
+// rework cycle. Populated from archived result files (e.g., review.json.1)
+// so the LLM has context about what was previously reported.
+type PriorCycle struct {
+	Cycle   int    // 1-based cycle number
+	Source  string // "verify" or "review"
+	Verdict string
+	Summary string // human-readable summary of findings from that cycle
 }
 
 // FailedCriterion is a single acceptance criterion that failed verification.

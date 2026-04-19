@@ -24,6 +24,17 @@ The following diff shows what was implemented (base...HEAD):
 {{- end}}
 
 {{- if .ReworkFeedback}}
+{{- if .ReworkFeedback.PriorCycles}}
+
+## Context: Prior Verification Cycles
+
+The following issues were reported in earlier patch cycles. Some may have been fixed already.
+Use this context to avoid re-introducing previously-fixed issues or repeating the same mistakes.
+
+{{- range .ReworkFeedback.PriorCycles}}
+- **Cycle {{.Cycle}}** ({{.Source}}, verdict: {{.Verdict}}): {{.Summary}}
+{{- end}}
+{{- end}}
 
 ## FIXES REQUIRED
 
