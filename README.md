@@ -47,7 +47,9 @@ soda run <ticket>
 
 `soda init` creates a `soda.config.yaml` in the current directory with
 sensible defaults and placeholder values. See `config.example.yaml` for
-the full set of options.
+the full set of options. When `--config` is not specified, `soda run`
+automatically discovers `soda.config.yaml` in the working directory
+before falling back to `~/.config/soda/config.yaml`.
 
 | Flag | Description |
 |------|-------------|

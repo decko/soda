@@ -53,12 +53,26 @@ func newRootCmd() *cobra.Command {
 	return cmd
 }
 
+// localConfigName is the config file name created by `soda init`.
+const localConfigName = "soda.config.yaml"
+
 // loadConfig reads the config file specified by the --config flag.
+// When --config is not explicitly set, it first checks for a local
+// soda.config.yaml in the working directory before falling back to the
+// default path (~/.config/soda/config.yaml).
 func loadConfig(cmd *cobra.Command) (*config.Config, error) {
 	cfgPath, err := cmd.Flags().GetString("config")
 	if err != nil {
 		return nil, fmt.Errorf("config flag: %w", err)
 	}
+
+	// Auto-discover local config when the user hasn't set --config explicitly.
+	if !cmd.Flags().Changed("config") {
+		if _, statErr := os.Stat(localConfigName); statErr == nil {
+			cfgPath = localConfigName
+		}
+	}
+
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		return nil, err

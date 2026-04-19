@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 func TestRunInit_CreatesConfigFile(t *testing.T) {
@@ -162,5 +164,110 @@ func TestRunInit_DefaultDir(t *testing.T) {
 	dest := filepath.Join(dir, "soda.config.yaml")
 	if _, err := os.Stat(dest); err != nil {
 		t.Fatalf("config file not created in default dir: %v", err)
+	}
+}
+
+func TestLoadConfig_AutoDiscoversLocalConfig(t *testing.T) {
+	// When --config is not explicitly set and a soda.config.yaml exists in
+	// the working directory, loadConfig should use it instead of the default
+	// ~/.config/soda/config.yaml path.
+	dir := t.TempDir()
+
+	// Write a minimal valid config as soda.config.yaml in the temp dir.
+	cfgContent := "ticket_source: github\nmodel: claude-opus-4-6\n"
+	if err := os.WriteFile(filepath.Join(dir, "soda.config.yaml"), []byte(cfgContent), 0644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	origDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	t.Cleanup(func() { os.Chdir(origDir) })
+
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	// Build a root command but invoke loadConfig directly via a subcommand.
+	root := newRootCmd()
+	var loaded bool
+	testCmd := &cobra.Command{
+		Use: "testload",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig(cmd)
+			if err != nil {
+				return err
+			}
+			if cfg.TicketSource != "github" {
+				t.Errorf("TicketSource = %q, want %q", cfg.TicketSource, "github")
+			}
+			loaded = true
+			return nil
+		},
+	}
+	root.AddCommand(testCmd)
+	root.SetArgs([]string{"testload"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("testload failed: %v", err)
+	}
+	if !loaded {
+		t.Fatal("loadConfig was not called")
+	}
+}
+
+func TestLoadConfig_ExplicitConfigOverridesLocal(t *testing.T) {
+	// When --config is explicitly set, loadConfig should use that path
+	// even when a local soda.config.yaml exists.
+	dir := t.TempDir()
+
+	// Write a local soda.config.yaml (would be auto-discovered).
+	localContent := "ticket_source: github\n"
+	if err := os.WriteFile(filepath.Join(dir, "soda.config.yaml"), []byte(localContent), 0644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	// Write an explicit config file with different content.
+	explicitPath := filepath.Join(dir, "custom.yaml")
+	explicitContent := "ticket_source: jira\nmodel: claude-opus-4-6\n"
+	if err := os.WriteFile(explicitPath, []byte(explicitContent), 0644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	origDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	t.Cleanup(func() { os.Chdir(origDir) })
+
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	root := newRootCmd()
+	var loaded bool
+	testCmd := &cobra.Command{
+		Use: "testload",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig(cmd)
+			if err != nil {
+				return err
+			}
+			if cfg.TicketSource != "jira" {
+				t.Errorf("TicketSource = %q, want %q (explicit --config should take precedence)", cfg.TicketSource, "jira")
+			}
+			loaded = true
+			return nil
+		},
+	}
+	root.AddCommand(testCmd)
+	root.SetArgs([]string{"testload", "--config", explicitPath})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("testload with explicit config failed: %v", err)
+	}
+	if !loaded {
+		t.Fatal("loadConfig was not called")
 	}
 }

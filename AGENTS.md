@@ -229,6 +229,7 @@ Atomic writes: always write to `.tmp` then rename. Archive on re-run (`verify.js
 - **Disk state over in-memory**: crash recovery for free. Resume works by reading `.soda/<ticket>/`. No daemon needed.
 - **Config-driven phases**: users can add, remove, or reorder phases via `phases.yaml`. Engine doesn't hardcode phase names.
 - **Prompt overrides**: `~/.config/soda/prompts/<phase>.md` overrides embedded prompts without forking.
+- **Local config auto-discovery**: when `--config` is not set, `loadConfig` checks for `soda.config.yaml` in the working directory before falling back to `~/.config/soda/config.yaml`. This means `soda init` + `soda run <ticket>` works without extra flags.
 - **Root `phases.yaml` overrides embedded**: `resolvePhasesPath()` checks for a local `phases.yaml` in the working directory first, then falls back to the embedded copy. When changing pipeline config, update BOTH `cmd/soda/embeds/phases.yaml` (compiled into binary) AND the root `phases.yaml` (runtime override). Or just update the root file for immediate effect without rebuild.
 
 ## Git workflow
