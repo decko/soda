@@ -40,6 +40,7 @@ func newRootCmd() *cobra.Command {
 	cmd.PersistentFlags().String("config", defaultPath, "config file path")
 
 	cmd.AddCommand(
+		newInitCmd(),
 		newRunCmd(),
 		newStatusCmd(),
 		newSessionsCmd(),
