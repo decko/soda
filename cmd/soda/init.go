@@ -83,6 +83,9 @@ func runInit(w io.Writer, stdin io.Reader, isTTY bool, opts initOptions) error {
 	}
 	if info != nil {
 		cfg = configFromDetected(info)
+		if info.Forge == "gitlab" {
+			fmt.Fprintln(w, colorMsg("33", "Warning: GitLab detected but only GitHub ticket source is currently supported. Edit ticket_source in the generated config if needed."))
+		}
 	}
 
 	data, err := config.Marshal(cfg)
@@ -282,7 +285,9 @@ func configFromDetected(info *detect.ProjectInfo) *config.Config {
 		cfg.GitHub.Owner = info.Owner
 		cfg.GitHub.Repo = info.Repo
 	case "gitlab":
-		cfg.TicketSource = "github" // keep github as default; gitlab ticket source not yet supported
+		// GitLab ticket source is not yet supported; default to github as a
+		// placeholder. runInit emits a user-visible warning about this mismatch.
+		cfg.TicketSource = "github"
 		cfg.GitHub.Owner = info.Owner
 		cfg.GitHub.Repo = info.Repo
 	}
