@@ -36,6 +36,7 @@ func TestInstallPlugin(t *testing.T) {
 		"commands/resume.md",
 		"commands/status.md",
 		"commands/sessions.md",
+		"commands/clean.md",
 		"agents/pipeline-architect.md",
 	}
 
