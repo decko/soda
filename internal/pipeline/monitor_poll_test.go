@@ -2160,6 +2160,192 @@ func TestMonitor_CorruptStateReturnsError(t *testing.T) {
 	}
 }
 
+func TestMonitor_PhaseBudgetExceededSkipsResponse(t *testing.T) {
+	// When per-phase budget is already exceeded, the monitor should skip
+	// response execution (like it does for global budget), without consuming
+	// a response round.
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "open", Approved: false}},
+			{status: &PRStatus{State: "open", Approved: true}},
+		},
+		commentResponses: []mockCommentResponse{
+			{comments: []PRComment{
+				{ID: "IC_1", Author: "reviewer", Body: "Fix this."},
+			}},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{},
+	}
+
+	engine, state, events := setupMonitorEngineWithRunner(t, mock, poller, nil, func(cfg *EngineConfig) {
+		cfg.MaxCostPerPhase = 1.0
+	})
+
+	// Pre-set the monitor phase's cumulative cost to exceed the per-phase limit.
+	state.Meta().Phases["monitor"] = &PhaseState{
+		Status:         PhaseRunning,
+		Generation:     1,
+		CumulativeCost: 1.5, // exceeds $1.0 per-phase limit
+	}
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Should have phase_budget_exceeded event with skipping=monitor_response.
+	hasPhaseBudgetExceeded := false
+	for _, evt := range *events {
+		if evt.Kind == EventPhaseBudgetExceeded {
+			if skipping, _ := evt.Data["skipping"].(string); skipping == "monitor_response" {
+				hasPhaseBudgetExceeded = true
+			}
+		}
+	}
+	if !hasPhaseBudgetExceeded {
+		t.Error("phase_budget_exceeded event with skipping=monitor_response not emitted")
+	}
+
+	// Runner should NOT have been called.
+	mock.mu.Lock()
+	callCount := len(mock.calls)
+	mock.mu.Unlock()
+	if callCount != 0 {
+		t.Errorf("runner call count = %d, want 0 (per-phase budget exceeded)", callCount)
+	}
+
+	// Response rounds should NOT be incremented.
+	monState, err := state.ReadMonitorState()
+	if err != nil {
+		t.Fatalf("ReadMonitorState: %v", err)
+	}
+	if monState.ResponseRounds != 0 {
+		t.Errorf("ResponseRounds = %d, want 0 (per-phase budget-skipped rounds should not consume budget)", monState.ResponseRounds)
+	}
+}
+
+func TestMonitor_PhaseBudgetCapsRunnerOpts(t *testing.T) {
+	// When MaxCostPerPhase is set, the runner's MaxBudgetUSD should be
+	// capped to the remaining per-phase budget, not just the global remaining.
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "open", Approved: false}},
+			{status: &PRStatus{State: "open", Approved: true}},
+		},
+		commentResponses: []mockCommentResponse{
+			{comments: []PRComment{
+				{ID: "IC_1", Author: "reviewer", Body: "Fix this bug.", Path: "main.go"},
+			}},
+		},
+	}
+
+	monitorOutput := json.RawMessage(`{
+		"ticket_key":"TEST-MON",
+		"pr_url":"https://github.com/decko/soda/pull/49",
+		"comments_handled":[{"comment_id":"IC_1","author":"reviewer","content":"Fix this bug.","action":"fixed","response":"Fixed.","classification":"code_change","authoritative":true}],
+		"tests_passed":true
+	}`)
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"monitor/response_0": {{
+				result: &runner.RunResult{Output: monitorOutput, CostUSD: 0.10},
+			}},
+		},
+	}
+
+	engine, state, _ := setupMonitorEngineWithRunner(t, mock, poller, nil, func(cfg *EngineConfig) {
+		cfg.MaxCostUSD = 100.0    // plenty of global budget
+		cfg.MaxCostPerPhase = 5.0 // per-phase limit is tighter
+	})
+
+	// Pre-set cumulative cost to $2 so remaining per-phase budget is $3.
+	state.Meta().Phases["monitor"] = &PhaseState{
+		Status:         PhaseRunning,
+		Generation:     1,
+		CumulativeCost: 2.0,
+	}
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Verify runner was called with the tighter per-phase cap.
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+	if len(mock.calls) != 1 {
+		t.Fatalf("runner call count = %d, want 1", len(mock.calls))
+	}
+	// Remaining per-phase = 5.0 - 2.0 = 3.0, which is tighter than global remaining (100.0).
+	if mock.calls[0].MaxBudgetUSD != 3.0 {
+		t.Errorf("MaxBudgetUSD = %f, want 3.0 (per-phase remaining)", mock.calls[0].MaxBudgetUSD)
+	}
+}
+
+func TestMonitor_PhaseBudgetDoesNotBlockWhenDisabled(t *testing.T) {
+	// When MaxCostPerPhase is 0 (disabled), monitor responses should not
+	// be affected by per-phase budget checks.
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "open", Approved: false}},
+			{status: &PRStatus{State: "open", Approved: true}},
+		},
+		commentResponses: []mockCommentResponse{
+			{comments: []PRComment{
+				{ID: "IC_1", Author: "reviewer", Body: "Fix this."},
+			}},
+		},
+	}
+
+	monitorOutput := json.RawMessage(`{
+		"ticket_key":"TEST-MON",
+		"pr_url":"https://github.com/decko/soda/pull/49",
+		"comments_handled":[{"comment_id":"IC_1","author":"reviewer","content":"Fix this.","action":"fixed","response":"Done.","classification":"code_change","authoritative":true}],
+		"tests_passed":true
+	}`)
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"monitor/response_0": {{
+				result: &runner.RunResult{Output: monitorOutput, CostUSD: 50.0},
+			}},
+		},
+	}
+
+	engine, state, events := setupMonitorEngineWithRunner(t, mock, poller, nil, func(cfg *EngineConfig) {
+		cfg.MaxCostPerPhase = 0 // disabled
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Runner should have been called normally.
+	mock.mu.Lock()
+	callCount := len(mock.calls)
+	mock.mu.Unlock()
+	if callCount != 1 {
+		t.Errorf("runner call count = %d, want 1", callCount)
+	}
+
+	// Should NOT have phase_budget_exceeded event.
+	for _, evt := range *events {
+		if evt.Kind == EventPhaseBudgetExceeded {
+			t.Error("phase_budget_exceeded should not be emitted when MaxCostPerPhase is 0")
+		}
+	}
+
+	monState, err := state.ReadMonitorState()
+	if err != nil {
+		t.Fatalf("ReadMonitorState: %v", err)
+	}
+	if monState.ResponseRounds != 1 {
+		t.Errorf("ResponseRounds = %d, want 1", monState.ResponseRounds)
+	}
+}
+
 func TestCheckNewComments_ClassifierFailureDoesNotAdvanceLastCommentID(t *testing.T) {
 	// When the classifier fails to construct (e.g., invalid selfUser),
 	// LastCommentID must NOT be advanced. Otherwise, comments are

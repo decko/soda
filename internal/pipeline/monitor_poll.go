@@ -232,6 +232,17 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 						"skipping":   "monitor_response",
 					},
 				})
+			} else if e.config.MaxCostPerPhase > 0 && e.state.Meta().Phases[phase.Name] != nil && e.state.Meta().Phases[phase.Name].CumulativeCost >= e.config.MaxCostPerPhase {
+				// Per-phase budget exceeded — skip response, same as global budget.
+				e.emit(Event{
+					Phase: phase.Name,
+					Kind:  EventPhaseBudgetExceeded,
+					Data: map[string]any{
+						"phase_cost": e.state.Meta().Phases[phase.Name].CumulativeCost,
+						"limit":      e.config.MaxCostPerPhase,
+						"skipping":   "monitor_response",
+					},
+				})
 			} else {
 				output, err := e.respondToComments(ctx, phase, classified, monState)
 				if err != nil {
@@ -659,6 +670,14 @@ func (e *Engine) respondToComments(ctx context.Context, phase PhaseConfig, class
 	remaining := 0.0
 	if e.config.MaxCostUSD > 0 {
 		remaining = e.config.MaxCostUSD - e.state.Meta().TotalCost
+	}
+	// Cap with per-phase limit: use the remaining per-phase budget
+	// (MaxCostPerPhase minus cumulative cost already spent) as the tighter bound.
+	if e.config.MaxCostPerPhase > 0 {
+		perPhaseRemaining := e.config.MaxCostPerPhase - e.state.Meta().Phases[phase.Name].CumulativeCost
+		if remaining <= 0 || perPhaseRemaining < remaining {
+			remaining = perPhaseRemaining
+		}
 	}
 
 	// Restrict tools for reply-only sessions (questions only — no code changes).
