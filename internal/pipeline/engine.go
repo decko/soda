@@ -2192,7 +2192,6 @@ func (e *Engine) runReviewerWithRetry(ctx context.Context, phase PhaseConfig, re
 		switch category {
 		case "transient":
 			delay := backoff(attempt, e.config.JitterFunc)
-			e.config.SleepFunc(delay)
 			sendEvent(Event{
 				Phase: phase.Name,
 				Kind:  EventReviewerRetrying,
@@ -2203,6 +2202,7 @@ func (e *Engine) runReviewerWithRetry(ctx context.Context, phase PhaseConfig, re
 					"delay":    delay.String(),
 				},
 			})
+			e.config.SleepFunc(delay)
 		}
 
 		// Send retry log to parent for serialized WriteLog.
