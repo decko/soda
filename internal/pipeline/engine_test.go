@@ -9745,8 +9745,7 @@ func TestEngine_PipelineTimeout_ExternalDeadlineNotWrapped(t *testing.T) {
 	}
 }
 
-func TestEngine_GenerationBudgetExceeded(t *testing.T) {
-	// Phase costs $10 but per-generation limit is $8 → GenerationBudgetExceededError.
+func TestEngine_BinaryVersionMismatch_FirstRunRecordsVersion(t *testing.T) {
 	phases := []PhaseConfig{
 		{
 			Name:   "triage",
@@ -9760,39 +9759,39 @@ func TestEngine_GenerationBudgetExceeded(t *testing.T) {
 			"triage": {{
 				result: &runner.RunResult{
 					Output:  json.RawMessage(`{"automatable":true}`),
-					RawText: "Triage done",
-					CostUSD: 10.0,
+					RawText: "Triage result",
+					CostUSD: 0.05,
 				},
 			}},
 		},
 	}
 
-	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
-		cfg.MaxCostPerGeneration = 8.0
+	var events []Event
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.BinaryVersion = "v1.0.0-abc123"
+		cfg.OnEvent = func(ev Event) {
+			events = append(events, ev)
+		}
 	})
 
-	err := engine.Run(context.Background())
-	if err == nil {
-		t.Fatal("expected GenerationBudgetExceededError")
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
 	}
 
-	var genBudgetErr *GenerationBudgetExceededError
-	if !errors.As(err, &genBudgetErr) {
-		t.Fatalf("expected GenerationBudgetExceededError, got: %v", err)
+	// Binary version should be recorded in meta.
+	if state.Meta().BinaryVersion != "v1.0.0-abc123" {
+		t.Errorf("BinaryVersion = %q, want %q", state.Meta().BinaryVersion, "v1.0.0-abc123")
 	}
-	if genBudgetErr.Phase != "triage" {
-		t.Errorf("phase = %q, want %q", genBudgetErr.Phase, "triage")
-	}
-	if genBudgetErr.Limit != 8.0 {
-		t.Errorf("limit = %f, want 8.0", genBudgetErr.Limit)
-	}
-	if genBudgetErr.Actual != 10.0 {
-		t.Errorf("actual = %f, want 10.0", genBudgetErr.Actual)
+
+	// No mismatch event should be emitted on first run.
+	for _, ev := range events {
+		if ev.Kind == EventBinaryVersionMismatch {
+			t.Error("should not emit binary_version_mismatch on first run")
+		}
 	}
 }
 
-func TestEngine_GenerationBudgetDisabledWhenZero(t *testing.T) {
-	// max_cost_per_generation: 0 means disabled — phase should succeed.
+func TestEngine_BinaryVersionMismatch_WarnsOnResume(t *testing.T) {
 	phases := []PhaseConfig{
 		{
 			Name:   "triage",
@@ -9812,205 +9811,92 @@ func TestEngine_GenerationBudgetDisabledWhenZero(t *testing.T) {
 			"triage": {{
 				result: &runner.RunResult{
 					Output:  json.RawMessage(`{"automatable":true}`),
-					RawText: "Triage done",
-					CostUSD: 10.0,
+					RawText: "Triage result",
+					CostUSD: 0.05,
 				},
 			}},
-			"plan": {{
-				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"tasks":[{"id":"1","description":"task"}]}`),
-					RawText: "Plan done",
-					CostUSD: 3.0,
+			"plan": {
+				{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"tasks":["task1"]}`),
+						RawText: "Plan result",
+						CostUSD: 0.10,
+					},
 				},
-			}},
-		},
-	}
-
-	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
-		cfg.MaxCostPerGeneration = 0 // disabled
-	})
-
-	err := engine.Run(context.Background())
-	if err != nil {
-		t.Fatalf("expected success with disabled per-generation limit, got: %v", err)
-	}
-}
-
-func TestEngine_GenerationBudgetPassesButCumulativeHits(t *testing.T) {
-	// 3 generations at $5 each pass per-generation ($8) but hit cumulative ($15).
-	//
-	// Pipeline: implement → verify → review (rework → implement)
-	// MaxCostPerGeneration = 8, MaxCostPerPhase = 15
-	// Each implement costs $5, so each generation passes per-gen.
-	// After 3 generations: cumulative = $15 → PhaseBudgetExceededError.
-	phases := []PhaseConfig{
-		{
-			Name:         "implement",
-			Prompt:       "implement.md",
-			Retry:        RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
-			FeedbackFrom: []string{"review", "verify"},
-		},
-		{
-			Name:      "verify",
-			Prompt:    "verify.md",
-			DependsOn: []string{"implement"},
-			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
-		},
-		{
-			Name:      "review",
-			Type:      "parallel-review",
-			DependsOn: []string{"implement", "verify"},
-			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
-			Rework:    &ReworkConfig{Target: "implement"},
-			Reviewers: []ReviewerConfig{
-				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
-			},
-		},
-	}
-
-	mock := &flexMockRunner{
-		responses: map[string][]flexResponse{
-			"implement": {
-				// Generation 1: $5 (under $8 per-gen, under $15 cumulative).
-				{result: &runner.RunResult{
-					Output:  json.RawMessage(`{"tests_passed":true,"commits":1}`),
-					RawText: "Impl v1",
-					CostUSD: 5.0,
-				}},
-				// Generation 2: $5 (under $8 per-gen, cumulative = $10 < $15).
-				{result: &runner.RunResult{
-					Output:  json.RawMessage(`{"tests_passed":true,"commits":2}`),
-					RawText: "Impl v2",
-					CostUSD: 5.0,
-				}},
-				// Generation 3: $5 (under $8 per-gen, cumulative = $15 = limit).
-				{result: &runner.RunResult{
-					Output:  json.RawMessage(`{"tests_passed":true,"commits":3}`),
-					RawText: "Impl v3",
-					CostUSD: 5.0,
-				}},
-			},
-			"verify": {
-				{result: &runner.RunResult{
-					Output:  json.RawMessage(`{"verdict":"PASS"}`),
-					RawText: "Verify v1",
-					CostUSD: 0.10,
-				}},
-				{result: &runner.RunResult{
-					Output:  json.RawMessage(`{"verdict":"PASS"}`),
-					RawText: "Verify v2",
-					CostUSD: 0.10,
-				}},
-				{result: &runner.RunResult{
-					Output:  json.RawMessage(`{"verdict":"PASS"}`),
-					RawText: "Verify v3",
-					CostUSD: 0.10,
-				}},
-			},
-			"review/go-specialist": {
-				// First review: rework.
-				{result: &runner.RunResult{
-					Output:  json.RawMessage(`{"findings":[{"severity":"critical","file":"handler.go","line":42,"issue":"nil deref","suggestion":"add nil check"}]}`),
-					RawText: "Critical issue",
-					CostUSD: 0.20,
-				}},
-				// Second review: rework again.
-				{result: &runner.RunResult{
-					Output:  json.RawMessage(`{"findings":[{"severity":"critical","file":"handler.go","line":42,"issue":"race condition","suggestion":"add lock"}]}`),
-					RawText: "Critical issue 2",
-					CostUSD: 0.20,
-				}},
-			},
-		},
-	}
-
-	engine, state := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
-		cfg.MaxCostPerGeneration = 8.0
-		cfg.MaxCostPerPhase = 15.0
-		cfg.MaxReworkCycles = 3 // allow enough rework cycles
-	})
-
-	err := engine.Run(context.Background())
-	if err == nil {
-		t.Fatal("expected PhaseBudgetExceededError, got nil")
-	}
-
-	var phaseBudgetErr *PhaseBudgetExceededError
-	if !errors.As(err, &phaseBudgetErr) {
-		t.Fatalf("expected PhaseBudgetExceededError (cumulative), got: %v", err)
-	}
-	if phaseBudgetErr.Phase != "implement" {
-		t.Errorf("phase = %q, want %q", phaseBudgetErr.Phase, "implement")
-	}
-	if phaseBudgetErr.Limit != 15.0 {
-		t.Errorf("limit = %f, want 15.0", phaseBudgetErr.Limit)
-	}
-	if phaseBudgetErr.Actual != 15.0 {
-		t.Errorf("actual = %f, want 15.0", phaseBudgetErr.Actual)
-	}
-
-	// Should NOT be a GenerationBudgetExceededError — each generation was under $8.
-	var genBudgetErr *GenerationBudgetExceededError
-	if errors.As(err, &genBudgetErr) {
-		t.Error("should not be GenerationBudgetExceededError — each generation cost was under limit")
-	}
-
-	// CumulativeCost should reflect all three generations.
-	implState := state.Meta().Phases["implement"]
-	if implState == nil {
-		t.Fatal("implement phase state is nil")
-	}
-	if implState.CumulativeCost != 15.0 {
-		t.Errorf("CumulativeCost = %f, want 15.0", implState.CumulativeCost)
-	}
-}
-
-func TestEngine_GenerationBudgetExceededEmitsEvent(t *testing.T) {
-	// Phase costs $10 but per-generation limit is $8 → event emitted.
-	phases := []PhaseConfig{
-		{
-			Name:   "triage",
-			Prompt: "triage.md",
-			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
-		},
-	}
-
-	mock := &flexMockRunner{
-		responses: map[string][]flexResponse{
-			"triage": {{
-				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
-					RawText: "Triage done",
-					CostUSD: 10.0,
+				{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"tasks":["task1"]}`),
+						RawText: "Plan result v2",
+						CostUSD: 0.10,
+					},
 				},
-			}},
+			},
 		},
 	}
 
-	var events []Event
-	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
-		cfg.MaxCostPerGeneration = 8.0
-		cfg.OnEvent = func(ev Event) { events = append(events, ev) }
+	// First run with version A.
+	var events1 []Event
+	engine1, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.BinaryVersion = "v1.0.0-aaa111"
+		cfg.OnEvent = func(ev Event) {
+			events1 = append(events1, ev)
+		}
 	})
 
-	_ = engine.Run(context.Background())
+	if err := engine1.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
 
+	if state.Meta().BinaryVersion != "v1.0.0-aaa111" {
+		t.Errorf("BinaryVersion after run = %q, want %q", state.Meta().BinaryVersion, "v1.0.0-aaa111")
+	}
+
+	// Resume with version B — should emit a warning.
+	var events2 []Event
+	engine2 := NewEngine(mock, state, EngineConfig{
+		Pipeline:      engine1.config.Pipeline,
+		Loader:        engine1.config.Loader,
+		Ticket:        engine1.config.Ticket,
+		Model:         "test-model",
+		WorkDir:       engine1.config.WorkDir,
+		BinaryVersion: "v1.1.0-bbb222",
+		Mode:          Autonomous,
+		SleepFunc:     func(time.Duration) {},
+		JitterFunc:    func(time.Duration) time.Duration { return 0 },
+		OnEvent: func(ev Event) {
+			events2 = append(events2, ev)
+		},
+	})
+
+	if err := engine2.Resume(context.Background(), "plan"); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+
+	// Should emit binary_version_mismatch event.
 	found := false
-	for _, ev := range events {
-		if ev.Kind == EventGenerationBudgetExceeded {
+	for _, ev := range events2 {
+		if ev.Kind == EventBinaryVersionMismatch {
 			found = true
-			if ev.Phase != "triage" {
-				t.Errorf("event phase = %q, want %q", ev.Phase, "triage")
+			if stored, ok := ev.Data["stored_version"].(string); !ok || stored != "v1.0.0-aaa111" {
+				t.Errorf("stored_version = %q, want %q", stored, "v1.0.0-aaa111")
 			}
+			if current, ok := ev.Data["current_version"].(string); !ok || current != "v1.1.0-bbb222" {
+				t.Errorf("current_version = %q, want %q", current, "v1.1.0-bbb222")
+			}
+			break
 		}
 	}
 	if !found {
-		t.Error("expected EventGenerationBudgetExceeded event")
+		t.Error("expected binary_version_mismatch event on resume with different version")
+	}
+
+	// After the check, meta should be updated to the new version.
+	if state.Meta().BinaryVersion != "v1.1.0-bbb222" {
+		t.Errorf("BinaryVersion after resume = %q, want %q", state.Meta().BinaryVersion, "v1.1.0-bbb222")
 	}
 }
 
-func TestEngine_GenerationBudgetWarning(t *testing.T) {
-	// Phase costs $7.5 with per-generation limit $8 → warning emitted (>= 90%).
+func TestEngine_BinaryVersionMismatch_NoWarnWhenSameVersion(t *testing.T) {
 	phases := []PhaseConfig{
 		{
 			Name:   "triage",
@@ -10030,53 +9916,72 @@ func TestEngine_GenerationBudgetWarning(t *testing.T) {
 			"triage": {{
 				result: &runner.RunResult{
 					Output:  json.RawMessage(`{"automatable":true}`),
-					RawText: "Triage done",
-					CostUSD: 7.5,
+					RawText: "Triage result",
+					CostUSD: 0.05,
 				},
 			}},
-			"plan": {{
-				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"tasks":[{"id":"1","description":"task"}]}`),
-					RawText: "Plan done",
-					CostUSD: 1.0,
+			"plan": {
+				{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"tasks":["task1"]}`),
+						RawText: "Plan result",
+						CostUSD: 0.10,
+					},
 				},
-			}},
+				{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"tasks":["task1"]}`),
+						RawText: "Plan result v2",
+						CostUSD: 0.10,
+					},
+				},
+			},
 		},
 	}
 
-	var events []Event
-	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
-		cfg.MaxCostPerGeneration = 8.0
-		cfg.OnEvent = func(ev Event) { events = append(events, ev) }
+	// First run.
+	engine1, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.BinaryVersion = "v1.0.0-same123"
 	})
 
-	err := engine.Run(context.Background())
-	if err != nil {
-		t.Fatalf("expected success, got: %v", err)
+	if err := engine1.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
 	}
 
-	found := false
-	for _, ev := range events {
-		if ev.Kind == EventGenerationBudgetWarning {
-			found = true
-			if ev.Phase != "triage" {
-				t.Errorf("event phase = %q, want %q", ev.Phase, "triage")
-			}
-		}
+	// Resume with the same version — should NOT emit a warning.
+	var events2 []Event
+	engine2 := NewEngine(mock, state, EngineConfig{
+		Pipeline:      engine1.config.Pipeline,
+		Loader:        engine1.config.Loader,
+		Ticket:        engine1.config.Ticket,
+		Model:         "test-model",
+		WorkDir:       engine1.config.WorkDir,
+		BinaryVersion: "v1.0.0-same123",
+		Mode:          Autonomous,
+		SleepFunc:     func(time.Duration) {},
+		JitterFunc:    func(time.Duration) time.Duration { return 0 },
+		OnEvent: func(ev Event) {
+			events2 = append(events2, ev)
+		},
+	})
+
+	if err := engine2.Resume(context.Background(), "plan"); err != nil {
+		t.Fatalf("Resume: %v", err)
 	}
-	if !found {
-		t.Error("expected EventGenerationBudgetWarning event")
+
+	for _, ev := range events2 {
+		if ev.Kind == EventBinaryVersionMismatch {
+			t.Error("should not emit binary_version_mismatch when version is unchanged")
+		}
 	}
 }
 
-func TestEngine_GenerationBudgetCapsRunnerOpts(t *testing.T) {
-	// When MaxCostPerGeneration is set and tighter than MaxCostPerPhase,
-	// the runner should receive MaxCostPerGeneration as its MaxBudgetUSD.
+func TestEngine_BinaryVersionMismatch_EmptyVersionSkipsCheck(t *testing.T) {
 	phases := []PhaseConfig{
 		{
 			Name:   "triage",
 			Prompt: "triage.md",
-			Retry:  RetryConfig{Transient: 0, Parse: 0, Semantic: 0},
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
 		},
 	}
 
@@ -10085,30 +9990,34 @@ func TestEngine_GenerationBudgetCapsRunnerOpts(t *testing.T) {
 			"triage": {{
 				result: &runner.RunResult{
 					Output:  json.RawMessage(`{"automatable":true}`),
-					RawText: "Triage done",
-					CostUSD: 1.0,
+					RawText: "Triage result",
+					CostUSD: 0.05,
 				},
 			}},
 		},
 	}
 
-	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
-		cfg.MaxCostUSD = 30.0          // ticket budget
-		cfg.MaxCostPerPhase = 15.0     // per-phase budget
-		cfg.MaxCostPerGeneration = 8.0 // per-gen budget (tightest)
+	var events []Event
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.BinaryVersion = "" // empty version
+		cfg.OnEvent = func(ev Event) {
+			events = append(events, ev)
+		}
 	})
 
-	err := engine.Run(context.Background())
-	if err != nil {
-		t.Fatalf("expected success, got: %v", err)
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
 	}
 
-	if len(mock.calls) == 0 {
-		t.Fatal("expected at least one runner call")
+	// Should not record anything in meta when version is empty.
+	if state.Meta().BinaryVersion != "" {
+		t.Errorf("BinaryVersion = %q, want empty", state.Meta().BinaryVersion)
 	}
 
-	triageCall := mock.calls[0]
-	if triageCall.MaxBudgetUSD != 8.0 {
-		t.Errorf("MaxBudgetUSD = %f, want 8.0 (per-generation limit)", triageCall.MaxBudgetUSD)
+	// Should not emit any mismatch event.
+	for _, ev := range events {
+		if ev.Kind == EventBinaryVersionMismatch {
+			t.Error("should not emit binary_version_mismatch with empty version")
+		}
 	}
 }

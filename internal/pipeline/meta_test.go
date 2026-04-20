@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -270,6 +271,56 @@ func writeTestMeta(t *testing.T, dir string, meta *PipelineMeta) {
 	}
 	if err := os.WriteFile(filepath.Join(dir, "meta.json"), data, 0644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
+	}
+}
+
+func TestMetaBinaryVersionRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "meta.json")
+
+	original := &PipelineMeta{
+		Ticket:        "PROJ-258",
+		BinaryVersion: "v1.2.3-abc123def456",
+		StartedAt:     time.Now().Truncate(time.Second),
+		Phases:        map[string]*PhaseState{},
+	}
+
+	if err := writeMeta(path, original); err != nil {
+		t.Fatalf("writeMeta: %v", err)
+	}
+
+	loaded, err := ReadMeta(path)
+	if err != nil {
+		t.Fatalf("ReadMeta: %v", err)
+	}
+
+	if loaded.BinaryVersion != original.BinaryVersion {
+		t.Errorf("BinaryVersion = %q, want %q", loaded.BinaryVersion, original.BinaryVersion)
+	}
+}
+
+func TestMetaBinaryVersionOmitEmpty(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "meta.json")
+
+	original := &PipelineMeta{
+		Ticket:    "PROJ-258",
+		StartedAt: time.Now().Truncate(time.Second),
+		Phases:    map[string]*PhaseState{},
+	}
+
+	if err := writeMeta(path, original); err != nil {
+		t.Fatalf("writeMeta: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+
+	// When BinaryVersion is empty, it should be omitted from JSON.
+	if strings.Contains(string(data), "binary_version") {
+		t.Errorf("meta.json should omit binary_version when empty, got:\n%s", data)
 	}
 }
 
