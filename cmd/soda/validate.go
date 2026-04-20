@@ -134,7 +134,7 @@ func validatePrompts(w io.Writer, result *validationResult, pl *pipeline.PhasePi
 	for _, phase := range pl.Phases {
 		// Phase prompt (skip parallel-review phases that have no top-level prompt).
 		if phase.Prompt != "" {
-			if err := validateSinglePrompt(loader, phase.Prompt); err != nil {
+			if err := validateSinglePrompt(loader, phase.Prompt, result); err != nil {
 				result.addError("prompts: phase %q: %v", phase.Name, err)
 				promptErrors++
 			}
@@ -144,7 +144,7 @@ func validatePrompts(w io.Writer, result *validationResult, pl *pipeline.PhasePi
 		for _, reviewer := range phase.Reviewers {
 			if reviewer.Prompt != "" {
 				label := fmt.Sprintf("%s/%s", phase.Name, reviewer.Name)
-				if err := validateSinglePrompt(loader, reviewer.Prompt); err != nil {
+				if err := validateSinglePrompt(loader, reviewer.Prompt, result); err != nil {
 					result.addError("prompts: reviewer %q: %v", label, err)
 					promptErrors++
 				}
@@ -158,10 +158,16 @@ func validatePrompts(w io.Writer, result *validationResult, pl *pipeline.PhasePi
 }
 
 // validateSinglePrompt loads a prompt file and validates it as a Go template.
-func validateSinglePrompt(loader *pipeline.PromptLoader, name string) error {
+// If the loader fell back from a broken override to the embedded default,
+// it records a warning so the user knows their custom file was rejected.
+func validateSinglePrompt(loader *pipeline.PromptLoader, name string, result *validationResult) error {
 	lr, err := loader.LoadWithSource(name)
 	if err != nil {
 		return fmt.Errorf("load %s: %w", name, err)
+	}
+
+	if lr.Fallback {
+		result.addWarning("prompts: %s", lr.FallbackReason)
 	}
 
 	if err := pipeline.ValidateTemplate(lr.Content); err != nil {
@@ -174,16 +180,22 @@ func validateSinglePrompt(loader *pipeline.PromptLoader, name string) error {
 // validateSchemas checks that each phase has a non-empty schema after
 // the resolution done in LoadPipeline (inline or generated).
 func validateSchemas(w io.Writer, result *validationResult, pl *pipeline.PhasePipeline) {
+	missingSchemas := 0
 	for _, phase := range pl.Phases {
 		if strings.TrimSpace(phase.Schema) == "" {
 			// Check if a generated schema exists.
 			if schemas.SchemaFor(phase.Name) == "" {
 				result.addWarning("schemas: phase %q has no schema", phase.Name)
+				missingSchemas++
 			}
 		}
 	}
 
-	fmt.Fprintln(w, "✓ schemas: all phases have schemas")
+	if missingSchemas == 0 {
+		fmt.Fprintln(w, "✓ schemas: all phases have schemas")
+	} else {
+		fmt.Fprintf(w, "⚠ schemas: %d phase(s) missing schemas\n", missingSchemas)
+	}
 }
 
 // validateContextFiles checks that each configured context file exists.

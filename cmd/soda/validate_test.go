@@ -210,6 +210,14 @@ func TestValidateSchemas_MissingSchemaWarning(t *testing.T) {
 	if !strings.Contains(result.warnings[0], "custom-phase") {
 		t.Errorf("warning should mention custom-phase, got: %s", result.warnings[0])
 	}
+
+	output := buf.String()
+	if !strings.Contains(output, "⚠ schemas: 1 phase(s) missing schemas") {
+		t.Errorf("expected missing schemas summary, got: %s", output)
+	}
+	if strings.Contains(output, "all phases have schemas") {
+		t.Error("should not claim all phases have schemas when some are missing")
+	}
 }
 
 func TestValidateSinglePrompt_ValidTemplate(t *testing.T) {
@@ -220,9 +228,13 @@ func TestValidateSinglePrompt_ValidTemplate(t *testing.T) {
 	}
 
 	loader := pipeline.NewPromptLoader(dir)
-	err := validateSinglePrompt(loader, "test.md")
+	result := &validationResult{}
+	err := validateSinglePrompt(loader, "test.md", result)
 	if err != nil {
 		t.Fatalf("expected no error for valid template, got: %v", err)
+	}
+	if len(result.warnings) != 0 {
+		t.Errorf("expected no warnings, got: %v", result.warnings)
 	}
 }
 
@@ -234,7 +246,8 @@ func TestValidateSinglePrompt_InvalidTemplate(t *testing.T) {
 	}
 
 	loader := pipeline.NewPromptLoader(dir)
-	err := validateSinglePrompt(loader, "bad.md")
+	result := &validationResult{}
+	err := validateSinglePrompt(loader, "bad.md", result)
 	if err == nil {
 		t.Fatal("expected error for invalid template, got nil")
 	}
@@ -243,12 +256,39 @@ func TestValidateSinglePrompt_InvalidTemplate(t *testing.T) {
 func TestValidateSinglePrompt_MissingFile(t *testing.T) {
 	dir := t.TempDir()
 	loader := pipeline.NewPromptLoader(dir)
-	err := validateSinglePrompt(loader, "missing.md")
+	result := &validationResult{}
+	err := validateSinglePrompt(loader, "missing.md", result)
 	if err == nil {
 		t.Fatal("expected error for missing file, got nil")
 	}
 	if !strings.Contains(err.Error(), "not found") {
 		t.Errorf("error should mention 'not found', got: %v", err)
+	}
+}
+
+func TestValidateSinglePrompt_FallbackWarning(t *testing.T) {
+	// Create two dirs: "override" with a broken template, "fallback" with a valid one.
+	overrideDir := t.TempDir()
+	fallbackDir := t.TempDir()
+
+	// Broken override (invalid template syntax).
+	if err := os.WriteFile(filepath.Join(overrideDir, "plan.md"), []byte("{{.Bad"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// Valid fallback.
+	if err := os.WriteFile(filepath.Join(fallbackDir, "plan.md"), []byte("Hello {{.Ticket.Key}}"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Override dir first, fallback dir second — matches real loader search order.
+	loader := pipeline.NewPromptLoader(overrideDir, fallbackDir)
+	result := &validationResult{}
+	err := validateSinglePrompt(loader, "plan.md", result)
+	if err != nil {
+		t.Fatalf("expected no error (should fall back), got: %v", err)
+	}
+	if len(result.warnings) == 0 {
+		t.Error("expected a warning about fallback, got none")
 	}
 }
 
