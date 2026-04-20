@@ -126,6 +126,7 @@ phases:
       - name: ai-harness
         prompt: prompts/review-harness.md
         focus: "prompt engineering, context budget, Claude CLI integration, sandbox, structured output"
+    reviewer_stagger: 5s
     rework:
       target: implement
     # Routing: critical/major → rework (route back to target),
