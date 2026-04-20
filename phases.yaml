@@ -119,6 +119,7 @@ phases:
       - plan
       - implement
       - verify
+    min_reviewers: 1  # phase succeeds if at least 1 reviewer passes; tolerate partial failures
     reviewers:
       - name: go-specialist
         prompt: prompts/review-go.md

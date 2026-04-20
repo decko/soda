@@ -125,6 +125,11 @@ func TestLoadPipeline(t *testing.T) {
 			}
 		}
 
+		// Verify review phase has min_reviewers config
+		if review.MinReviewers != 1 {
+			t.Errorf("review min_reviewers = %d, want 1", review.MinReviewers)
+		}
+
 		// Verify review phase has rework config
 		if review.Rework == nil {
 			t.Fatal("review rework config should not be nil")
@@ -398,6 +403,100 @@ func TestLoadPipeline(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "nonexistent") {
 			t.Errorf("error = %q, want mention of %q", err, "nonexistent")
+		}
+	})
+
+	t.Run("min_reviewers_parsed", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "phases.yaml")
+		content := `phases:
+  - name: review
+    type: parallel-review
+    prompt: prompts/review.md
+    timeout: 5m
+    min_reviewers: 1
+    reviewers:
+      - name: a
+        prompt: prompts/a.md
+        focus: "test"
+      - name: b
+        prompt: prompts/b.md
+        focus: "test"
+`
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		pipeline, err := LoadPipeline(path)
+		if err != nil {
+			t.Fatalf("LoadPipeline: %v", err)
+		}
+
+		if pipeline.Phases[0].MinReviewers != 1 {
+			t.Errorf("min_reviewers = %d, want 1", pipeline.Phases[0].MinReviewers)
+		}
+	})
+
+	t.Run("min_reviewers_defaults_to_zero", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "phases.yaml")
+		content := `phases:
+  - name: review
+    type: parallel-review
+    prompt: prompts/review.md
+    timeout: 5m
+    reviewers:
+      - name: a
+        prompt: prompts/a.md
+        focus: "test"
+`
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		pipeline, err := LoadPipeline(path)
+		if err != nil {
+			t.Fatalf("LoadPipeline: %v", err)
+		}
+
+		if pipeline.Phases[0].MinReviewers != 0 {
+			t.Errorf("min_reviewers = %d, want 0 (omitted)", pipeline.Phases[0].MinReviewers)
+		}
+	})
+
+	t.Run("errors_on_min_reviewers_exceeds_reviewers", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "phases.yaml")
+		content := `phases:
+  - name: review
+    type: parallel-review
+    prompt: prompts/review.md
+    timeout: 5m
+    min_reviewers: 3
+    reviewers:
+      - name: a
+        prompt: prompts/a.md
+        focus: "test"
+      - name: b
+        prompt: prompts/b.md
+        focus: "test"
+`
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		_, err := LoadPipeline(path)
+		if err == nil {
+			t.Fatal("expected error when min_reviewers exceeds number of reviewers")
+		}
+		if !strings.Contains(err.Error(), "min_reviewers") {
+			t.Errorf("error = %q, want mention of min_reviewers", err)
+		}
+		if !strings.Contains(err.Error(), "3") {
+			t.Errorf("error = %q, want mention of min_reviewers value", err)
+		}
+		if !strings.Contains(err.Error(), "2") {
+			t.Errorf("error = %q, want mention of reviewer count", err)
 		}
 	})
 

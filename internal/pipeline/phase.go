@@ -29,6 +29,7 @@ type PhaseConfig struct {
 	Polling         *PollingConfig    `yaml:"polling,omitempty"`
 	Reviewers       []ReviewerConfig  `yaml:"reviewers,omitempty"`
 	ReviewerStagger Duration          `yaml:"reviewer_stagger,omitempty"`
+	MinReviewers    int               `yaml:"min_reviewers,omitempty"` // minimum successful reviewers required; 0 means all must succeed
 	Rework          *ReworkConfig     `yaml:"rework,omitempty"`
 	Corrective      *CorrectiveConfig `yaml:"corrective,omitempty"`
 	FeedbackFrom    []string          `yaml:"feedback_from,omitempty"` // ordered feedback sources injected into prompt
@@ -129,6 +130,9 @@ func LoadPipeline(path string) (*PhasePipeline, error) {
 			if _, ok := phaseNames[src]; !ok {
 				return nil, fmt.Errorf("pipeline: phase %q feedback_from references unknown phase %q", phase.Name, src)
 			}
+		}
+		if phase.MinReviewers > len(phase.Reviewers) {
+			return nil, fmt.Errorf("pipeline: phase %q min_reviewers (%d) exceeds number of configured reviewers (%d)", phase.Name, phase.MinReviewers, len(phase.Reviewers))
 		}
 		if phase.Corrective != nil {
 			if _, ok := phaseNames[phase.Corrective.Phase]; !ok {
