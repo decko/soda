@@ -1986,7 +1986,7 @@ func (e *Engine) loadPriorReview(phaseName string) *schemas.ReviewOutput {
 	if err != nil {
 		e.emit(Event{
 			Phase: phaseName,
-			Kind:  EventPhaseFailed,
+			Kind:  "prior_review_warning",
 			Data:  map[string]any{"warning": "failed to read archived review result", "error": err.Error()},
 		})
 		return nil
@@ -1996,7 +1996,7 @@ func (e *Engine) loadPriorReview(phaseName string) *schemas.ReviewOutput {
 	if err := json.Unmarshal(raw, &prevReview); err != nil {
 		e.emit(Event{
 			Phase: phaseName,
-			Kind:  EventPhaseFailed,
+			Kind:  "prior_review_warning",
 			Data:  map[string]any{"warning": "failed to unmarshal archived review result", "error": err.Error()},
 		})
 		return nil
