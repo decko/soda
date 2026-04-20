@@ -365,6 +365,13 @@ func TestValidateTemplate(t *testing.T) {
 			t.Fatalf("ValidateTemplate: %v", err)
 		}
 	})
+
+	t.Run("valid_template_with_add_funcmap", func(t *testing.T) {
+		tmpl := `{{- if .ReworkFeedback}}{{range $idx, $fix := .ReworkFeedback.FixesRequired}}Finding {{add $idx 1}} of {{len $.ReworkFeedback.FixesRequired}}{{end}}{{- end}}`
+		if err := ValidateTemplate(tmpl); err != nil {
+			t.Fatalf("ValidateTemplate should accept add FuncMap: %v", err)
+		}
+	})
 }
 
 func TestRenderPrompt(t *testing.T) {
@@ -543,6 +550,16 @@ Verdict: {{.ReworkFeedback.Verdict}}
 		if !strings.Contains(result, "the feedback takes precedence") {
 			t.Error("implement prompt should say 'the feedback takes precedence' for review rework feedback")
 		}
+		// Sequential finding format.
+		if !strings.Contains(result, "Finding 1 of 1") {
+			t.Error("implement prompt should contain sequential 'Finding 1 of 1' header for single review finding")
+		}
+		if !strings.Contains(result, "Fix this finding, then verify before proceeding") {
+			t.Error("implement prompt should contain verify instruction for review finding")
+		}
+		if !strings.Contains(result, "Do NOT address multiple findings in a single edit") {
+			t.Error("implement prompt should contain sequential fix instruction for review source")
+		}
 	})
 
 	t.Run("rework_feedback_takes_precedence_over_plan_verify_source", func(t *testing.T) {
@@ -575,6 +592,16 @@ Verdict: {{.ReworkFeedback.Verdict}}
 		}
 		if !strings.Contains(result, "the feedback takes precedence") {
 			t.Error("implement prompt should say 'the feedback takes precedence' for verify rework feedback")
+		}
+		// Sequential finding format.
+		if !strings.Contains(result, "Finding 1 of 1") {
+			t.Error("implement prompt should contain sequential 'Finding 1 of 1' header for single verify fix")
+		}
+		if !strings.Contains(result, "Fix this finding, then verify before proceeding") {
+			t.Error("implement prompt should contain verify instruction for verify finding")
+		}
+		if !strings.Contains(result, "Do NOT address multiple findings in a single edit") {
+			t.Error("implement prompt should contain sequential fix instruction for verify source")
 		}
 	})
 
@@ -848,6 +875,16 @@ Context: {{.}}
 		if strings.Contains(result, "Implementation Plan") {
 			t.Error("patch prompt should NOT contain Implementation Plan section")
 		}
+		// Sequential finding format.
+		if !strings.Contains(result, "Finding 1 of 1") {
+			t.Error("patch prompt should contain sequential 'Finding 1 of 1' header")
+		}
+		if !strings.Contains(result, "Fix this finding, then verify before proceeding") {
+			t.Error("patch prompt should contain verify instruction")
+		}
+		if !strings.Contains(result, "Do NOT address multiple findings in a single edit") {
+			t.Error("patch prompt should contain sequential fix instruction")
+		}
 	})
 
 	t.Run("renders_patch_prompt_without_feedback", func(t *testing.T) {
@@ -919,6 +956,13 @@ Context: {{.}}
 		// Should also contain current findings.
 		if !strings.Contains(result, "missing error check") {
 			t.Errorf("implement prompt should contain current finding;\ngot: %s", result)
+		}
+		// Sequential finding format.
+		if !strings.Contains(result, "Finding 1 of 1") {
+			t.Error("implement prompt should contain sequential 'Finding 1 of 1' header for single review finding with prior cycles")
+		}
+		if !strings.Contains(result, "Fix this finding, then verify before proceeding") {
+			t.Error("implement prompt should contain verify instruction with prior cycles")
 		}
 	})
 
@@ -999,6 +1043,48 @@ Context: {{.}}
 		// Should also contain current fix.
 		if !strings.Contains(result, "fix the remaining test") {
 			t.Errorf("patch prompt should contain current fix;\ngot: %s", result)
+		}
+	})
+
+	t.Run("renders_multi_finding_sequential_indexing", func(t *testing.T) {
+		tmplBytes, err := os.ReadFile(filepath.Join("..", "..", "cmd", "soda", "embeds", "prompts", "implement.md"))
+		if err != nil {
+			t.Skipf("skipping: cannot read embedded implement.md: %v", err)
+		}
+		tmpl := string(tmplBytes)
+
+		data := PromptData{
+			Ticket:       TicketData{Key: "TEST-265", Summary: "multi-finding test"},
+			WorktreePath: "/tmp/wt",
+			Branch:       "soda/TEST-265",
+			BaseBranch:   "main",
+			Config:       PromptConfigData{Formatter: "gofmt -w .", TestCommand: "go test ./..."},
+			ReworkFeedback: &ReworkFeedback{
+				Source:  "review",
+				Verdict: "rework",
+				ReviewFindings: []schemas.ReviewFinding{
+					{Severity: "critical", File: "a.go", Line: 1, Issue: "issue-a", Suggestion: "fix-a", Source: "go-specialist"},
+					{Severity: "major", File: "b.go", Line: 2, Issue: "issue-b", Suggestion: "fix-b", Source: "go-specialist"},
+					{Severity: "minor", File: "c.go", Line: 3, Issue: "issue-c", Suggestion: "fix-c", Source: "go-specialist"},
+				},
+			},
+		}
+
+		result, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+
+		// All three sequential headers must be present.
+		for _, want := range []string{"Finding 1 of 3", "Finding 2 of 3", "Finding 3 of 3"} {
+			if !strings.Contains(result, want) {
+				t.Errorf("implement prompt should contain %q;\ngot: %s", want, result)
+			}
+		}
+		// Each finding should have the verify instruction.
+		count := strings.Count(result, "Fix this finding, then verify before proceeding")
+		if count != 3 {
+			t.Errorf("expected 3 verify instructions, got %d;\nresult: %s", count, result)
 		}
 	})
 }
