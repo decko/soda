@@ -102,6 +102,10 @@ func followEvents(w io.Writer, path string, sinceTime time.Time, phase string) e
 
 	for _, ev := range filterEvents(events, sinceTime, phase) {
 		fmt.Fprintln(w, pipeline.FormatEvent(ev))
+	}
+	// Check terminal events on the unfiltered list so that --phase filters
+	// cannot mask engine_completed / engine_failed (which have Phase="").
+	for _, ev := range events {
 		if isTerminalEvent(ev) {
 			return nil
 		}
@@ -127,6 +131,9 @@ func followEvents(w io.Writer, path string, sinceTime time.Time, phase string) e
 
 			for _, ev := range filterEvents(newEvents, sinceTime, phase) {
 				fmt.Fprintln(w, pipeline.FormatEvent(ev))
+			}
+			// Check terminal events on the unfiltered list.
+			for _, ev := range newEvents {
 				if isTerminalEvent(ev) {
 					return nil
 				}
@@ -140,7 +147,7 @@ func readEventsFromPath(path string) ([]pipeline.Event, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("log: no events file found at %s\nRun 'soda run <ticket>' to start a pipeline first.", path)
+			return nil, fmt.Errorf("log: no events file found at %s (run 'soda run <ticket>' first)", path)
 		}
 		return nil, fmt.Errorf("log: read events: %w", err)
 	}
@@ -227,5 +234,9 @@ func filterEvents(events []pipeline.Event, sinceTime time.Time, phase string) []
 // isTerminalEvent returns true for events that indicate the pipeline
 // has reached a terminal state.
 func isTerminalEvent(ev pipeline.Event) bool {
-	return ev.Kind == pipeline.EventEngineCompleted || ev.Kind == pipeline.EventEngineFailed
+	switch ev.Kind {
+	case pipeline.EventEngineCompleted, pipeline.EventEngineFailed, pipeline.EventPipelineTimeout:
+		return true
+	}
+	return false
 }
