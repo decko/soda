@@ -9834,6 +9834,52 @@ func TestEngine_FreshRunResetsStalePhaseCosts(t *testing.T) {
 	}
 }
 
+func TestEngine_RunEmitsPhaseCostsResetEvent(t *testing.T) {
+	// Run() must emit EventPhaseCostsReset after successfully resetting
+	// per-phase cumulative costs.
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "triage ok",
+					CostUSD: 0.10,
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(e Event) {
+			events = append(events, e)
+		}
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var found bool
+	for _, ev := range events {
+		if ev.Kind == EventPhaseCostsReset {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("phase_costs_reset event not emitted by Run()")
+	}
+}
+
 func TestEngine_ResumeDoesNotResetPhaseCosts(t *testing.T) {
 	// Resume() must NOT reset CumulativeCost — it continues an existing
 	// execution where rework-cycle tracking relies on accumulated costs.

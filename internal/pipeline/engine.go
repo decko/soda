@@ -327,6 +327,7 @@ func (e *Engine) Run(ctx context.Context) error {
 	if err := e.state.ResetPhaseCosts(); err != nil {
 		return fmt.Errorf("engine: reset phase costs: %w", err)
 	}
+	e.emit(Event{Kind: EventPhaseCostsReset})
 
 	e.reranPhases = make(map[string]bool)
 	e.emit(Event{Kind: EventEngineStarted})
