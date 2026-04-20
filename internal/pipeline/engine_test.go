@@ -4356,6 +4356,529 @@ func TestEngine_ParallelReview_InPipeline(t *testing.T) {
 	}
 }
 
+func TestEngine_ParallelReview_ReviewerRetryTransient(t *testing.T) {
+	// A reviewer that fails with a transient error should be retried
+	// using the phase's retry config. First call fails, second succeeds.
+	phases := []PhaseConfig{
+		{
+			Name:  "review",
+			Type:  "parallel-review",
+			Retry: RetryConfig{Transient: 1, Parse: 0, Semantic: 0},
+			Reviewers: []ReviewerConfig{
+				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+			},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"review/go-specialist": {
+				{err: &runner.TransientError{Reason: "rate_limit", Err: fmt.Errorf("429 too many requests")}},
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[],"verdict":"pass"}`),
+					RawText: "No issues found",
+					CostUSD: 0.15,
+				}},
+			},
+		},
+	}
+
+	var events []Event
+	engine, state := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(evt Event) {
+			events = append(events, evt)
+		}
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !state.IsCompleted("review") {
+		t.Error("review should be completed after transient retry succeeds")
+	}
+
+	// The runner should have been called twice (fail + success).
+	mock.mu.Lock()
+	callCount := len(mock.calls)
+	mock.mu.Unlock()
+	if callCount != 2 {
+		t.Errorf("runner called %d times, want 2", callCount)
+	}
+
+	// Should have a reviewer_retrying event.
+	hasRetrying := false
+	for _, evt := range events {
+		if evt.Kind == EventReviewerRetrying {
+			hasRetrying = true
+			reviewer, _ := evt.Data["reviewer"].(string)
+			if reviewer != "go-specialist" {
+				t.Errorf("reviewer_retrying event for %q, want %q", reviewer, "go-specialist")
+			}
+			category, _ := evt.Data["category"].(string)
+			if category != "transient" {
+				t.Errorf("retry category = %q, want %q", category, "transient")
+			}
+		}
+	}
+	if !hasRetrying {
+		t.Error("reviewer_retrying event not emitted")
+	}
+
+	// Should NOT have a reviewer_failed event since retry succeeded.
+	for _, evt := range events {
+		if evt.Kind == EventReviewerFailed {
+			t.Error("reviewer_failed event should not be emitted when retry succeeds")
+		}
+	}
+}
+
+func TestEngine_ParallelReview_ReviewerRetryParse(t *testing.T) {
+	// A reviewer that fails with a parse error should be retried with
+	// the error message appended to the user prompt.
+	phases := []PhaseConfig{
+		{
+			Name:  "review",
+			Type:  "parallel-review",
+			Retry: RetryConfig{Transient: 0, Parse: 1, Semantic: 0},
+			Reviewers: []ReviewerConfig{
+				{Name: "ai-harness", Prompt: "prompts/review-harness.md", Focus: "AI harness"},
+			},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"review/ai-harness": {
+				{err: &runner.ParseError{Err: fmt.Errorf("invalid JSON: unexpected EOF")}},
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[],"verdict":"pass"}`),
+					RawText: "Fixed output",
+					CostUSD: 0.12,
+				}},
+			},
+		},
+	}
+
+	var events []Event
+	engine, state := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(evt Event) {
+			events = append(events, evt)
+		}
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !state.IsCompleted("review") {
+		t.Error("review should be completed after parse retry succeeds")
+	}
+
+	// The second call should have the retry message appended.
+	mock.mu.Lock()
+	if len(mock.calls) != 2 {
+		t.Fatalf("runner called %d times, want 2", len(mock.calls))
+	}
+	secondPrompt := mock.calls[1].UserPrompt
+	mock.mu.Unlock()
+
+	if !strings.Contains(secondPrompt, "[RETRY]") {
+		t.Error("retry user prompt should contain [RETRY] marker")
+	}
+	if !strings.Contains(secondPrompt, "parse error") {
+		t.Error("retry user prompt should mention parse error")
+	}
+
+	// Should have a reviewer_retrying event with parse category.
+	hasRetrying := false
+	for _, evt := range events {
+		if evt.Kind == EventReviewerRetrying {
+			hasRetrying = true
+			category, _ := evt.Data["category"].(string)
+			if category != "parse" {
+				t.Errorf("retry category = %q, want %q", category, "parse")
+			}
+		}
+	}
+	if !hasRetrying {
+		t.Error("reviewer_retrying event not emitted for parse retry")
+	}
+}
+
+func TestEngine_ParallelReview_ReviewerRetrySemantic(t *testing.T) {
+	// A reviewer that fails with a semantic error should be retried with
+	// the semantic error message appended to the user prompt.
+	phases := []PhaseConfig{
+		{
+			Name:  "review",
+			Type:  "parallel-review",
+			Retry: RetryConfig{Transient: 0, Parse: 0, Semantic: 1},
+			Reviewers: []ReviewerConfig{
+				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+			},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"review/go-specialist": {
+				{err: &runner.SemanticError{Message: "response was empty"}},
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[],"verdict":"pass"}`),
+					RawText: "Now with content",
+					CostUSD: 0.18,
+				}},
+			},
+		},
+	}
+
+	var events []Event
+	engine, state := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(evt Event) {
+			events = append(events, evt)
+		}
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !state.IsCompleted("review") {
+		t.Error("review should be completed after semantic retry succeeds")
+	}
+
+	// The second call should have the semantic feedback appended.
+	mock.mu.Lock()
+	if len(mock.calls) != 2 {
+		t.Fatalf("runner called %d times, want 2", len(mock.calls))
+	}
+	secondPrompt := mock.calls[1].UserPrompt
+	mock.mu.Unlock()
+
+	if !strings.Contains(secondPrompt, "[RETRY]") {
+		t.Error("retry user prompt should contain [RETRY] marker")
+	}
+	if !strings.Contains(secondPrompt, "semantic error") {
+		t.Error("retry user prompt should mention semantic error")
+	}
+	if !strings.Contains(secondPrompt, "response was empty") {
+		t.Error("retry user prompt should include the semantic error message")
+	}
+
+	// Should have a reviewer_retrying event with semantic category.
+	hasRetrying := false
+	for _, evt := range events {
+		if evt.Kind == EventReviewerRetrying {
+			hasRetrying = true
+			category, _ := evt.Data["category"].(string)
+			if category != "semantic" {
+				t.Errorf("retry category = %q, want %q", category, "semantic")
+			}
+		}
+	}
+	if !hasRetrying {
+		t.Error("reviewer_retrying event not emitted for semantic retry")
+	}
+}
+
+func TestEngine_ParallelReview_ReviewerRetryExhausted(t *testing.T) {
+	// When all retries are exhausted, the reviewer should fail and the
+	// entire review phase should fail.
+	phases := []PhaseConfig{
+		{
+			Name:  "review",
+			Type:  "parallel-review",
+			Retry: RetryConfig{Transient: 1, Parse: 0, Semantic: 0},
+			Reviewers: []ReviewerConfig{
+				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+			},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"review/go-specialist": {
+				{err: &runner.TransientError{Reason: "timeout", Err: fmt.Errorf("connection timeout")}},
+				{err: &runner.TransientError{Reason: "timeout", Err: fmt.Errorf("connection timeout again")}},
+			},
+		},
+	}
+
+	var events []Event
+	engine, state := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(evt Event) {
+			events = append(events, evt)
+		}
+	})
+
+	err := engine.Run(context.Background())
+	if err == nil {
+		t.Fatal("expected error when reviewer retries are exhausted")
+	}
+
+	if !strings.Contains(err.Error(), "go-specialist") {
+		t.Errorf("error should mention failing reviewer, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "no retries left") {
+		t.Errorf("error should mention retries exhausted, got: %v", err)
+	}
+
+	// Phase should be marked failed.
+	ps := state.Meta().Phases["review"]
+	if ps == nil {
+		t.Fatal("review phase state should exist")
+	}
+	if ps.Status != PhaseFailed {
+		t.Errorf("review status = %q, want %q", ps.Status, PhaseFailed)
+	}
+
+	// Should have one retry event and one failed event.
+	retryCount := 0
+	failedCount := 0
+	for _, evt := range events {
+		if evt.Kind == EventReviewerRetrying {
+			retryCount++
+		}
+		if evt.Kind == EventReviewerFailed {
+			failedCount++
+		}
+	}
+	if retryCount != 1 {
+		t.Errorf("reviewer_retrying events = %d, want 1", retryCount)
+	}
+	if failedCount != 1 {
+		t.Errorf("reviewer_failed events = %d, want 1", failedCount)
+	}
+}
+
+func TestEngine_ParallelReview_OneReviewerRetriesOtherSucceeds(t *testing.T) {
+	// When one reviewer retries and recovers, and another succeeds on
+	// first try, the phase should complete successfully with merged findings.
+	phases := []PhaseConfig{
+		{
+			Name:  "review",
+			Type:  "parallel-review",
+			Retry: RetryConfig{Transient: 1, Parse: 0, Semantic: 0},
+			Reviewers: []ReviewerConfig{
+				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+				{Name: "ai-harness", Prompt: "prompts/review-harness.md", Focus: "AI harness"},
+			},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"review/go-specialist": {
+				{err: &runner.TransientError{Reason: "overloaded", Err: fmt.Errorf("server busy")}},
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[{"severity":"minor","file":"main.go","line":1,"issue":"naming"}],"verdict":"pass"}`),
+					RawText: "Minor issue found",
+					CostUSD: 0.20,
+				}},
+			},
+			"review/ai-harness": {
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[],"verdict":"pass"}`),
+					RawText: "No issues",
+					CostUSD: 0.10,
+				}},
+			},
+		},
+	}
+
+	var events []Event
+	engine, state := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(evt Event) {
+			events = append(events, evt)
+		}
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !state.IsCompleted("review") {
+		t.Error("review should be completed")
+	}
+
+	// Cost should include both reviewers (only the successful call counts).
+	ps := state.Meta().Phases["review"]
+	if ps == nil {
+		t.Fatal("review phase state missing")
+	}
+	if !approxEqual(ps.Cost, 0.30) {
+		t.Errorf("review cost = %v, want 0.30", ps.Cost)
+	}
+
+	// Should have retrying event for go-specialist.
+	hasGoRetry := false
+	for _, evt := range events {
+		if evt.Kind == EventReviewerRetrying {
+			reviewer, _ := evt.Data["reviewer"].(string)
+			if reviewer == "go-specialist" {
+				hasGoRetry = true
+			}
+		}
+	}
+	if !hasGoRetry {
+		t.Error("expected reviewer_retrying event for go-specialist")
+	}
+
+	// Both reviewers should have completed events.
+	completedReviewers := make(map[string]bool)
+	for _, evt := range events {
+		if evt.Kind == EventReviewerCompleted {
+			reviewer, _ := evt.Data["reviewer"].(string)
+			completedReviewers[reviewer] = true
+		}
+	}
+	if !completedReviewers["go-specialist"] {
+		t.Error("go-specialist should have completed event")
+	}
+	if !completedReviewers["ai-harness"] {
+		t.Error("ai-harness should have completed event")
+	}
+
+	// Merged result should have 1 finding from go-specialist.
+	result, err := state.ReadResult("review")
+	if err != nil {
+		t.Fatalf("ReadResult: %v", err)
+	}
+	var reviewOutput struct {
+		Verdict  string `json:"verdict"`
+		Findings []struct {
+			Source string `json:"source"`
+		} `json:"findings"`
+	}
+	if err := json.Unmarshal(result, &reviewOutput); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(reviewOutput.Findings) != 1 {
+		t.Errorf("findings count = %d, want 1", len(reviewOutput.Findings))
+	}
+	if reviewOutput.Verdict != "pass-with-follow-ups" {
+		t.Errorf("verdict = %q, want %q", reviewOutput.Verdict, "pass-with-follow-ups")
+	}
+}
+
+func TestEngine_ParallelReview_ReviewerRetryZeroConfig(t *testing.T) {
+	// When retry config is all zeros, a single failure should immediately
+	// fail the reviewer without any retries (preserves backward compatibility).
+	phases := []PhaseConfig{
+		{
+			Name:  "review",
+			Type:  "parallel-review",
+			Retry: RetryConfig{Transient: 0, Parse: 0, Semantic: 0},
+			Reviewers: []ReviewerConfig{
+				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+			},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"review/go-specialist": {
+				{err: &runner.TransientError{Reason: "timeout", Err: fmt.Errorf("connection timeout")}},
+			},
+		},
+	}
+
+	var events []Event
+	engine, _ := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(evt Event) {
+			events = append(events, evt)
+		}
+	})
+
+	err := engine.Run(context.Background())
+	if err == nil {
+		t.Fatal("expected error when reviewer fails with zero retries")
+	}
+
+	// Should have NO reviewer_retrying events.
+	for _, evt := range events {
+		if evt.Kind == EventReviewerRetrying {
+			t.Error("reviewer_retrying event should NOT be emitted with zero retry config")
+		}
+	}
+
+	// Runner should have been called exactly once.
+	mock.mu.Lock()
+	callCount := len(mock.calls)
+	mock.mu.Unlock()
+	if callCount != 1 {
+		t.Errorf("runner called %d times, want 1", callCount)
+	}
+}
+
+func TestEngine_ParallelReview_ReviewerRetryMultipleCategories(t *testing.T) {
+	// Test that different error categories consume their own retry buckets
+	// independently: transient then parse should use one from each.
+	phases := []PhaseConfig{
+		{
+			Name:  "review",
+			Type:  "parallel-review",
+			Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 0},
+			Reviewers: []ReviewerConfig{
+				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+			},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"review/go-specialist": {
+				{err: &runner.TransientError{Reason: "rate_limit", Err: fmt.Errorf("429")}},
+				{err: &runner.ParseError{Err: fmt.Errorf("bad json")}},
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[],"verdict":"pass"}`),
+					RawText: "OK",
+					CostUSD: 0.10,
+				}},
+			},
+		},
+	}
+
+	var events []Event
+	engine, state := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(evt Event) {
+			events = append(events, evt)
+		}
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !state.IsCompleted("review") {
+		t.Error("review should be completed after mixed retries succeed")
+	}
+
+	// Runner should have been called 3 times total.
+	mock.mu.Lock()
+	callCount := len(mock.calls)
+	mock.mu.Unlock()
+	if callCount != 3 {
+		t.Errorf("runner called %d times, want 3", callCount)
+	}
+
+	// Should have 2 reviewer_retrying events with different categories.
+	retryCategories := make(map[string]int)
+	for _, evt := range events {
+		if evt.Kind == EventReviewerRetrying {
+			category, _ := evt.Data["category"].(string)
+			retryCategories[category]++
+		}
+	}
+	if retryCategories["transient"] != 1 {
+		t.Errorf("transient retries = %d, want 1", retryCategories["transient"])
+	}
+	if retryCategories["parse"] != 1 {
+		t.Errorf("parse retries = %d, want 1", retryCategories["parse"])
+	}
+}
+
 func TestComputeReviewVerdict(t *testing.T) {
 	tests := []struct {
 		name     string
