@@ -580,6 +580,140 @@ func TestFollowEvents_ResumedPipeline(t *testing.T) {
 	}
 }
 
+func TestFollowEvents_PollLoop(t *testing.T) {
+	// Verify the core polling behavior: events arriving *after*
+	// followEvents starts are picked up and printed. This exercises the
+	// poll loop (ticker + readEventsFromOffset), which prior tests did not
+	// cover because they pre-wrote all events including the terminal event.
+	stateDir := t.TempDir()
+	ticketDir := filepath.Join(stateDir, "TEST-POLL")
+	if err := os.MkdirAll(ticketDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	ts := time.Date(2026, 4, 11, 10, 0, 0, 0, time.UTC)
+	// Write initial non-terminal events.
+	initialEvents := []pipeline.Event{
+		{Timestamp: ts, Kind: pipeline.EventEngineStarted},
+		{Timestamp: ts.Add(time.Second), Phase: "triage", Kind: pipeline.EventPhaseStarted},
+	}
+	writeTestEvents(t, ticketDir, initialEvents)
+
+	eventsPath := filepath.Join(ticketDir, "events.jsonl")
+	var buf bytes.Buffer
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- followEvents(&buf, eventsPath, time.Time{}, "", 0)
+	}()
+
+	// Wait for followEvents to read initial events and enter the poll loop,
+	// then append more events incrementally.
+	time.Sleep(200 * time.Millisecond)
+	appendTestEvent(t, eventsPath, pipeline.Event{
+		Timestamp: ts.Add(2 * time.Second),
+		Phase:     "triage",
+		Kind:      pipeline.EventPhaseCompleted,
+	})
+
+	time.Sleep(200 * time.Millisecond)
+	appendTestEvent(t, eventsPath, pipeline.Event{
+		Timestamp: ts.Add(3 * time.Second),
+		Kind:      pipeline.EventEngineCompleted,
+	})
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("followEvents: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("followEvents did not return after terminal event was appended")
+	}
+
+	output := buf.String()
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	// 2 initial + 2 polled = 4 events total.
+	if len(lines) != 4 {
+		t.Fatalf("expected 4 lines, got %d:\n%s", len(lines), output)
+	}
+	// Verify the initial events are printed first.
+	if !strings.Contains(lines[0], "engine_started") {
+		t.Errorf("line 0 should contain engine_started, got: %s", lines[0])
+	}
+	if !strings.Contains(lines[1], "[triage] phase_started") {
+		t.Errorf("line 1 should contain [triage] phase_started, got: %s", lines[1])
+	}
+	// Verify polled events are printed.
+	if !strings.Contains(lines[2], "[triage] phase_completed") {
+		t.Errorf("line 2 should contain [triage] phase_completed, got: %s", lines[2])
+	}
+	if !strings.Contains(lines[3], "engine_completed") {
+		t.Errorf("line 3 should contain engine_completed, got: %s", lines[3])
+	}
+}
+
+func TestFollowEvents_PollLoop_FileCreatedLater(t *testing.T) {
+	// Verify that follow mode handles the case where the events file
+	// doesn't exist yet when followEvents starts (e.g., pipeline hasn't
+	// started writing events yet). The poll loop should wait until the
+	// file appears.
+	stateDir := t.TempDir()
+	ticketDir := filepath.Join(stateDir, "TEST-NOPOLL")
+	if err := os.MkdirAll(ticketDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	eventsPath := filepath.Join(ticketDir, "events.jsonl")
+	var buf bytes.Buffer
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- followEvents(&buf, eventsPath, time.Time{}, "", 0)
+	}()
+
+	ts := time.Date(2026, 4, 11, 10, 0, 0, 0, time.UTC)
+
+	// Wait, then create the file with events.
+	time.Sleep(200 * time.Millisecond)
+	writeTestEvents(t, ticketDir, []pipeline.Event{
+		{Timestamp: ts, Kind: pipeline.EventEngineStarted},
+	})
+
+	time.Sleep(200 * time.Millisecond)
+	appendTestEvent(t, eventsPath, pipeline.Event{
+		Timestamp: ts.Add(time.Second),
+		Kind:      pipeline.EventEngineCompleted,
+	})
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("followEvents: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("followEvents did not return after events file was created and terminal event appended")
+	}
+
+	output := buf.String()
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines, got %d:\n%s", len(lines), output)
+	}
+	if !strings.Contains(lines[0], "engine_started") {
+		t.Errorf("line 0 should contain engine_started, got: %s", lines[0])
+	}
+	if !strings.Contains(lines[1], "engine_completed") {
+		t.Errorf("line 1 should contain engine_completed, got: %s", lines[1])
+	}
+}
+
 func TestIsTerminalEvent(t *testing.T) {
 	tests := []struct {
 		kind string
