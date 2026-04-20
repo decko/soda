@@ -29,6 +29,7 @@ type PhaseConfig struct {
 	Polling         *PollingConfig    `yaml:"polling,omitempty"`
 	Reviewers       []ReviewerConfig  `yaml:"reviewers,omitempty"`
 	ReviewerStagger Duration          `yaml:"reviewer_stagger,omitempty"`
+	MinReviewers    int               `yaml:"min_reviewers,omitempty"` // minimum successful reviewers required; 0 means all must succeed
 	Rework          *ReworkConfig     `yaml:"rework,omitempty"`
 	Corrective      *CorrectiveConfig `yaml:"corrective,omitempty"`
 	FeedbackFrom    []string          `yaml:"feedback_from,omitempty"` // ordered feedback sources injected into prompt
