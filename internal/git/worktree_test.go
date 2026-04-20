@@ -232,6 +232,92 @@ func TestDeleteBranch(t *testing.T) {
 	})
 }
 
+func TestDeleteRemoteBranch(t *testing.T) {
+	t.Run("deletes_existing_remote_branch", func(t *testing.T) {
+		// Create a "remote" bare repo and a local clone that pushes a branch.
+		bareDir := t.TempDir()
+		run(t, bareDir, "git", "init", "--bare", "-b", "main")
+
+		localDir := t.TempDir()
+		run(t, localDir, "git", "clone", bareDir, ".")
+		run(t, localDir, "git", "config", "user.email", "test@test.com")
+		run(t, localDir, "git", "config", "user.name", "Test")
+		run(t, localDir, "git", "commit", "--allow-empty", "-m", "init")
+		run(t, localDir, "git", "push", "origin", "main")
+
+		// Create and push a feature branch.
+		run(t, localDir, "git", "checkout", "-b", "feat/remote-delete")
+		run(t, localDir, "git", "commit", "--allow-empty", "-m", "feature commit")
+		run(t, localDir, "git", "push", "origin", "feat/remote-delete")
+
+		// Verify remote branch exists.
+		cmd := exec.Command("git", "ls-remote", "--heads", "origin", "feat/remote-delete")
+		cmd.Dir = localDir
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("git ls-remote: %v", err)
+		}
+		if len(out) == 0 {
+			t.Fatal("remote branch feat/remote-delete should exist before deletion")
+		}
+
+		// Delete the remote branch.
+		if err := DeleteRemoteBranch(context.Background(), localDir, "origin", "feat/remote-delete"); err != nil {
+			t.Fatalf("DeleteRemoteBranch: %v", err)
+		}
+
+		// Verify it no longer exists.
+		cmd = exec.Command("git", "ls-remote", "--heads", "origin", "feat/remote-delete")
+		cmd.Dir = localDir
+		out, err = cmd.Output()
+		if err != nil {
+			t.Fatalf("git ls-remote after delete: %v", err)
+		}
+		if len(out) != 0 {
+			t.Error("remote branch feat/remote-delete should not exist after deletion")
+		}
+	})
+
+	t.Run("respects_context_cancellation", func(t *testing.T) {
+		// Create a "remote" bare repo and a local clone.
+		bareDir := t.TempDir()
+		run(t, bareDir, "git", "init", "--bare", "-b", "main")
+
+		localDir := t.TempDir()
+		run(t, localDir, "git", "clone", bareDir, ".")
+		run(t, localDir, "git", "config", "user.email", "test@test.com")
+		run(t, localDir, "git", "config", "user.name", "Test")
+		run(t, localDir, "git", "commit", "--allow-empty", "-m", "init")
+		run(t, localDir, "git", "push", "origin", "main")
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		err := DeleteRemoteBranch(ctx, localDir, "origin", "feat/cancel-test")
+		if err == nil {
+			t.Fatal("expected error from cancelled context")
+		}
+	})
+
+	t.Run("no_error_for_nonexistent_remote_branch", func(t *testing.T) {
+		// Create a "remote" bare repo and a local clone.
+		bareDir := t.TempDir()
+		run(t, bareDir, "git", "init", "--bare", "-b", "main")
+
+		localDir := t.TempDir()
+		run(t, localDir, "git", "clone", bareDir, ".")
+		run(t, localDir, "git", "config", "user.email", "test@test.com")
+		run(t, localDir, "git", "config", "user.name", "Test")
+		run(t, localDir, "git", "commit", "--allow-empty", "-m", "init")
+		run(t, localDir, "git", "push", "origin", "main")
+
+		err := DeleteRemoteBranch(context.Background(), localDir, "origin", "feat/does-not-exist")
+		if err != nil {
+			t.Fatalf("DeleteRemoteBranch should not error for nonexistent branch: %v", err)
+		}
+	})
+}
+
 func TestNeedsMergeWithBase(t *testing.T) {
 	t.Run("no_conflicts_when_base_unchanged", func(t *testing.T) {
 		repoDir := initGitRepo(t)
