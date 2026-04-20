@@ -88,9 +88,10 @@ type SandboxLimits struct {
 
 // LimitsConfig holds budget and duration limits.
 type LimitsConfig struct {
-	MaxCostPerTicket    float64 `yaml:"max_cost_per_ticket"`
-	MaxCostPerPhase     float64 `yaml:"max_cost_per_phase"`
-	MaxPipelineDuration string  `yaml:"max_pipeline_duration,omitempty"` // Go duration string (e.g., "2h", "90m"); 0 or empty means no limit
+	MaxCostPerTicket     float64 `yaml:"max_cost_per_ticket"`
+	MaxCostPerPhase      float64 `yaml:"max_cost_per_phase"`
+	MaxCostPerGeneration float64 `yaml:"max_cost_per_generation,omitempty"` // per-attempt cost cap; 0 means disabled
+	MaxPipelineDuration  string  `yaml:"max_pipeline_duration,omitempty"`   // Go duration string (e.g., "2h", "90m"); 0 or empty means no limit
 }
 
 // RepoConfig holds per-repo configuration.

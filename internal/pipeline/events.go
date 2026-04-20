@@ -32,6 +32,8 @@ const (
 	EventBudgetWarning            = "budget_warning"
 	EventPhaseBudgetWarning       = "phase_budget_warning"
 	EventPhaseBudgetExceeded      = "phase_budget_exceeded"
+	EventGenerationBudgetWarning  = "generation_budget_warning"
+	EventGenerationBudgetExceeded = "generation_budget_exceeded"
 	EventCheckpointPause          = "checkpoint_pause"
 	EventWorktreeCreated          = "worktree_created"
 	EventMonitorSkipped           = "monitor_skipped"
