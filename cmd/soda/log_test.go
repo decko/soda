@@ -134,6 +134,10 @@ func TestRunLog_MissingFile(t *testing.T) {
 	if !strings.Contains(errMsg, "events.jsonl") {
 		t.Errorf("error should mention events.jsonl path, got: %s", errMsg)
 	}
+	// Error should be single-line (no embedded newlines).
+	if strings.Contains(errMsg, "\n") {
+		t.Errorf("error message should be single-line, got: %s", errMsg)
+	}
 }
 
 func TestRunLog_PhaseFilter(t *testing.T) {
@@ -300,6 +304,75 @@ func TestFollowEvents_TerminalFailed(t *testing.T) {
 	}
 }
 
+func TestFollowEvents_PhaseFilterWithTerminalEvent(t *testing.T) {
+	// Regression test: --phase filter must not prevent follow mode from
+	// detecting terminal events (engine_completed has Phase="").
+	stateDir := t.TempDir()
+	ticketDir := filepath.Join(stateDir, "TEST-7")
+	if err := os.MkdirAll(ticketDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	ts := time.Date(2026, 4, 11, 10, 0, 0, 0, time.UTC)
+	events := []pipeline.Event{
+		{Timestamp: ts, Kind: pipeline.EventEngineStarted},
+		{Timestamp: ts.Add(time.Second), Phase: "triage", Kind: pipeline.EventPhaseStarted},
+		{Timestamp: ts.Add(2 * time.Second), Phase: "triage", Kind: pipeline.EventPhaseCompleted},
+		{Timestamp: ts.Add(3 * time.Second), Kind: pipeline.EventEngineCompleted},
+	}
+	writeTestEvents(t, ticketDir, events)
+
+	var buf bytes.Buffer
+	eventsPath := filepath.Join(ticketDir, "events.jsonl")
+
+	// With --phase triage, engine_completed (Phase="") is filtered from
+	// output but must still cause follow mode to exit.
+	err := followEvents(&buf, eventsPath, time.Time{}, "triage")
+	if err != nil {
+		t.Fatalf("followEvents: %v", err)
+	}
+
+	output := buf.String()
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	// Only triage events should be printed (engine_completed is filtered).
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 triage lines, got %d:\n%s", len(lines), output)
+	}
+	for _, line := range lines {
+		if !strings.Contains(line, "[triage]") {
+			t.Errorf("expected [triage] in every line, got: %s", line)
+		}
+	}
+}
+
+func TestFollowEvents_PipelineTimeoutTerminal(t *testing.T) {
+	stateDir := t.TempDir()
+	ticketDir := filepath.Join(stateDir, "TEST-8")
+	if err := os.MkdirAll(ticketDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	ts := time.Date(2026, 4, 11, 10, 0, 0, 0, time.UTC)
+	events := []pipeline.Event{
+		{Timestamp: ts, Kind: pipeline.EventEngineStarted},
+		{Timestamp: ts.Add(time.Second), Kind: pipeline.EventPipelineTimeout, Data: map[string]any{"limit": "30m"}},
+	}
+	writeTestEvents(t, ticketDir, events)
+
+	var buf bytes.Buffer
+	eventsPath := filepath.Join(ticketDir, "events.jsonl")
+
+	err := followEvents(&buf, eventsPath, time.Time{}, "")
+	if err != nil {
+		t.Fatalf("followEvents: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "pipeline_timeout") {
+		t.Errorf("output should contain pipeline_timeout, got: %s", output)
+	}
+}
+
 func TestIsTerminalEvent(t *testing.T) {
 	tests := []struct {
 		kind string
@@ -307,6 +380,7 @@ func TestIsTerminalEvent(t *testing.T) {
 	}{
 		{pipeline.EventEngineCompleted, true},
 		{pipeline.EventEngineFailed, true},
+		{pipeline.EventPipelineTimeout, true},
 		{pipeline.EventEngineStarted, false},
 		{pipeline.EventPhaseStarted, false},
 		{pipeline.EventPhaseCompleted, false},
