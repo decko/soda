@@ -73,3 +73,7 @@ Embedded content lives in `cmd/soda/embeds/`:
 - `prompts/*.md` — phase prompt templates (go:embed as `embed.FS`)
 
 Resolution order: user config dir > working dir > embedded defaults.
+
+## Operational runbook
+
+See [RUNBOOK.md](./RUNBOOK.md) for troubleshooting, common failure scenarios, resume procedures, cost management, and event log analysis.
