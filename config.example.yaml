@@ -42,7 +42,8 @@ sandbox:
 limits:
   max_cost_per_ticket: 30.00
   max_cost_per_phase: 15.00
-  max_pipeline_duration: "2h"  # max wall-clock time for the entire pipeline; empty or "0" means no limit
+  max_cost_per_generation: 8.00  # per-attempt cost cap (resets each generation); 0 or omitted means disabled
+  max_pipeline_duration: "2h"    # max wall-clock time for the entire pipeline; empty or "0" means no limit
 
 # Worktrees
 worktree_dir: .worktrees
