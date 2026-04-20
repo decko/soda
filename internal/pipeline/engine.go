@@ -1918,6 +1918,9 @@ func (e *Engine) runParallelReview(ctx context.Context, phase PhaseConfig) error
 	results := make([]reviewerResult, len(phase.Reviewers))
 
 	for idx, reviewer := range phase.Reviewers {
+		if idx > 0 && phase.ReviewerStagger.Duration > 0 {
+			e.config.SleepFunc(phase.ReviewerStagger.Duration)
+		}
 		wg.Add(1)
 		go func(idx int, reviewer ReviewerConfig) {
 			defer wg.Done()
