@@ -182,8 +182,8 @@ func DeleteBranch(repoDir, branch string) error {
 // DeleteRemoteBranch deletes a branch on the specified remote by running
 // "git push <remote> --delete <branch>". Returns nil if the branch was
 // deleted or did not exist on the remote.
-func DeleteRemoteBranch(repoDir, remote, branch string) error {
-	cmd := exec.Command("git", "push", remote, "--delete", branch)
+func DeleteRemoteBranch(ctx context.Context, repoDir, remote, branch string) error {
+	cmd := exec.CommandContext(ctx, "git", "push", remote, "--delete", branch)
 	cmd.Dir = repoDir
 	output, err := cmd.CombinedOutput()
 	if err != nil {

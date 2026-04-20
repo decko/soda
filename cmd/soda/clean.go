@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -29,11 +30,12 @@ func newCleanCmd() *cobra.Command {
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
 			force, _ := cmd.Flags().GetBool("force")
 
+			ctx := cmd.Context()
 			if len(args) == 1 {
-				return cleanTicket(cfg.StateDir, args[0], dryRun, force)
+				return cleanTicket(ctx, cfg.StateDir, args[0], dryRun, force)
 			}
 			if all {
-				return cleanAll(cfg.StateDir, dryRun, force)
+				return cleanAll(ctx, cfg.StateDir, dryRun, force)
 			}
 			return fmt.Errorf("specify a ticket key or use --all")
 		},
@@ -46,7 +48,7 @@ func newCleanCmd() *cobra.Command {
 	return cmd
 }
 
-func cleanAll(stateDir string, dryRun, force bool) error {
+func cleanAll(ctx context.Context, stateDir string, dryRun, force bool) error {
 	entries, err := os.ReadDir(stateDir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -63,7 +65,7 @@ func cleanAll(stateDir string, dryRun, force bool) error {
 		if !entry.IsDir() {
 			continue
 		}
-		if err := cleanTicket(stateDir, entry.Name(), dryRun, force); err != nil {
+		if err := cleanTicket(ctx, stateDir, entry.Name(), dryRun, force); err != nil {
 			if !errors.Is(err, errSkipped) {
 				fmt.Fprintf(os.Stderr, "Warning: %s: %v\n", entry.Name(), err)
 			}
@@ -78,7 +80,7 @@ func cleanAll(stateDir string, dryRun, force bool) error {
 	return nil
 }
 
-func cleanTicket(stateDir, ticketKey string, dryRun, force bool) error {
+func cleanTicket(ctx context.Context, stateDir, ticketKey string, dryRun, force bool) error {
 	ticketDir := filepath.Join(stateDir, ticketKey)
 	metaPath := filepath.Join(ticketDir, "meta.json")
 
@@ -135,7 +137,7 @@ func cleanTicket(stateDir, ticketKey string, dryRun, force bool) error {
 				} else {
 					fmt.Printf("Deleted branch: %s\n", meta.Branch)
 				}
-				if rmErr := sodagit.DeleteRemoteBranch(repoDir, "origin", meta.Branch); rmErr != nil {
+				if rmErr := sodagit.DeleteRemoteBranch(ctx, repoDir, "origin", meta.Branch); rmErr != nil {
 					fmt.Fprintf(os.Stderr, "Warning: git remote branch delete origin/%s: %v\n", meta.Branch, rmErr)
 				} else {
 					fmt.Printf("Deleted remote branch: origin/%s\n", meta.Branch)

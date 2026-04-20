@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -96,7 +97,7 @@ func TestCleanTicket_TerminalState(t *testing.T) {
 		},
 	})
 
-	err := cleanTicket(stateDir, "TICKET-1", false, false)
+	err := cleanTicket(context.Background(), stateDir, "TICKET-1", false, false)
 	if err != nil {
 		t.Fatalf("cleanTicket: %v", err)
 	}
@@ -117,7 +118,7 @@ func TestCleanTicket_SkipsNonTerminal(t *testing.T) {
 		},
 	})
 
-	err := cleanTicket(stateDir, "TICKET-1", false, false)
+	err := cleanTicket(context.Background(), stateDir, "TICKET-1", false, false)
 	if err != errSkipped {
 		t.Fatalf("expected errSkipped, got %v", err)
 	}
@@ -138,7 +139,7 @@ func TestCleanTicket_ForceBypassesTerminalCheck(t *testing.T) {
 		},
 	})
 
-	err := cleanTicket(stateDir, "TICKET-1", false, true)
+	err := cleanTicket(context.Background(), stateDir, "TICKET-1", false, true)
 	if err != nil {
 		t.Fatalf("cleanTicket with force: %v", err)
 	}
@@ -159,7 +160,7 @@ func TestCleanTicket_DryRun(t *testing.T) {
 		},
 	})
 
-	err := cleanTicket(stateDir, "TICKET-1", true, false)
+	err := cleanTicket(context.Background(), stateDir, "TICKET-1", true, false)
 	if err != nil {
 		t.Fatalf("cleanTicket dry-run: %v", err)
 	}
@@ -186,7 +187,7 @@ func TestCleanAll_CleansTerminal(t *testing.T) {
 		},
 	})
 
-	err := cleanAll(stateDir, false, false)
+	err := cleanAll(context.Background(), stateDir, false, false)
 	if err != nil {
 		t.Fatalf("cleanAll: %v", err)
 	}
@@ -217,7 +218,7 @@ func TestCleanAll_ForceRemovesAll(t *testing.T) {
 		},
 	})
 
-	err := cleanAll(stateDir, false, true)
+	err := cleanAll(context.Background(), stateDir, false, true)
 	if err != nil {
 		t.Fatalf("cleanAll with force: %v", err)
 	}
@@ -232,7 +233,7 @@ func TestCleanAll_ForceRemovesAll(t *testing.T) {
 }
 
 func TestCleanAll_NonexistentDir(t *testing.T) {
-	err := cleanAll("/tmp/nonexistent-soda-clean-test", false, false)
+	err := cleanAll(context.Background(), "/tmp/nonexistent-soda-clean-test", false, false)
 	if err != nil {
 		t.Fatalf("cleanAll should not error for nonexistent dir: %v", err)
 	}
@@ -287,7 +288,7 @@ func TestCleanTicket_ForceStillChecksFlockWhenLockHeld(t *testing.T) {
 	defer syscall.Flock(int(fd.Fd()), syscall.LOCK_UN) //nolint:errcheck
 
 	// Even with force=true, cleanTicket must refuse because the lock is held.
-	err = cleanTicket(stateDir, "TICKET-1", false, true)
+	err = cleanTicket(context.Background(), stateDir, "TICKET-1", false, true)
 	if !errors.Is(err, errSkipped) {
 		t.Fatalf("expected errSkipped when lock is held with force=true, got %v", err)
 	}
@@ -311,7 +312,7 @@ func TestCleanTicket_DryRunWithBranchShowsRemote(t *testing.T) {
 
 	// Dry-run should not error even without a git repo context —
 	// it only prints what it would do.
-	err := cleanTicket(stateDir, "TICKET-1", true, false)
+	err := cleanTicket(context.Background(), stateDir, "TICKET-1", true, false)
 	if err != nil {
 		t.Fatalf("cleanTicket dry-run with branch: %v", err)
 	}
