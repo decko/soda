@@ -49,6 +49,7 @@ func newRootCmd() *cobra.Command {
 		newCleanCmd(),
 		newCostCmd(),
 		newRenderCmd(),
+		newValidateCmd(),
 		newPluginCmd(),
 		newVersionCmd(),
 	)
