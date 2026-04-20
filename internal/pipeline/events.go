@@ -79,6 +79,7 @@ const (
 	EventPatchRegression          = "patch_regression"
 	EventReworkMinorsDowngraded   = "rework_minors_downgraded"
 	EventPipelineTimeout          = "pipeline_timeout"
+	EventPhaseCostsReset          = "phase_costs_reset"
 )
 
 // ReadEvents reads and parses all events from the events.jsonl file in dir.

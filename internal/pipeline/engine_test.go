@@ -9744,3 +9744,197 @@ func TestEngine_PipelineTimeout_ExternalDeadlineNotWrapped(t *testing.T) {
 		t.Error("external context deadline should not be wrapped as PipelineTimeoutError")
 	}
 }
+
+func TestEngine_FreshRunResetsStalePhaseCosts(t *testing.T) {
+	// A fresh Run() must reset CumulativeCost for all phases so that
+	// stale costs from a prior execution do not trigger per-phase budget
+	// enforcement. This test simulates:
+	//   Run 1: implement accumulates CumulativeCost = $4.00, then fails
+	//   Run 2 (fresh): implement re-runs with fresh CumulativeCost = $0
+	// Without the reset, Run 2 would start with CumulativeCost = $4.00
+	// and exceed the $5 limit after just $1 of new spend.
+	phases := []PhaseConfig{
+		{
+			Name:   "implement",
+			Prompt: "implement.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	// Run 1: implement costs $4.00 but fails (simulating a crash).
+	mock1 := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true}`),
+					RawText: "impl v1",
+					CostUSD: 4.0,
+				},
+			}},
+		},
+	}
+
+	engine1, state := setupEngine(t, phases, mock1, func(cfg *EngineConfig) {
+		cfg.MaxCostPerPhase = 5.0
+	})
+
+	if err := engine1.Run(context.Background()); err != nil {
+		t.Fatalf("Run 1: %v", err)
+	}
+
+	// Simulate: implement completed in Run 1 but pipeline as a whole
+	// failed later. Mark implement as failed so Run 2 will re-run it.
+	state.Meta().Phases["implement"].Status = PhaseFailed
+	_ = state.flushMeta()
+
+	// After Run 1, CumulativeCost should be $4.00.
+	implPS := state.Meta().Phases["implement"]
+	if implPS == nil {
+		t.Fatal("implement phase state is nil after Run 1")
+	}
+	if !approxEqual(implPS.CumulativeCost, 4.0) {
+		t.Fatalf("CumulativeCost after Run 1 = %f, want 4.0", implPS.CumulativeCost)
+	}
+
+	// Run 2 (fresh): implement costs $3.00. Without the reset, cumulative
+	// would be $7.00 and exceed the $5 limit.
+	mock2 := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true}`),
+					RawText: "impl v2",
+					CostUSD: 3.0,
+				},
+			}},
+		},
+	}
+
+	engine2 := NewEngine(mock2, state, EngineConfig{
+		Pipeline:        &PhasePipeline{Phases: phases},
+		Loader:          engine1.config.Loader,
+		Ticket:          TicketData{Key: "TEST-1", Summary: "Test ticket"},
+		Model:           "test-model",
+		WorkDir:         engine1.config.WorkDir,
+		MaxCostPerPhase: 5.0,
+		Mode:            Autonomous,
+		SleepFunc:       func(time.Duration) {},
+		JitterFunc:      func(time.Duration) time.Duration { return 0 },
+	})
+
+	// This must succeed — the reset clears stale CumulativeCost.
+	if err := engine2.Run(context.Background()); err != nil {
+		t.Fatalf("Run 2 should succeed after cost reset, got: %v", err)
+	}
+
+	// CumulativeCost should reflect only Run 2's spend.
+	implPS = state.Meta().Phases["implement"]
+	if !approxEqual(implPS.CumulativeCost, 3.0) {
+		t.Errorf("CumulativeCost after Run 2 = %f, want 3.0 (Run 2 spend only)", implPS.CumulativeCost)
+	}
+}
+
+func TestEngine_RunEmitsPhaseCostsResetEvent(t *testing.T) {
+	// Run() must emit EventPhaseCostsReset after successfully resetting
+	// per-phase cumulative costs.
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "triage ok",
+					CostUSD: 0.10,
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(e Event) {
+			events = append(events, e)
+		}
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var found bool
+	for _, ev := range events {
+		if ev.Kind == EventPhaseCostsReset {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("phase_costs_reset event not emitted by Run()")
+	}
+}
+
+func TestEngine_ResumeDoesNotResetPhaseCosts(t *testing.T) {
+	// Resume() must NOT reset CumulativeCost — it continues an existing
+	// execution where rework-cycle tracking relies on accumulated costs.
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "implement",
+			Prompt:    "implement.md",
+			DependsOn: []string{"triage"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true}`),
+					RawText: "impl",
+					CostUSD: 2.0,
+				},
+			}},
+		},
+	}
+
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.MaxCostPerPhase = 10.0
+	})
+
+	// Pre-seed triage as completed so Resume("implement") finds its dep met.
+	state.MarkRunning("triage")
+	state.AccumulateCost("triage", 0.10)
+	state.MarkCompleted("triage")
+
+	// Pre-seed implement with CumulativeCost from a prior rework cycle.
+	state.MarkRunning("implement")
+	state.AccumulateCost("implement", 3.0)
+	state.MarkCompleted("implement")
+
+	priorCumulative := state.Meta().Phases["implement"].CumulativeCost
+
+	// Resume from implement — CumulativeCost should be preserved.
+	if err := engine.Resume(context.Background(), "implement"); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+
+	implPS := state.Meta().Phases["implement"]
+	// CumulativeCost should include BOTH the prior $3.00 and the new $2.00.
+	expectedCumulative := priorCumulative + 2.0
+	if !approxEqual(implPS.CumulativeCost, expectedCumulative) {
+		t.Errorf("CumulativeCost after Resume = %f, want %f (prior + new)",
+			implPS.CumulativeCost, expectedCumulative)
+	}
+}
