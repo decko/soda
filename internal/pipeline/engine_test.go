@@ -10236,4 +10236,249 @@ func TestEngine_ParallelReview_SkipReviewerWithMinorFindings(t *testing.T) {
 	if !skipped {
 		t.Error("reviewer_skipped event not emitted for ai-harness")
 	}
+
+	// The final review result should include the carried-forward minor finding
+	// from ai-harness, producing a "pass-with-follow-ups" verdict.
+	raw, err := state.ReadResult("review")
+	if err != nil {
+		t.Fatalf("ReadResult: %v", err)
+	}
+	var reviewOut schemas.ReviewOutput
+	if err := json.Unmarshal(raw, &reviewOut); err != nil {
+		t.Fatalf("Unmarshal review result: %v", err)
+	}
+	if reviewOut.Verdict != "pass-with-follow-ups" {
+		t.Errorf("verdict = %q, want %q", reviewOut.Verdict, "pass-with-follow-ups")
+	}
+	if len(reviewOut.Findings) != 1 {
+		t.Errorf("findings count = %d, want 1 (the carried minor)", len(reviewOut.Findings))
+	} else {
+		f := reviewOut.Findings[0]
+		if f.Source != "ai-harness" || f.Severity != "minor" {
+			t.Errorf("carried finding = %v, want ai-harness minor", f)
+		}
+	}
+}
+
+func TestEngine_PriorFindingsForReviewer(t *testing.T) {
+	t.Run("nil_on_first_generation", func(t *testing.T) {
+		phases := []PhaseConfig{
+			{
+				Name: "review",
+				Type: "parallel-review",
+				Reviewers: []ReviewerConfig{
+					{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+				},
+			},
+		}
+		engine, _ := setupReviewEngine(t, phases, &flexMockRunner{})
+
+		got := engine.priorFindingsForReviewer("review", "go-specialist")
+		if got != nil {
+			t.Errorf("expected nil on first generation, got %v", got)
+		}
+	})
+
+	t.Run("returns_findings_for_reviewer", func(t *testing.T) {
+		phases := []PhaseConfig{
+			{
+				Name: "review",
+				Type: "parallel-review",
+				Reviewers: []ReviewerConfig{
+					{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+					{Name: "ai-harness", Prompt: "prompts/review-harness.md", Focus: "AI harness"},
+				},
+			},
+		}
+		engine, state := setupReviewEngine(t, phases, &flexMockRunner{})
+
+		state.Meta().Phases["review"] = &PhaseState{Generation: 2}
+		prevReview := schemas.ReviewOutput{
+			TicketKey: "TEST-1",
+			Verdict:   "rework",
+			Findings: []schemas.ReviewFinding{
+				{Source: "go-specialist", Severity: "critical", File: "x.go", Issue: "nil deref"},
+				{Source: "ai-harness", Severity: "minor", File: "p.md", Issue: "naming"},
+				{Source: "ai-harness", Severity: "minor", File: "q.md", Issue: "style"},
+			},
+		}
+		prevData, _ := json.Marshal(prevReview)
+		archivedPath := filepath.Join(state.Dir(), "review.json.1")
+		if err := os.WriteFile(archivedPath, prevData, 0644); err != nil {
+			t.Fatalf("write archived result: %v", err)
+		}
+
+		got := engine.priorFindingsForReviewer("review", "ai-harness")
+		if len(got) != 2 {
+			t.Fatalf("expected 2 findings for ai-harness, got %d", len(got))
+		}
+		for _, f := range got {
+			if f.Source != "ai-harness" {
+				t.Errorf("finding source = %q, want %q", f.Source, "ai-harness")
+			}
+		}
+
+		// go-specialist should only have its own findings.
+		goFindings := engine.priorFindingsForReviewer("review", "go-specialist")
+		if len(goFindings) != 1 {
+			t.Fatalf("expected 1 finding for go-specialist, got %d", len(goFindings))
+		}
+	})
+
+	t.Run("nil_for_unknown_reviewer", func(t *testing.T) {
+		phases := []PhaseConfig{
+			{
+				Name: "review",
+				Type: "parallel-review",
+				Reviewers: []ReviewerConfig{
+					{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+				},
+			},
+		}
+		engine, state := setupReviewEngine(t, phases, &flexMockRunner{})
+
+		state.Meta().Phases["review"] = &PhaseState{Generation: 2}
+		prevReview := schemas.ReviewOutput{
+			TicketKey: "TEST-1",
+			Verdict:   "rework",
+			Findings: []schemas.ReviewFinding{
+				{Source: "go-specialist", Severity: "minor", File: "x.go", Issue: "naming"},
+			},
+		}
+		prevData, _ := json.Marshal(prevReview)
+		archivedPath := filepath.Join(state.Dir(), "review.json.1")
+		if err := os.WriteFile(archivedPath, prevData, 0644); err != nil {
+			t.Fatalf("write archived result: %v", err)
+		}
+
+		got := engine.priorFindingsForReviewer("review", "nonexistent")
+		if len(got) != 0 {
+			t.Errorf("expected no findings for unknown reviewer, got %d", len(got))
+		}
+	})
+}
+
+func TestEngine_ParallelReview_CarriesMinorFindingsOnSkip(t *testing.T) {
+	// When a reviewer is skipped on a rework cycle because it had no
+	// critical/major findings, its minor findings from the prior cycle
+	// should be carried forward into the merged output. This ensures
+	// the verdict is "pass-with-follow-ups" (not "pass"), so the
+	// post-submit follow-up phase is not skipped.
+	phases := []PhaseConfig{
+		{
+			Name:         "implement",
+			Prompt:       "implement.md",
+			Retry:        RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			FeedbackFrom: []string{"review"},
+		},
+		{
+			Name:      "review",
+			Type:      "parallel-review",
+			DependsOn: []string{"implement"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Rework:    &ReworkConfig{Target: "implement"},
+			Reviewers: []ReviewerConfig{
+				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+				{Name: "ai-harness", Prompt: "prompts/review-harness.md", Focus: "AI harness"},
+			},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true,"commits":1}`),
+					RawText: "Impl v1",
+					CostUSD: 0.50,
+				}},
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true,"commits":2}`),
+					RawText: "Impl v2",
+					CostUSD: 0.50,
+				}},
+			},
+			// go-specialist: critical in cycle 1, clean in cycle 2.
+			"review/go-specialist": {
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[{"severity":"critical","file":"x.go","line":1,"issue":"nil deref","suggestion":"fix"}]}`),
+					RawText: "Critical issue",
+					CostUSD: 0.15,
+				}},
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[]}`),
+					RawText: "All clear",
+					CostUSD: 0.10,
+				}},
+			},
+			// ai-harness: minor finding in cycle 1. Skipped in cycle 2, but
+			// its minor finding must be carried forward.
+			"review/ai-harness": {
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[{"severity":"minor","file":"p.md","line":5,"issue":"naming convention","suggestion":"use camelCase"}]}`),
+					RawText: "Minor issue",
+					CostUSD: 0.10,
+				}},
+			},
+		},
+	}
+
+	var events []Event
+	engine, state := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(e Event) {
+			events = append(events, e)
+		}
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !state.IsCompleted("review") {
+		t.Fatal("review should be completed")
+	}
+
+	// Read final review result.
+	raw, err := state.ReadResult("review")
+	if err != nil {
+		t.Fatalf("ReadResult: %v", err)
+	}
+	var reviewOut schemas.ReviewOutput
+	if err := json.Unmarshal(raw, &reviewOut); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	// Verdict MUST be "pass-with-follow-ups" because the carried minor
+	// finding should be present. Previously this was incorrectly "pass".
+	if reviewOut.Verdict != "pass-with-follow-ups" {
+		t.Errorf("verdict = %q, want %q", reviewOut.Verdict, "pass-with-follow-ups")
+	}
+
+	// The merged findings should include the carried minor finding.
+	if len(reviewOut.Findings) != 1 {
+		t.Fatalf("findings count = %d, want 1", len(reviewOut.Findings))
+	}
+	f := reviewOut.Findings[0]
+	if f.Source != "ai-harness" {
+		t.Errorf("finding source = %q, want %q", f.Source, "ai-harness")
+	}
+	if f.Severity != "minor" {
+		t.Errorf("finding severity = %q, want %q", f.Severity, "minor")
+	}
+	if f.Issue != "naming convention" {
+		t.Errorf("finding issue = %q, want %q", f.Issue, "naming convention")
+	}
+
+	// The reviewer_skipped event should include carried_findings count.
+	for _, ev := range events {
+		if ev.Kind == EventReviewerSkipped {
+			reviewer, _ := ev.Data["reviewer"].(string)
+			if reviewer == "ai-harness" {
+				carried, _ := ev.Data["carried_findings"].(int)
+				if carried != 1 {
+					t.Errorf("carried_findings = %d, want 1", carried)
+				}
+			}
+		}
+	}
 }

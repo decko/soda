@@ -2004,6 +2004,35 @@ func (e *Engine) reviewersWithCriticalFindings(phaseName string) map[string]bool
 	return needed
 }
 
+// priorFindingsForReviewer returns the findings from the previous generation's
+// archived review result that belong to the given reviewer. This is used to
+// carry forward minor findings when a reviewer is skipped on rework cycles,
+// ensuring they are not silently dropped from the merged output.
+func (e *Engine) priorFindingsForReviewer(phaseName, reviewerName string) []schemas.ReviewFinding {
+	ps := e.state.Meta().Phases[phaseName]
+	if ps == nil || ps.Generation <= 1 {
+		return nil
+	}
+
+	raw, err := e.state.ReadArchivedResult(phaseName, ps.Generation-1)
+	if err != nil {
+		return nil
+	}
+
+	var prevReview schemas.ReviewOutput
+	if err := json.Unmarshal(raw, &prevReview); err != nil {
+		return nil
+	}
+
+	var findings []schemas.ReviewFinding
+	for _, f := range prevReview.Findings {
+		if f.Source == reviewerName {
+			findings = append(findings, f)
+		}
+	}
+	return findings
+}
+
 // runParallelReview dispatches specialist reviewer subagents in parallel,
 // collects their findings, merges them into a single ReviewOutput, and
 // computes a verdict.
@@ -2086,12 +2115,18 @@ func (e *Engine) runParallelReview(ctx context.Context, phase PhaseConfig) error
 		// Skip reviewers that had no critical/major findings in the prior
 		// cycle. neededReviewers is nil on the first run, so all run.
 		if neededReviewers != nil && !neededReviewers[reviewer.Name] {
+			// Carry forward minor findings from the prior cycle so they are
+			// not silently dropped from the merged output. Without this, the
+			// verdict could incorrectly become "pass" instead of
+			// "pass-with-follow-ups", causing the post-submit follow-up
+			// phase to be skipped.
+			priorFindings := e.priorFindingsForReviewer(phase.Name, reviewer.Name)
 			e.emit(Event{
 				Phase: phase.Name,
 				Kind:  EventReviewerSkipped,
-				Data:  map[string]any{"reviewer": reviewer.Name, "reason": "no critical/major findings in prior cycle"},
+				Data:  map[string]any{"reviewer": reviewer.Name, "reason": "no critical/major findings in prior cycle", "carried_findings": len(priorFindings)},
 			})
-			results[idx] = reviewerResult{Name: reviewer.Name} // zero findings, zero cost
+			results[idx] = reviewerResult{Name: reviewer.Name, Findings: priorFindings}
 			continue
 		}
 		wg.Add(1)
