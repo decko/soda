@@ -94,6 +94,108 @@ func TestCostLedgerSurvivesClean(t *testing.T) {
 	}
 }
 
+func TestCostTrendByTicket_Empty(t *testing.T) {
+	trends := CostTrendByTicket(nil)
+	if len(trends) != 0 {
+		t.Errorf("expected empty map, got %v", trends)
+	}
+}
+
+func TestCostTrendByTicket_SingleEntry(t *testing.T) {
+	entries := []CostEntry{
+		{Ticket: "T-1", Cost: 5.00},
+	}
+	trends := CostTrendByTicket(entries)
+	if got := trends["T-1"]; got != "─" {
+		t.Errorf("single entry trend = %q, want \"─\"", got)
+	}
+}
+
+func TestCostTrendByTicket_Stable(t *testing.T) {
+	entries := []CostEntry{
+		{Ticket: "T-1", Cost: 1.00},
+		{Ticket: "T-1", Cost: 1.05}, // 5% above average → stable
+	}
+	trends := CostTrendByTicket(entries)
+	if got := trends["T-1"]; got != "─" {
+		t.Errorf("stable trend = %q, want \"─\"", got)
+	}
+}
+
+func TestCostTrendByTicket_Increasing(t *testing.T) {
+	entries := []CostEntry{
+		{Ticket: "T-1", Cost: 1.00},
+		{Ticket: "T-1", Cost: 1.00},
+		{Ticket: "T-1", Cost: 1.50}, // 50% above prior avg → ▲
+	}
+	trends := CostTrendByTicket(entries)
+	if got := trends["T-1"]; got != "▲" {
+		t.Errorf("increasing trend = %q, want \"▲\"", got)
+	}
+}
+
+func TestCostTrendByTicket_Decreasing(t *testing.T) {
+	entries := []CostEntry{
+		{Ticket: "T-1", Cost: 2.00},
+		{Ticket: "T-1", Cost: 2.00},
+		{Ticket: "T-1", Cost: 1.00}, // 50% below prior avg → ▼
+	}
+	trends := CostTrendByTicket(entries)
+	if got := trends["T-1"]; got != "▼" {
+		t.Errorf("decreasing trend = %q, want \"▼\"", got)
+	}
+}
+
+func TestCostTrendByTicket_MultipleTickets(t *testing.T) {
+	entries := []CostEntry{
+		{Ticket: "T-1", Cost: 1.00},
+		{Ticket: "T-2", Cost: 5.00},
+		{Ticket: "T-1", Cost: 2.00}, // ▲ (100% above prior)
+		{Ticket: "T-2", Cost: 2.00}, // ▼ (60% below prior)
+		{Ticket: "T-3", Cost: 3.00}, // single entry → ─
+	}
+	trends := CostTrendByTicket(entries)
+
+	if got := trends["T-1"]; got != "▲" {
+		t.Errorf("T-1 trend = %q, want \"▲\"", got)
+	}
+	if got := trends["T-2"]; got != "▼" {
+		t.Errorf("T-2 trend = %q, want \"▼\"", got)
+	}
+	if got := trends["T-3"]; got != "─" {
+		t.Errorf("T-3 trend = %q, want \"─\"", got)
+	}
+}
+
+func TestCostTrendByTicket_BoundaryAt10Percent(t *testing.T) {
+	// Exactly at the 10% boundary — should be stable.
+	entries := []CostEntry{
+		{Ticket: "T-UP", Cost: 1.00},
+		{Ticket: "T-UP", Cost: 1.10}, // ratio = 1.10, not > 1.10 → ─
+
+		{Ticket: "T-DOWN", Cost: 1.00},
+		{Ticket: "T-DOWN", Cost: 0.90}, // ratio = 0.90, not < 0.90 → ─
+	}
+	trends := CostTrendByTicket(entries)
+	if got := trends["T-UP"]; got != "─" {
+		t.Errorf("T-UP at boundary = %q, want \"─\"", got)
+	}
+	if got := trends["T-DOWN"]; got != "─" {
+		t.Errorf("T-DOWN at boundary = %q, want \"─\"", got)
+	}
+}
+
+func TestCostTrendByTicket_ZeroPriorAverage(t *testing.T) {
+	entries := []CostEntry{
+		{Ticket: "T-1", Cost: 0.00},
+		{Ticket: "T-1", Cost: 1.00}, // prior avg is 0 → ─
+	}
+	trends := CostTrendByTicket(entries)
+	if got := trends["T-1"]; got != "─" {
+		t.Errorf("zero prior avg trend = %q, want \"─\"", got)
+	}
+}
+
 func TestCumulativeCost_WithLedgerOnly(t *testing.T) {
 	dir := t.TempDir()
 

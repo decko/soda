@@ -45,6 +45,61 @@ func ReadCostLedger(stateDir string) ([]CostEntry, error) {
 	return entries, nil
 }
 
+// CostTrendByTicket computes a per-ticket cost trend indicator from ledger
+// entries. For each ticket with at least two entries, the latest cost is
+// compared against the average of all prior entries:
+//   - "▲" if the latest cost is more than 10% above the prior average
+//   - "▼" if the latest cost is more than 10% below the prior average
+//   - "─" otherwise (stable within ±10%)
+//
+// Tickets with fewer than two entries receive "─".
+func CostTrendByTicket(entries []CostEntry) map[string]string {
+	// Group entries by ticket, preserving insertion order (which matches
+	// chronological order in the append-only ledger).
+	type ticketEntries struct {
+		costs []float64
+	}
+	byTicket := make(map[string]*ticketEntries)
+	for _, entry := range entries {
+		te, ok := byTicket[entry.Ticket]
+		if !ok {
+			te = &ticketEntries{}
+			byTicket[entry.Ticket] = te
+		}
+		te.costs = append(te.costs, entry.Cost)
+	}
+
+	trends := make(map[string]string, len(byTicket))
+	for ticket, te := range byTicket {
+		if len(te.costs) < 2 {
+			trends[ticket] = "─"
+			continue
+		}
+		latest := te.costs[len(te.costs)-1]
+		var priorSum float64
+		for _, cost := range te.costs[:len(te.costs)-1] {
+			priorSum += cost
+		}
+		priorAvg := priorSum / float64(len(te.costs)-1)
+
+		if priorAvg == 0 {
+			trends[ticket] = "─"
+			continue
+		}
+
+		ratio := latest / priorAvg
+		switch {
+		case ratio > 1.10:
+			trends[ticket] = "▲"
+		case ratio < 0.90:
+			trends[ticket] = "▼"
+		default:
+			trends[ticket] = "─"
+		}
+	}
+	return trends
+}
+
 // AppendCostEntry appends a cost entry to the persistent ledger at stateDir/cost.json.
 // The ledger file is created if it does not exist. The write is atomic.
 // An exclusive file lock (flock) protects the read-modify-write sequence so that
