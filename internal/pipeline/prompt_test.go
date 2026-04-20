@@ -534,8 +534,8 @@ Verdict: {{.ReworkFeedback.Verdict}}
 			ReworkFeedback: &ReworkFeedback{
 				Source:  "review",
 				Verdict: "rework",
-				ReviewFindings: []schemas.ReviewFinding{
-					{Severity: "critical", File: "x.go", Line: 1, Issue: "bad", Suggestion: "fix it", Source: "go-specialist"},
+				ReviewFindings: []EnrichedFinding{
+					{ReviewFinding: schemas.ReviewFinding{Severity: "critical", File: "x.go", Line: 1, Issue: "bad", Suggestion: "fix it", Source: "go-specialist"}},
 				},
 			},
 		}
@@ -929,8 +929,8 @@ Context: {{.}}
 			ReworkFeedback: &ReworkFeedback{
 				Source:  "review",
 				Verdict: "rework",
-				ReviewFindings: []schemas.ReviewFinding{
-					{Severity: "major", File: "handler.go", Line: 20, Issue: "missing error check", Suggestion: "add error handling", Source: "go-specialist"},
+				ReviewFindings: []EnrichedFinding{
+					{ReviewFinding: schemas.ReviewFinding{Severity: "major", File: "handler.go", Line: 20, Issue: "missing error check", Suggestion: "add error handling", Source: "go-specialist"}},
 				},
 				PriorCycles: []PriorCycle{
 					{Cycle: 1, Source: "review", Verdict: "rework", Summary: "[critical] handler.go:42 — nil deref"},
@@ -982,8 +982,8 @@ Context: {{.}}
 			ReworkFeedback: &ReworkFeedback{
 				Source:  "review",
 				Verdict: "rework",
-				ReviewFindings: []schemas.ReviewFinding{
-					{Severity: "critical", File: "x.go", Line: 1, Issue: "bad", Suggestion: "fix", Source: "go-specialist"},
+				ReviewFindings: []EnrichedFinding{
+					{ReviewFinding: schemas.ReviewFinding{Severity: "critical", File: "x.go", Line: 1, Issue: "bad", Suggestion: "fix", Source: "go-specialist"}},
 				},
 				// No PriorCycles on first rework.
 			},
@@ -1062,10 +1062,10 @@ Context: {{.}}
 			ReworkFeedback: &ReworkFeedback{
 				Source:  "review",
 				Verdict: "rework",
-				ReviewFindings: []schemas.ReviewFinding{
-					{Severity: "critical", File: "a.go", Line: 1, Issue: "issue-a", Suggestion: "fix-a", Source: "go-specialist"},
-					{Severity: "major", File: "b.go", Line: 2, Issue: "issue-b", Suggestion: "fix-b", Source: "go-specialist"},
-					{Severity: "minor", File: "c.go", Line: 3, Issue: "issue-c", Suggestion: "fix-c", Source: "go-specialist"},
+				ReviewFindings: []EnrichedFinding{
+					{ReviewFinding: schemas.ReviewFinding{Severity: "critical", File: "a.go", Line: 1, Issue: "issue-a", Suggestion: "fix-a", Source: "go-specialist"}},
+					{ReviewFinding: schemas.ReviewFinding{Severity: "major", File: "b.go", Line: 2, Issue: "issue-b", Suggestion: "fix-b", Source: "go-specialist"}},
+					{ReviewFinding: schemas.ReviewFinding{Severity: "minor", File: "c.go", Line: 3, Issue: "issue-c", Suggestion: "fix-c", Source: "go-specialist"}},
 				},
 			},
 		}

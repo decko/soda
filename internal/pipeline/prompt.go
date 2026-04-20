@@ -61,8 +61,14 @@ type ReworkFeedback struct {
 	FailedCriteria []FailedCriterion
 	CodeIssues     []ReworkCodeIssue
 	FailedCommands []FailedCommand
-	ReviewFindings []schemas.ReviewFinding
+	ReviewFindings []EnrichedFinding
 	PriorCycles    []PriorCycle
+}
+
+// EnrichedFinding wraps a ReviewFinding with code context for rework prompts.
+type EnrichedFinding struct {
+	schemas.ReviewFinding
+	CodeSnippet string // ±5 lines around the finding's file:line; empty if unavailable
 }
 
 // PriorCycle holds a summarized snapshot of feedback from a previous
