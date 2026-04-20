@@ -892,6 +892,26 @@ func backoff(attempt int, jitterFunc func(time.Duration) time.Duration) time.Dur
 	return exp + jitterFunc(time.Second)
 }
 
+// sleepWithContext runs SleepFunc(d) but returns early if ctx is cancelled.
+// It delegates to e.config.SleepFunc in a goroutine so that test no-op sleeps
+// complete instantly while production sleeps remain cancellable.
+func (e *Engine) sleepWithContext(ctx context.Context, d time.Duration) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	done := make(chan struct{})
+	go func() {
+		e.config.SleepFunc(d)
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // checkBudget verifies the pipeline has budget remaining before running a phase.
 func (e *Engine) checkBudget(phase PhaseConfig) error {
 	if e.config.MaxCostUSD <= 0 {
@@ -2202,7 +2222,9 @@ func (e *Engine) runReviewerWithRetry(ctx context.Context, phase PhaseConfig, re
 					"delay":    delay.String(),
 				},
 			})
-			e.config.SleepFunc(delay)
+			if err := e.sleepWithContext(ctx, delay); err != nil {
+				return nil, fmt.Errorf("reviewer %s retry interrupted: %w", reviewer.Name, err)
+			}
 		}
 
 		// Send retry log to parent for serialized WriteLog.

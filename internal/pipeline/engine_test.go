@@ -4862,6 +4862,86 @@ func TestEngine_ParallelReview_ReviewerRetryMultipleCategories(t *testing.T) {
 	}
 }
 
+func TestEngine_ParallelReview_ReviewerRetryCancelledContext(t *testing.T) {
+	// When the context is cancelled during backoff sleep, the retry should
+	// return immediately instead of blocking for the full backoff duration.
+	phases := []PhaseConfig{
+		{
+			Name:  "review",
+			Type:  "parallel-review",
+			Retry: RetryConfig{Transient: 2, Parse: 0, Semantic: 0},
+			Reviewers: []ReviewerConfig{
+				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+			},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"review/go-specialist": {
+				{err: &runner.TransientError{Reason: "rate_limit", Err: fmt.Errorf("429")}},
+				// Second call should not happen because context is cancelled during backoff.
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[],"verdict":"pass"}`),
+					RawText: "No issues",
+					CostUSD: 0.10,
+				}},
+			},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	var events []Event
+	engine, _ := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(evt Event) {
+			events = append(events, evt)
+		}
+		// SleepFunc blocks until the context is cancelled, simulating a long backoff.
+		cfg.SleepFunc = func(d time.Duration) {
+			<-ctx.Done()
+		}
+	})
+
+	// Cancel the context after a short delay so the sleep is interrupted.
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	err := engine.Run(ctx)
+	if err == nil {
+		t.Fatal("expected error when context is cancelled during reviewer retry backoff")
+	}
+
+	// The error may surface as either a context cancellation at the review
+	// phase level or as a reviewer retry interruption — both are correct.
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "context cancel") && !strings.Contains(errMsg, "retry interrupted") {
+		t.Errorf("error should mention context cancellation or retry interrupted, got: %v", err)
+	}
+
+	// The retry event should have been emitted before the sleep (proactive notification).
+	hasRetrying := false
+	for _, evt := range events {
+		if evt.Kind == EventReviewerRetrying {
+			hasRetrying = true
+		}
+	}
+	if !hasRetrying {
+		t.Error("reviewer_retrying event should be emitted before the sleep")
+	}
+
+	// The runner should have been called exactly once (the failed attempt);
+	// the retry call should not happen because the context was cancelled during backoff.
+	mock.mu.Lock()
+	callCount := len(mock.calls)
+	mock.mu.Unlock()
+	if callCount != 1 {
+		t.Errorf("runner called %d times, want 1 (retry should be interrupted)", callCount)
+	}
+}
+
 func TestComputeReviewVerdict(t *testing.T) {
 	tests := []struct {
 		name     string
