@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -234,6 +235,133 @@ func writeStatusMeta(t *testing.T, dir string, meta *pipeline.PipelineMeta) {
 	}
 	if err := os.WriteFile(filepath.Join(dir, "meta.json"), data, 0644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
+	}
+}
+
+func TestRunStatus_ReworkAndTrendColumns(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create a session with known rework cycles.
+	writeStatusMeta(t, filepath.Join(dir, "TICKET-10"), &pipeline.PipelineMeta{
+		Ticket:       "TICKET-10",
+		StartedAt:    time.Now().Add(-1 * time.Hour),
+		TotalCost:    5.00,
+		ReworkCycles: 3,
+		Phases: map[string]*pipeline.PhaseState{
+			"triage": {Status: pipeline.PhaseCompleted, DurationMs: 5000, Cost: 5.00},
+		},
+	})
+
+	// Add cost ledger entries so trend can be computed: increasing trend (▲).
+	if err := pipeline.AppendCostEntry(dir, pipeline.CostEntry{
+		Ticket: "TICKET-10", Cost: 1.00, Success: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := pipeline.AppendCostEntry(dir, pipeline.CostEntry{
+		Ticket: "TICKET-10", Cost: 5.00, Success: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Capture stdout.
+	oldStdout := os.Stdout
+	readPipe, writePipe, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = writePipe
+
+	runErr := runStatus(dir)
+
+	writePipe.Close()
+	os.Stdout = oldStdout
+
+	var buf strings.Builder
+	data := make([]byte, 4096)
+	for {
+		n, readErr := readPipe.Read(data)
+		if n > 0 {
+			buf.Write(data[:n])
+		}
+		if readErr != nil {
+			break
+		}
+	}
+	readPipe.Close()
+
+	if runErr != nil {
+		t.Fatalf("runStatus error: %v", runErr)
+	}
+
+	output := buf.String()
+
+	// Verify header contains new columns.
+	if !strings.Contains(output, "REWORK") {
+		t.Errorf("output missing REWORK column header.\ngot:\n%s", output)
+	}
+	if !strings.Contains(output, "TREND") {
+		t.Errorf("output missing TREND column header.\ngot:\n%s", output)
+	}
+
+	// Verify the TICKET-10 row has rework=3 and trend=▲ in the correct columns.
+	// REWORK and TREND are the last two columns, so we anchor to end-of-line.
+	reworkTrendRe := regexp.MustCompile(`(?m)^TICKET-10\s+.*\s+3\s+▲\s*$`)
+	if !reworkTrendRe.MatchString(output) {
+		t.Errorf("TICKET-10 row missing rework=3 and trend=▲ in correct columns.\ngot:\n%s", output)
+	}
+}
+
+func TestRunStatus_DefaultTrendWhenNoLedger(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create a session with no cost ledger entries — should get default trend ─.
+	writeStatusMeta(t, filepath.Join(dir, "TICKET-20"), &pipeline.PipelineMeta{
+		Ticket:    "TICKET-20",
+		StartedAt: time.Now().Add(-1 * time.Hour),
+		TotalCost: 1.00,
+		Phases: map[string]*pipeline.PhaseState{
+			"triage": {Status: pipeline.PhaseCompleted, DurationMs: 3000, Cost: 1.00},
+		},
+	})
+
+	// Capture stdout.
+	oldStdout := os.Stdout
+	readPipe, writePipe, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = writePipe
+
+	runErr := runStatus(dir)
+
+	writePipe.Close()
+	os.Stdout = oldStdout
+
+	var buf strings.Builder
+	data := make([]byte, 4096)
+	for {
+		n, readErr := readPipe.Read(data)
+		if n > 0 {
+			buf.Write(data[:n])
+		}
+		if readErr != nil {
+			break
+		}
+	}
+	readPipe.Close()
+
+	if runErr != nil {
+		t.Fatalf("runStatus error: %v", runErr)
+	}
+
+	output := buf.String()
+
+	// Verify the TICKET-20 row has rework=0 and trend=─ in the correct columns.
+	// REWORK and TREND are the last two columns, so we anchor to end-of-line.
+	reworkTrendRe := regexp.MustCompile(`(?m)^TICKET-20\s+.*\s+0\s+─\s*$`)
+	if !reworkTrendRe.MatchString(output) {
+		t.Errorf("TICKET-20 row missing rework=0 and trend=─ in correct columns.\ngot:\n%s", output)
 	}
 }
 
