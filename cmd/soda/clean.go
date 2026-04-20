@@ -87,9 +87,10 @@ func cleanTicket(stateDir, ticketKey string, dryRun, force bool) error {
 		return fmt.Errorf("read meta: %w", err)
 	}
 
-	// Try to acquire flock to ensure pipeline is not running
+	// Try to acquire flock to ensure pipeline is not running.
+	// Always checked, even with --force, to prevent cleaning running pipelines.
 	lockPath := filepath.Join(ticketDir, "lock")
-	if !force && !tryLock(lockPath) {
+	if !tryLock(lockPath) {
 		fmt.Fprintf(os.Stderr, "Skipping %s: pipeline is running\n", ticketKey)
 		return errSkipped
 	}

@@ -2,8 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 
 	"github.com/decko/soda/internal/pipeline"
@@ -255,6 +257,44 @@ func TestNewCleanCmd_Flags(t *testing.T) {
 	}
 	if forceFlag.DefValue != "false" {
 		t.Errorf("--force default = %q, want %q", forceFlag.DefValue, "false")
+	}
+}
+
+// TestCleanTicket_ForceStillChecksFlockWhenLockHeld verifies that --force does
+// NOT bypass the flock safety check. If a pipeline is actively running (lock
+// held), cleanTicket must return errSkipped even when force=true.
+func TestCleanTicket_ForceStillChecksFlockWhenLockHeld(t *testing.T) {
+	stateDir := t.TempDir()
+	ticketDir := filepath.Join(stateDir, "TICKET-1")
+
+	writeCleanMeta(t, ticketDir, &pipeline.PipelineMeta{
+		Ticket: "TICKET-1",
+		Phases: map[string]*pipeline.PhaseState{
+			"triage": {Status: pipeline.PhaseRunning},
+		},
+	})
+
+	// Acquire an exclusive flock on the lock file to simulate a running pipeline.
+	lockPath := filepath.Join(ticketDir, "lock")
+	fd, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		t.Fatalf("open lock file: %v", err)
+	}
+	defer fd.Close()
+	if err := syscall.Flock(int(fd.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatalf("flock: %v", err)
+	}
+	defer syscall.Flock(int(fd.Fd()), syscall.LOCK_UN) //nolint:errcheck
+
+	// Even with force=true, cleanTicket must refuse because the lock is held.
+	err = cleanTicket(stateDir, "TICKET-1", false, true)
+	if !errors.Is(err, errSkipped) {
+		t.Fatalf("expected errSkipped when lock is held with force=true, got %v", err)
+	}
+
+	// State directory must still exist — nothing was cleaned.
+	if _, statErr := os.Stat(ticketDir); statErr != nil {
+		t.Errorf("expected state dir to still exist: %v", statErr)
 	}
 }
 
