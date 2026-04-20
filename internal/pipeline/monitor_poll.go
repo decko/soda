@@ -1045,3 +1045,31 @@ func applyProfileFilters(classified []ClassifiedComment, profile *MonitorProfile
 
 	return result
 }
+
+// runMonitorStub handles polling phases by marking them completed without
+// actually running the runner. Full monitor polling is not yet implemented.
+func (e *Engine) runMonitorStub(phase PhaseConfig) error {
+	prURL := e.extractPRURL()
+
+	if err := e.state.MarkRunning(phase.Name); err != nil {
+		return fmt.Errorf("engine: mark running %s: %w", phase.Name, err)
+	}
+	e.emit(Event{Phase: phase.Name, Kind: EventPhaseStarted, Data: map[string]any{"generation": e.state.Meta().Phases[phase.Name].Generation}})
+
+	e.emit(Event{
+		Phase: phase.Name,
+		Kind:  EventMonitorSkipped,
+		Data:  map[string]any{"pr_url": prURL, "reason": "monitor polling not yet implemented"},
+	})
+
+	if err := e.state.MarkCompleted(phase.Name); err != nil {
+		return fmt.Errorf("engine: mark completed %s: %w", phase.Name, err)
+	}
+	e.emit(Event{
+		Phase: phase.Name,
+		Kind:  EventPhaseCompleted,
+		Data:  map[string]any{"duration_ms": e.state.Meta().Phases[phase.Name].DurationMs, "cost": e.state.Meta().Phases[phase.Name].Cost},
+	})
+
+	return nil
+}
