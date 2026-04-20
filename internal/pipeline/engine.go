@@ -2162,15 +2162,12 @@ func (e *Engine) runReviewer(ctx context.Context, phase PhaseConfig, reviewer Re
 }
 
 // runReviewerWithRetry runs the reviewer's runner call with per-category retry
-// limits from the phase's RetryConfig. Follows the same retry strategy as
-// runWithRetry (transient → backoff, parse → append error, semantic → append
-// feedback) but routes events through msgCh to maintain the serialization
-// contract for concurrent reviewer goroutines.
+// limits from the phase's RetryConfig. Only transient errors (429, timeout) are
+// retried at the reviewer level with backoff. Parse, semantic, context, and
+// unknown errors are immediately returned as failures without retry.
 func (e *Engine) runReviewerWithRetry(ctx context.Context, phase PhaseConfig, reviewer ReviewerConfig, opts runner.RunOpts, idx int, msgCh chan<- reviewerMsg) (*runner.RunResult, error) {
 	remaining := map[string]int{
 		"transient": phase.Retry.Transient,
-		"parse":     phase.Retry.Parse,
-		"semantic":  phase.Retry.Semantic,
 	}
 
 	sendEvent := func(evt Event) {
@@ -2204,36 +2201,6 @@ func (e *Engine) runReviewerWithRetry(ctx context.Context, phase PhaseConfig, re
 					"category": category,
 					"attempt":  attempt + 1,
 					"delay":    delay.String(),
-				},
-			})
-
-		case "parse":
-			var pe *runner.ParseError
-			if errors.As(err, &pe) {
-				opts.UserPrompt = opts.UserPrompt + "\n\n[RETRY] Previous attempt failed with parse error: " + pe.Error() + "\nPlease fix the output format."
-			}
-			sendEvent(Event{
-				Phase: phase.Name,
-				Kind:  EventReviewerRetrying,
-				Data: map[string]any{
-					"reviewer": reviewer.Name,
-					"category": category,
-					"attempt":  attempt + 1,
-				},
-			})
-
-		case "semantic":
-			var se *runner.SemanticError
-			if errors.As(err, &se) {
-				opts.UserPrompt = opts.UserPrompt + "\n\n[RETRY] Previous attempt returned a semantic error: " + se.Message + "\nPlease address this issue."
-			}
-			sendEvent(Event{
-				Phase: phase.Name,
-				Kind:  EventReviewerRetrying,
-				Data: map[string]any{
-					"reviewer": reviewer.Name,
-					"category": category,
-					"attempt":  attempt + 1,
 				},
 			})
 		}
