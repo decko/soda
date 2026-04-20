@@ -2115,7 +2115,8 @@ func (e *Engine) runReviewer(ctx context.Context, phase PhaseConfig, reviewer Re
 		OnChunk:      onChunk,
 	}
 
-	result, err := e.runner.Run(ctx, opts)
+	// Run with per-reviewer retry logic using the phase's RetryConfig.
+	result, err := e.runReviewerWithRetry(ctx, phase, reviewer, opts, idx, msgCh)
 	if err != nil {
 		sendEvent(Event{
 			Phase: phase.Name,
@@ -2158,6 +2159,97 @@ func (e *Engine) runReviewer(ctx context.Context, phase PhaseConfig, reviewer Re
 		Findings: findings,
 		Cost:     result.CostUSD,
 	})
+}
+
+// runReviewerWithRetry runs the reviewer's runner call with per-category retry
+// limits from the phase's RetryConfig. Follows the same retry strategy as
+// runWithRetry (transient → backoff, parse → append error, semantic → append
+// feedback) but routes events through msgCh to maintain the serialization
+// contract for concurrent reviewer goroutines.
+func (e *Engine) runReviewerWithRetry(ctx context.Context, phase PhaseConfig, reviewer ReviewerConfig, opts runner.RunOpts, idx int, msgCh chan<- reviewerMsg) (*runner.RunResult, error) {
+	remaining := map[string]int{
+		"transient": phase.Retry.Transient,
+		"parse":     phase.Retry.Parse,
+		"semantic":  phase.Retry.Semantic,
+	}
+
+	sendEvent := func(evt Event) {
+		msgCh <- reviewerMsg{Event: &evt, Index: idx}
+	}
+
+	attempt := 0
+	for {
+		result, err := e.runner.Run(ctx, opts)
+		if err == nil {
+			return result, nil
+		}
+
+		category := classifyError(err)
+
+		left, tracked := remaining[category]
+		if !tracked || left <= 0 {
+			return nil, fmt.Errorf("reviewer %s failed (%s, no retries left): %w", reviewer.Name, category, err)
+		}
+		remaining[category]--
+
+		switch category {
+		case "transient":
+			delay := backoff(attempt, e.config.JitterFunc)
+			e.config.SleepFunc(delay)
+			sendEvent(Event{
+				Phase: phase.Name,
+				Kind:  EventReviewerRetrying,
+				Data: map[string]any{
+					"reviewer": reviewer.Name,
+					"category": category,
+					"attempt":  attempt + 1,
+					"delay":    delay.String(),
+				},
+			})
+
+		case "parse":
+			var pe *runner.ParseError
+			if errors.As(err, &pe) {
+				opts.UserPrompt = opts.UserPrompt + "\n\n[RETRY] Previous attempt failed with parse error: " + pe.Error() + "\nPlease fix the output format."
+			}
+			sendEvent(Event{
+				Phase: phase.Name,
+				Kind:  EventReviewerRetrying,
+				Data: map[string]any{
+					"reviewer": reviewer.Name,
+					"category": category,
+					"attempt":  attempt + 1,
+				},
+			})
+
+		case "semantic":
+			var se *runner.SemanticError
+			if errors.As(err, &se) {
+				opts.UserPrompt = opts.UserPrompt + "\n\n[RETRY] Previous attempt returned a semantic error: " + se.Message + "\nPlease address this issue."
+			}
+			sendEvent(Event{
+				Phase: phase.Name,
+				Kind:  EventReviewerRetrying,
+				Data: map[string]any{
+					"reviewer": reviewer.Name,
+					"category": category,
+					"attempt":  attempt + 1,
+				},
+			})
+		}
+
+		// Send retry log to parent for serialized WriteLog.
+		msgCh <- reviewerMsg{
+			Log: &reviewerLog{
+				Phase:   phase.Name,
+				Name:    fmt.Sprintf("%s_retry_%d", reviewer.Name, attempt+1),
+				Content: []byte(fmt.Sprintf("category=%s err=%s", category, err)),
+			},
+			Index: idx,
+		}
+
+		attempt++
+	}
 }
 
 // mergeReviewFindings combines findings from all reviewers and computes a verdict.
