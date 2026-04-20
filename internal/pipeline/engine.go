@@ -892,6 +892,26 @@ func backoff(attempt int, jitterFunc func(time.Duration) time.Duration) time.Dur
 	return exp + jitterFunc(time.Second)
 }
 
+// sleepWithContext runs SleepFunc(d) but returns early if ctx is cancelled.
+// It delegates to e.config.SleepFunc in a goroutine so that test no-op sleeps
+// complete instantly while production sleeps remain cancellable.
+func (e *Engine) sleepWithContext(ctx context.Context, d time.Duration) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	done := make(chan struct{})
+	go func() {
+		e.config.SleepFunc(d)
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // checkBudget verifies the pipeline has budget remaining before running a phase.
 func (e *Engine) checkBudget(phase PhaseConfig) error {
 	if e.config.MaxCostUSD <= 0 {
@@ -2115,7 +2135,8 @@ func (e *Engine) runReviewer(ctx context.Context, phase PhaseConfig, reviewer Re
 		OnChunk:      onChunk,
 	}
 
-	result, err := e.runner.Run(ctx, opts)
+	// Run with per-reviewer retry logic using the phase's RetryConfig.
+	result, err := e.runReviewerWithRetry(ctx, phase, reviewer, opts, idx, msgCh)
 	if err != nil {
 		sendEvent(Event{
 			Phase: phase.Name,
@@ -2158,6 +2179,66 @@ func (e *Engine) runReviewer(ctx context.Context, phase PhaseConfig, reviewer Re
 		Findings: findings,
 		Cost:     result.CostUSD,
 	})
+}
+
+// runReviewerWithRetry runs the reviewer's runner call with per-category retry
+// limits from the phase's RetryConfig. Only transient errors (429, timeout) are
+// retried at the reviewer level with backoff. Parse, semantic, context, and
+// unknown errors are immediately returned as failures without retry.
+func (e *Engine) runReviewerWithRetry(ctx context.Context, phase PhaseConfig, reviewer ReviewerConfig, opts runner.RunOpts, idx int, msgCh chan<- reviewerMsg) (*runner.RunResult, error) {
+	remaining := map[string]int{
+		"transient": phase.Retry.Transient,
+	}
+
+	sendEvent := func(evt Event) {
+		msgCh <- reviewerMsg{Event: &evt, Index: idx}
+	}
+
+	attempt := 0
+	for {
+		result, err := e.runner.Run(ctx, opts)
+		if err == nil {
+			return result, nil
+		}
+
+		category := classifyError(err)
+
+		left, tracked := remaining[category]
+		if !tracked || left <= 0 {
+			return nil, fmt.Errorf("reviewer %s failed (%s, no retries left): %w", reviewer.Name, category, err)
+		}
+		remaining[category]--
+
+		switch category {
+		case "transient":
+			delay := backoff(attempt, e.config.JitterFunc)
+			sendEvent(Event{
+				Phase: phase.Name,
+				Kind:  EventReviewerRetrying,
+				Data: map[string]any{
+					"reviewer": reviewer.Name,
+					"category": category,
+					"attempt":  attempt + 1,
+					"delay":    delay.String(),
+				},
+			})
+			if err := e.sleepWithContext(ctx, delay); err != nil {
+				return nil, fmt.Errorf("reviewer %s retry interrupted: %w", reviewer.Name, err)
+			}
+		}
+
+		// Send retry log to parent for serialized WriteLog.
+		msgCh <- reviewerMsg{
+			Log: &reviewerLog{
+				Phase:   phase.Name,
+				Name:    fmt.Sprintf("%s_retry_%d", reviewer.Name, attempt+1),
+				Content: []byte(fmt.Sprintf("category=%s err=%s", category, err)),
+			},
+			Index: idx,
+		}
+
+		attempt++
+	}
 }
 
 // mergeReviewFindings combines findings from all reviewers and computes a verdict.
