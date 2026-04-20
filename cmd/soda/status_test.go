@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -303,14 +304,11 @@ func TestRunStatus_ReworkAndTrendColumns(t *testing.T) {
 		t.Errorf("output missing TREND column header.\ngot:\n%s", output)
 	}
 
-	// Verify rework count appears in output.
-	if !strings.Contains(output, "3") {
-		t.Errorf("output missing rework count 3.\ngot:\n%s", output)
-	}
-
-	// Verify trend indicator appears in output (▲ for increasing).
-	if !strings.Contains(output, "▲") {
-		t.Errorf("output missing trend indicator ▲.\ngot:\n%s", output)
+	// Verify the TICKET-10 row has rework=3 and trend=▲ in the correct columns.
+	// REWORK and TREND are the last two columns, so we anchor to end-of-line.
+	reworkTrendRe := regexp.MustCompile(`(?m)^TICKET-10\s+.*\s+3\s+▲\s*$`)
+	if !reworkTrendRe.MatchString(output) {
+		t.Errorf("TICKET-10 row missing rework=3 and trend=▲ in correct columns.\ngot:\n%s", output)
 	}
 }
 
@@ -359,14 +357,11 @@ func TestRunStatus_DefaultTrendWhenNoLedger(t *testing.T) {
 
 	output := buf.String()
 
-	// ReworkCycles defaults to 0.
-	if !strings.Contains(output, "0") {
-		t.Errorf("output missing default rework count 0.\ngot:\n%s", output)
-	}
-
-	// Default trend should be ─.
-	if !strings.Contains(output, "─") {
-		t.Errorf("output missing default trend indicator ─.\ngot:\n%s", output)
+	// Verify the TICKET-20 row has rework=0 and trend=─ in the correct columns.
+	// REWORK and TREND are the last two columns, so we anchor to end-of-line.
+	reworkTrendRe := regexp.MustCompile(`(?m)^TICKET-20\s+.*\s+0\s+─\s*$`)
+	if !reworkTrendRe.MatchString(output) {
+		t.Errorf("TICKET-20 row missing rework=0 and trend=─ in correct columns.\ngot:\n%s", output)
 	}
 }
 
