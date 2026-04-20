@@ -162,6 +162,64 @@ To force re-implementation: `soda run <ticket> --from implement`
 2. If only minor findings remain, the engine auto-downgrades to `pass-with-follow-ups` and proceeds
 3. If critical/major findings remain, fix them manually and resume: `soda run <ticket> --from implement`
 
+### Parallel-review: one or more reviewers failed
+
+**Symptom:** Phase fails with `engine: reviewer failures in review: go-specialist: <error>; ai-harness: <error>` (or just one reviewer listed).
+
+**Cause:** The `parallel-review` phase dispatches all configured reviewers concurrently. If any reviewer fails (transient error, parse error, or prompt load failure), the engine collects all errors and fails the phase — even if the other reviewers succeeded.
+
+**Partial-failure behavior:** Results from successful reviewers are **discarded** when any reviewer fails. The phase must be re-run in full; there is no partial-resume within a parallel-review phase.
+
+**Identify which reviewer failed:**
+```bash
+# Show all reviewer-level events (started, completed, failed)
+grep '"reviewer_started"\|"reviewer_completed"\|"reviewer_failed"' .soda/<ticket>/events.jsonl
+
+# Narrow to failures only
+grep '"reviewer_failed"' .soda/<ticket>/events.jsonl
+```
+
+**Inspect the failing reviewer's prompt:**
+```bash
+cat .soda/<ticket>/logs/review_prompt_<reviewer-name>.md
+```
+
+**Fix:**
+1. Identify the failing reviewer from the error message or `events.jsonl`
+2. Check the raw response: `cat .soda/<ticket>/logs/<reviewer-name>_response.md` (if written before failure)
+3. For transient errors, wait and resume: `soda run <ticket> --from review`
+4. For parse errors, check whether the reviewer's prompt template is valid
+5. For prompt load errors, verify the reviewer's `prompt:` path in `phases.yaml` exists under the prompts directory
+
+### Parallel-review: inspecting merged findings
+
+After a successful `parallel-review` phase, findings from all reviewers are merged into a single `review.json`.
+Each finding includes a `source` field identifying which reviewer raised it.
+
+**Read merged findings:**
+```bash
+soda history <ticket> --phase review
+```
+
+**Inspect raw merged output:**
+```bash
+cat .soda/<ticket>/review.json
+```
+
+**Filter findings by reviewer in the event log:**
+```bash
+# Show the merge summary (total findings count + verdict)
+grep '"review_merged"' .soda/<ticket>/events.jsonl
+
+# Show per-reviewer completion events (includes individual finding counts)
+grep '"reviewer_completed"' .soda/<ticket>/events.jsonl
+```
+
+**Verdict logic:**
+- Any `critical` or `major` finding from any reviewer → verdict `rework` (routes back to implement)
+- Only `minor` findings → verdict `pass-with-follow-ups` (proceeds to submit)
+- No findings → verdict `pass`
+
 ### Monitor phase not responding to PR comments
 
 **Symptom:** PR comments go unanswered. Monitor polls but takes no action.
