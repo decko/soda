@@ -41,7 +41,7 @@ func newCleanCmd() *cobra.Command {
 
 	cmd.Flags().Bool("all", false, "clean all tickets in terminal state")
 	cmd.Flags().Bool("dry-run", false, "show what would be cleaned without doing it")
-	cmd.Flags().Bool("force", false, "clean even if pipeline is running or not in terminal state")
+	cmd.Flags().Bool("force", false, "clean even if not in terminal state (does not override running pipeline lock)")
 
 	return cmd
 }
