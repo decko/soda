@@ -114,7 +114,12 @@ func FormatEvent(e Event) string {
 			b.WriteByte(' ')
 			b.WriteString(k)
 			b.WriteByte('=')
-			b.WriteString(fmt.Sprintf("%v", e.Data[k]))
+			v := fmt.Sprintf("%v", e.Data[k])
+			if strings.ContainsAny(v, " \t\n") {
+				b.WriteString(fmt.Sprintf("%q", v))
+			} else {
+				b.WriteString(v)
+			}
 		}
 	}
 	return b.String()

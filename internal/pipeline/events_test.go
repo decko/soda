@@ -156,7 +156,7 @@ func TestFormatEvent(t *testing.T) {
 				Kind:      EventPhaseFailed,
 				Data:      map[string]any{"error": "tests failed"},
 			},
-			want: "10:05:30 [verify] phase_failed error=tests failed",
+			want: `10:05:30 [verify] phase_failed error="tests failed"`,
 		},
 	}
 

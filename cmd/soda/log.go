@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -94,7 +95,7 @@ func followEvents(w io.Writer, path string, sinceTime time.Time, phase string, l
 	events, newOffset, err := readEventsFromOffset(path, 0)
 	if err != nil {
 		// If the file doesn't exist yet in follow mode, start from scratch.
-		if !os.IsNotExist(err) {
+		if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 	}
@@ -127,7 +128,7 @@ func followEvents(w io.Writer, path string, sinceTime time.Time, phase string, l
 		case <-ticker.C:
 			newEvents, newOff, readErr := readEventsFromOffset(path, offset)
 			if readErr != nil {
-				if os.IsNotExist(readErr) {
+				if errors.Is(readErr, os.ErrNotExist) {
 					continue
 				}
 				return readErr
@@ -151,7 +152,7 @@ func followEvents(w io.Writer, path string, sinceTime time.Time, phase string, l
 func readEventsFromPath(path string) ([]pipeline.Event, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("log: no events file found at %s (run 'soda run <ticket>' first)", path)
 		}
 		return nil, fmt.Errorf("log: read events: %w", err)

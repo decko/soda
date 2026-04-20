@@ -368,7 +368,10 @@ func (e *Engine) Run(ctx context.Context) error {
 
 	if err := e.executePhases(ctx, e.config.Pipeline.Phases, false); err != nil {
 		wrapped := e.wrapTimeoutError(ctx, err)
-		e.emit(Event{Kind: EventEngineFailed, Data: map[string]any{"error": wrapped.Error()}})
+		var pte *PipelineTimeoutError
+		if !errors.As(wrapped, &pte) {
+			e.emit(Event{Kind: EventEngineFailed, Data: map[string]any{"error": wrapped.Error()}})
+		}
 		return wrapped
 	}
 
@@ -417,7 +420,10 @@ func (e *Engine) Resume(ctx context.Context, fromPhase string) error {
 	// Mark it with forceFirst=true so executePhases skips the shouldSkip check.
 	if err := e.executePhases(ctx, e.config.Pipeline.Phases[startIdx:], true); err != nil {
 		wrapped := e.wrapTimeoutError(ctx, err)
-		e.emit(Event{Kind: EventEngineFailed, Data: map[string]any{"error": wrapped.Error()}})
+		var pte *PipelineTimeoutError
+		if !errors.As(wrapped, &pte) {
+			e.emit(Event{Kind: EventEngineFailed, Data: map[string]any{"error": wrapped.Error()}})
+		}
 		return wrapped
 	}
 
