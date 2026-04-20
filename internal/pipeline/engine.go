@@ -320,6 +320,14 @@ func (e *Engine) Run(ctx context.Context) error {
 		return err
 	}
 
+	// Reset per-phase CumulativeCost so that stale costs from a prior
+	// pipeline execution do not block per-phase budget enforcement.
+	// Within this execution, CumulativeCost accumulates correctly
+	// across rework generations via MarkRunning / AccumulateCost.
+	if err := e.state.ResetPhaseCosts(); err != nil {
+		return fmt.Errorf("engine: reset phase costs: %w", err)
+	}
+
 	e.reranPhases = make(map[string]bool)
 	e.emit(Event{Kind: EventEngineStarted})
 

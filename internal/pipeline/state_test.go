@@ -720,3 +720,117 @@ func TestCrashSafety_OrphanedTmp(t *testing.T) {
 		t.Error("triage should still be completed after crash resume")
 	}
 }
+
+func TestResetPhaseCosts(t *testing.T) {
+	t.Run("zeroes_cumulative_cost_for_all_phases", func(t *testing.T) {
+		dir := t.TempDir()
+		state, _ := LoadOrCreate(dir, "T-RST")
+
+		// Simulate a prior run that accumulated costs.
+		state.MarkRunning("triage")
+		state.AccumulateCost("triage", 0.10)
+		state.MarkCompleted("triage")
+
+		state.MarkRunning("implement")
+		state.AccumulateCost("implement", 2.00)
+		state.MarkCompleted("implement")
+
+		// Verify costs exist before reset.
+		if !approxEqual(state.Meta().Phases["triage"].CumulativeCost, 0.10) {
+			t.Errorf("triage CumulativeCost before reset = %v, want 0.10",
+				state.Meta().Phases["triage"].CumulativeCost)
+		}
+		if !approxEqual(state.Meta().Phases["implement"].CumulativeCost, 2.00) {
+			t.Errorf("implement CumulativeCost before reset = %v, want 2.00",
+				state.Meta().Phases["implement"].CumulativeCost)
+		}
+
+		// Reset.
+		if err := state.ResetPhaseCosts(); err != nil {
+			t.Fatalf("ResetPhaseCosts: %v", err)
+		}
+
+		// CumulativeCost should be zero for all phases.
+		for name, ps := range state.Meta().Phases {
+			if ps.CumulativeCost != 0 {
+				t.Errorf("phase %q CumulativeCost after reset = %v, want 0", name, ps.CumulativeCost)
+			}
+		}
+	})
+
+	t.Run("preserves_total_cost", func(t *testing.T) {
+		dir := t.TempDir()
+		state, _ := LoadOrCreate(dir, "T-RST2")
+
+		state.MarkRunning("plan")
+		state.AccumulateCost("plan", 1.50)
+		state.MarkCompleted("plan")
+
+		totalBefore := state.Meta().TotalCost
+		if err := state.ResetPhaseCosts(); err != nil {
+			t.Fatalf("ResetPhaseCosts: %v", err)
+		}
+
+		// TotalCost must NOT be reset — it tracks overall ticket spend.
+		if !approxEqual(state.Meta().TotalCost, totalBefore) {
+			t.Errorf("TotalCost after reset = %v, want %v (should be preserved)",
+				state.Meta().TotalCost, totalBefore)
+		}
+	})
+
+	t.Run("preserves_phase_status_and_generation", func(t *testing.T) {
+		dir := t.TempDir()
+		state, _ := LoadOrCreate(dir, "T-RST3")
+
+		state.MarkRunning("verify")
+		state.AccumulateCost("verify", 0.30)
+		state.MarkCompleted("verify")
+
+		if err := state.ResetPhaseCosts(); err != nil {
+			t.Fatalf("ResetPhaseCosts: %v", err)
+		}
+
+		ps := state.Meta().Phases["verify"]
+		if ps.Status != PhaseCompleted {
+			t.Errorf("status after reset = %q, want %q", ps.Status, PhaseCompleted)
+		}
+		if ps.Generation != 1 {
+			t.Errorf("generation after reset = %d, want 1", ps.Generation)
+		}
+	})
+
+	t.Run("no_phases_is_noop", func(t *testing.T) {
+		dir := t.TempDir()
+		state, _ := LoadOrCreate(dir, "T-RST4")
+
+		if err := state.ResetPhaseCosts(); err != nil {
+			t.Fatalf("ResetPhaseCosts on empty phases: %v", err)
+		}
+	})
+
+	t.Run("persists_to_disk", func(t *testing.T) {
+		dir := t.TempDir()
+		state, _ := LoadOrCreate(dir, "T-RST5")
+
+		state.MarkRunning("triage")
+		state.AccumulateCost("triage", 0.50)
+		state.MarkCompleted("triage")
+
+		if err := state.ResetPhaseCosts(); err != nil {
+			t.Fatalf("ResetPhaseCosts: %v", err)
+		}
+
+		// Reload from disk and verify CumulativeCost was persisted as 0.
+		state2, err := LoadOrCreate(dir, "T-RST5")
+		if err != nil {
+			t.Fatalf("reload: %v", err)
+		}
+		ps := state2.Meta().Phases["triage"]
+		if ps == nil {
+			t.Fatal("triage phase not found after reload")
+		}
+		if ps.CumulativeCost != 0 {
+			t.Errorf("CumulativeCost after reload = %v, want 0", ps.CumulativeCost)
+		}
+	})
+}

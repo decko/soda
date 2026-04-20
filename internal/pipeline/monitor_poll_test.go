@@ -2185,14 +2185,16 @@ func TestMonitor_PhaseBudgetExceededSkipsResponse(t *testing.T) {
 	})
 
 	// Pre-set the monitor phase's cumulative cost to exceed the per-phase limit.
+	// Use Resume (not Run) so that ResetPhaseCosts does not clear the pre-seeded value —
+	// this test simulates a mid-execution scenario where cost has already accumulated.
 	state.Meta().Phases["monitor"] = &PhaseState{
 		Status:         PhaseRunning,
 		Generation:     1,
 		CumulativeCost: 1.5, // exceeds $1.0 per-phase limit
 	}
 
-	if err := engine.Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
+	if err := engine.Resume(context.Background(), "monitor"); err != nil {
+		t.Fatalf("Resume: %v", err)
 	}
 
 	// Should have phase_budget_exceeded event with skipping=monitor_response.
@@ -2262,14 +2264,16 @@ func TestMonitor_PhaseBudgetCapsRunnerOpts(t *testing.T) {
 	})
 
 	// Pre-set cumulative cost to $2 so remaining per-phase budget is $3.
+	// Use Resume (not Run) so that ResetPhaseCosts does not clear the pre-seeded value —
+	// this test simulates a mid-execution scenario where cost has already accumulated.
 	state.Meta().Phases["monitor"] = &PhaseState{
 		Status:         PhaseRunning,
 		Generation:     1,
 		CumulativeCost: 2.0,
 	}
 
-	if err := engine.Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
+	if err := engine.Resume(context.Background(), "monitor"); err != nil {
+		t.Fatalf("Resume: %v", err)
 	}
 
 	// Verify runner was called with the tighter per-phase cap.

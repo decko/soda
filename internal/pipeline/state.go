@@ -166,6 +166,18 @@ func (s *State) MarkFailed(phase string, phaseErr error) error {
 	return s.flushMeta()
 }
 
+// ResetPhaseCosts zeroes the CumulativeCost for every phase in the pipeline
+// metadata. This is called at the start of a fresh Run() so that per-phase
+// budget enforcement (checkPhaseBudget) is not blocked by stale costs
+// accumulated during a prior pipeline execution. Within a single execution,
+// CumulativeCost is preserved across rework generations by MarkRunning/AccumulateCost.
+func (s *State) ResetPhaseCosts() error {
+	for _, ps := range s.meta.Phases {
+		ps.CumulativeCost = 0
+	}
+	return s.flushMeta()
+}
+
 // AccumulateCost adds cost to the phase and total. Phase must exist (via MarkRunning).
 // Both the per-generation Cost and the cross-generation CumulativeCost are updated.
 func (s *State) AccumulateCost(phase string, cost float64) error {
