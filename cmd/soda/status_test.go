@@ -237,6 +237,139 @@ func writeStatusMeta(t *testing.T, dir string, meta *pipeline.PipelineMeta) {
 	}
 }
 
+func TestRunStatus_ReworkAndTrendColumns(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create a session with known rework cycles.
+	writeStatusMeta(t, filepath.Join(dir, "TICKET-10"), &pipeline.PipelineMeta{
+		Ticket:       "TICKET-10",
+		StartedAt:    time.Now().Add(-1 * time.Hour),
+		TotalCost:    5.00,
+		ReworkCycles: 3,
+		Phases: map[string]*pipeline.PhaseState{
+			"triage": {Status: pipeline.PhaseCompleted, DurationMs: 5000, Cost: 5.00},
+		},
+	})
+
+	// Add cost ledger entries so trend can be computed: increasing trend (▲).
+	if err := pipeline.AppendCostEntry(dir, pipeline.CostEntry{
+		Ticket: "TICKET-10", Cost: 1.00, Success: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := pipeline.AppendCostEntry(dir, pipeline.CostEntry{
+		Ticket: "TICKET-10", Cost: 5.00, Success: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Capture stdout.
+	oldStdout := os.Stdout
+	readPipe, writePipe, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = writePipe
+
+	runErr := runStatus(dir)
+
+	writePipe.Close()
+	os.Stdout = oldStdout
+
+	var buf strings.Builder
+	data := make([]byte, 4096)
+	for {
+		n, readErr := readPipe.Read(data)
+		if n > 0 {
+			buf.Write(data[:n])
+		}
+		if readErr != nil {
+			break
+		}
+	}
+	readPipe.Close()
+
+	if runErr != nil {
+		t.Fatalf("runStatus error: %v", runErr)
+	}
+
+	output := buf.String()
+
+	// Verify header contains new columns.
+	if !strings.Contains(output, "REWORK") {
+		t.Errorf("output missing REWORK column header.\ngot:\n%s", output)
+	}
+	if !strings.Contains(output, "TREND") {
+		t.Errorf("output missing TREND column header.\ngot:\n%s", output)
+	}
+
+	// Verify rework count appears in output.
+	if !strings.Contains(output, "3") {
+		t.Errorf("output missing rework count 3.\ngot:\n%s", output)
+	}
+
+	// Verify trend indicator appears in output (▲ for increasing).
+	if !strings.Contains(output, "▲") {
+		t.Errorf("output missing trend indicator ▲.\ngot:\n%s", output)
+	}
+}
+
+func TestRunStatus_DefaultTrendWhenNoLedger(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create a session with no cost ledger entries — should get default trend ─.
+	writeStatusMeta(t, filepath.Join(dir, "TICKET-20"), &pipeline.PipelineMeta{
+		Ticket:    "TICKET-20",
+		StartedAt: time.Now().Add(-1 * time.Hour),
+		TotalCost: 1.00,
+		Phases: map[string]*pipeline.PhaseState{
+			"triage": {Status: pipeline.PhaseCompleted, DurationMs: 3000, Cost: 1.00},
+		},
+	})
+
+	// Capture stdout.
+	oldStdout := os.Stdout
+	readPipe, writePipe, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = writePipe
+
+	runErr := runStatus(dir)
+
+	writePipe.Close()
+	os.Stdout = oldStdout
+
+	var buf strings.Builder
+	data := make([]byte, 4096)
+	for {
+		n, readErr := readPipe.Read(data)
+		if n > 0 {
+			buf.Write(data[:n])
+		}
+		if readErr != nil {
+			break
+		}
+	}
+	readPipe.Close()
+
+	if runErr != nil {
+		t.Fatalf("runStatus error: %v", runErr)
+	}
+
+	output := buf.String()
+
+	// ReworkCycles defaults to 0.
+	if !strings.Contains(output, "0") {
+		t.Errorf("output missing default rework count 0.\ngot:\n%s", output)
+	}
+
+	// Default trend should be ─.
+	if !strings.Contains(output, "─") {
+		t.Errorf("output missing default trend indicator ─.\ngot:\n%s", output)
+	}
+}
+
 func TestColorizeStatus(t *testing.T) {
 	tests := []struct {
 		status string

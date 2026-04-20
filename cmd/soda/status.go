@@ -32,6 +32,8 @@ type pipelineEntry struct {
 	cost      string
 	submitted string
 	startedAt time.Time
+	rework    int
+	costTrend string
 }
 
 func newStatusCmd() *cobra.Command {
@@ -71,6 +73,13 @@ func runStatus(stateDir string) error {
 		return fmt.Errorf("status: %w", phasesErr)
 	}
 
+	// Read the cost ledger once and compute per-ticket cost trends.
+	costEntries, costErr := pipeline.ReadCostLedger(stateDir)
+	if costErr != nil {
+		return fmt.Errorf("status: read cost ledger: %w", costErr)
+	}
+	trendMap := pipeline.CostTrendByTicket(costEntries)
+
 	// Collect pipeline entries.
 	var rows []pipelineEntry
 	for _, entry := range entries {
@@ -93,6 +102,11 @@ func runStatus(stateDir string) error {
 		elapsed := formatElapsed(meta)
 		cost := fmt.Sprintf("$%.2f", meta.TotalCost)
 
+		trend, ok := trendMap[meta.Ticket]
+		if !ok {
+			trend = "─"
+		}
+
 		rows = append(rows, pipelineEntry{
 			ticket:    meta.Ticket,
 			phase:     phase,
@@ -101,6 +115,8 @@ func runStatus(stateDir string) error {
 			cost:      cost,
 			submitted: formatSubmitted(meta.StartedAt, time.Now()),
 			startedAt: meta.StartedAt,
+			rework:    meta.ReworkCycles,
+			costTrend: trend,
 		})
 	}
 
@@ -116,10 +132,10 @@ func runStatus(stateDir string) error {
 	// Render collected entries.
 	isTTY := isatty.IsTerminal(os.Stdout.Fd()) || isatty.IsCygwinTerminal(os.Stdout.Fd())
 	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "TICKET\tPHASE\tSTATUS\tSUBMITTED\tELAPSED\tCOST")
+	fmt.Fprintln(tw, "TICKET\tPHASE\tSTATUS\tSUBMITTED\tELAPSED\tCOST\tREWORK\tTREND")
 	for _, r := range rows {
 		status := colorizeStatus(r.status, isTTY)
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", r.ticket, r.phase, status, r.submitted, r.elapsed, r.cost)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\n", r.ticket, r.phase, status, r.submitted, r.elapsed, r.cost, r.rework, r.costTrend)
 	}
 
 	if err := tw.Flush(); err != nil {
