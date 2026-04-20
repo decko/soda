@@ -78,6 +78,7 @@ const (
 	EventPatchEscalationSkipped   = "patch_escalation_skipped"
 	EventPatchRegression          = "patch_regression"
 	EventReworkMinorsDowngraded   = "rework_minors_downgraded"
+	EventReviewerSkippedRework    = "reviewer_skipped_rework"
 	EventPipelineTimeout          = "pipeline_timeout"
 )
 

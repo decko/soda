@@ -1910,14 +1910,47 @@ func (e *Engine) runParallelReview(ctx context.Context, phase PhaseConfig) error
 		}
 	}
 
+	// During rework cycles, skip reviewers that had no critical/major
+	// findings in the previous cycle — re-running them is redundant and
+	// wastes LLM budget. Carried findings from skipped reviewers are
+	// merged into the final result to preserve verdict accuracy.
+	activeReviewers := phase.Reviewers
+	var carriedFindings []schemas.ReviewFinding
+	if skipSet, carried := e.redundantReviewers(phase); len(skipSet) > 0 {
+		carriedFindings = carried
+		filtered := make([]ReviewerConfig, 0, len(phase.Reviewers)-len(skipSet))
+		for _, r := range phase.Reviewers {
+			if skipSet[r.Name] {
+				carryCount := 0
+				for _, f := range carried {
+					if f.Source == r.Name {
+						carryCount++
+					}
+				}
+				e.emit(Event{
+					Phase: phase.Name,
+					Kind:  EventReviewerSkippedRework,
+					Data: map[string]any{
+						"reviewer":         r.Name,
+						"reason":           "no critical/major findings in previous cycle",
+						"carried_findings": carryCount,
+					},
+				})
+				continue
+			}
+			filtered = append(filtered, r)
+		}
+		activeReviewers = filtered
+	}
+
 	// Channel for reviewer goroutines to send messages to the parent.
-	msgCh := make(chan reviewerMsg, len(phase.Reviewers)*10)
+	msgCh := make(chan reviewerMsg, len(activeReviewers)*10)
 
 	// Dispatch reviewers in parallel.
 	var wg sync.WaitGroup
-	results := make([]reviewerResult, len(phase.Reviewers))
+	results := make([]reviewerResult, len(activeReviewers))
 
-	for idx, reviewer := range phase.Reviewers {
+	for idx, reviewer := range activeReviewers {
 		wg.Add(1)
 		go func(idx int, reviewer ReviewerConfig) {
 			defer wg.Done()
@@ -1969,8 +2002,9 @@ func (e *Engine) runParallelReview(ctx context.Context, phase PhaseConfig) error
 		return combinedErr
 	}
 
-	// Merge findings from all reviewers.
-	merged := e.mergeReviewFindings(phase, results)
+	// Merge findings from all reviewers, including carried findings
+	// from any reviewers that were skipped during rework.
+	merged := e.mergeReviewFindings(phase, results, carriedFindings)
 
 	// Serialize and store results.
 	output, err := json.Marshal(merged)
@@ -2148,9 +2182,92 @@ func (e *Engine) runReviewer(ctx context.Context, phase PhaseConfig, reviewer Re
 	})
 }
 
+// redundantReviewers returns the set of reviewer names that can be skipped
+// because they had no critical/major findings in the previous review cycle.
+// Also returns findings to carry forward from skipped reviewers so the
+// merged result preserves verdict accuracy (e.g., minor findings still
+// contribute to a "pass-with-follow-ups" verdict).
+//
+// Returns nil maps when no skip optimization is applicable: first review
+// run, no rework cycles, unreadable archived result, or when all reviewers
+// need re-running. Called after MarkRunning, which archives the previous
+// result to <phase>.json.<gen-1>.
+func (e *Engine) redundantReviewers(phase PhaseConfig) (skip map[string]bool, carry []schemas.ReviewFinding) {
+	// Only optimize during rework cycles.
+	if e.state.Meta().ReworkCycles == 0 {
+		return nil, nil
+	}
+
+	ps := e.state.Meta().Phases[phase.Name]
+	if ps == nil || ps.Generation <= 1 {
+		return nil, nil
+	}
+
+	// Read the archived review result from the previous generation.
+	raw, err := e.state.ReadArchivedResult(phase.Name, ps.Generation-1)
+	if err != nil {
+		return nil, nil
+	}
+
+	var prev schemas.ReviewOutput
+	if err := json.Unmarshal(raw, &prev); err != nil {
+		return nil, nil
+	}
+
+	// Build set of reviewers that had critical/major findings.
+	needsRerun := make(map[string]bool)
+	for _, f := range prev.Findings {
+		sev := strings.ToLower(f.Severity)
+		if sev == "critical" || sev == "major" {
+			needsRerun[f.Source] = true
+		}
+	}
+
+	// If no reviewer had critical/major findings, run all — this shouldn't
+	// normally happen during rework (gateRework requires critical/major),
+	// but handles edge cases gracefully.
+	if len(needsRerun) == 0 {
+		return nil, nil
+	}
+
+	// Build skip set: reviewers not in needsRerun are redundant.
+	skip = make(map[string]bool)
+	for _, r := range phase.Reviewers {
+		if !needsRerun[r.Name] {
+			skip[r.Name] = true
+		}
+	}
+
+	// If all reviewers would be skipped (e.g., reviewer names changed
+	// between runs), run all instead — don't skip the entire review.
+	if len(skip) >= len(phase.Reviewers) {
+		return nil, nil
+	}
+
+	// No reviewers to skip — all had critical/major findings.
+	if len(skip) == 0 {
+		return nil, nil
+	}
+
+	// Carry forward findings from skipped reviewers so the merged
+	// result preserves minor findings for verdict accuracy.
+	for _, f := range prev.Findings {
+		if skip[f.Source] {
+			carry = append(carry, f)
+		}
+	}
+
+	return skip, carry
+}
+
 // mergeReviewFindings combines findings from all reviewers and computes a verdict.
-func (e *Engine) mergeReviewFindings(phase PhaseConfig, results []reviewerResult) schemas.ReviewOutput {
+// carriedFindings are included from reviewers that were skipped during rework
+// cycles (they already have Source set from the previous cycle's merge).
+func (e *Engine) mergeReviewFindings(phase PhaseConfig, results []reviewerResult, carriedFindings []schemas.ReviewFinding) schemas.ReviewOutput {
 	var allFindings []schemas.ReviewFinding
+
+	// Include carried findings from skipped reviewers first.
+	allFindings = append(allFindings, carriedFindings...)
 
 	for _, result := range results {
 		for _, finding := range result.Findings {
