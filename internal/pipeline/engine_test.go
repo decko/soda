@@ -9745,7 +9745,7 @@ func TestEngine_PipelineTimeout_ExternalDeadlineNotWrapped(t *testing.T) {
 	}
 }
 
-func TestEngine_ReviewersWithCriticalFindings(t *testing.T) {
+func TestEngine_LoadPriorReview(t *testing.T) {
 	t.Run("nil_on_first_generation", func(t *testing.T) {
 		phases := []PhaseConfig{
 			{
@@ -9758,7 +9758,7 @@ func TestEngine_ReviewersWithCriticalFindings(t *testing.T) {
 		}
 		engine, _ := setupReviewEngine(t, phases, &flexMockRunner{})
 
-		got := engine.reviewersWithCriticalFindings("review")
+		got := engine.loadPriorReview("review")
 		if got != nil {
 			t.Errorf("expected nil on first generation, got %v", got)
 		}
@@ -9776,13 +9776,13 @@ func TestEngine_ReviewersWithCriticalFindings(t *testing.T) {
 		}
 		engine, _ := setupReviewEngine(t, phases, &flexMockRunner{})
 
-		got := engine.reviewersWithCriticalFindings("nonexistent")
+		got := engine.loadPriorReview("nonexistent")
 		if got != nil {
 			t.Errorf("expected nil for unstarted phase, got %v", got)
 		}
 	})
 
-	t.Run("returns_critical_sources", func(t *testing.T) {
+	t.Run("returns_prior_review", func(t *testing.T) {
 		phases := []PhaseConfig{
 			{
 				Name: "review",
@@ -9811,7 +9811,32 @@ func TestEngine_ReviewersWithCriticalFindings(t *testing.T) {
 			t.Fatalf("write archived result: %v", err)
 		}
 
-		got := engine.reviewersWithCriticalFindings("review")
+		got := engine.loadPriorReview("review")
+		if got == nil {
+			t.Fatal("expected non-nil review")
+		}
+		if len(got.Findings) != 2 {
+			t.Errorf("expected 2 findings, got %d", len(got.Findings))
+		}
+	})
+}
+
+func TestNeededReviewersFromPrior(t *testing.T) {
+	t.Run("nil_when_no_prior", func(t *testing.T) {
+		got := neededReviewersFromPrior(nil)
+		if got != nil {
+			t.Errorf("expected nil, got %v", got)
+		}
+	})
+
+	t.Run("returns_critical_sources", func(t *testing.T) {
+		prev := &schemas.ReviewOutput{
+			Findings: []schemas.ReviewFinding{
+				{Source: "go-specialist", Severity: "critical", File: "x.go", Issue: "nil deref"},
+				{Source: "ai-harness", Severity: "minor", File: "p.md", Issue: "style"},
+			},
+		}
+		got := neededReviewersFromPrior(prev)
 		if got == nil {
 			t.Fatal("expected non-nil set")
 		}
@@ -9824,32 +9849,12 @@ func TestEngine_ReviewersWithCriticalFindings(t *testing.T) {
 	})
 
 	t.Run("returns_empty_map_all_minor", func(t *testing.T) {
-		phases := []PhaseConfig{
-			{
-				Name: "review",
-				Type: "parallel-review",
-				Reviewers: []ReviewerConfig{
-					{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
-				},
-			},
-		}
-		engine, state := setupReviewEngine(t, phases, &flexMockRunner{})
-
-		state.Meta().Phases["review"] = &PhaseState{Generation: 2}
-		prevReview := schemas.ReviewOutput{
-			TicketKey: "TEST-1",
-			Verdict:   "rework",
+		prev := &schemas.ReviewOutput{
 			Findings: []schemas.ReviewFinding{
 				{Source: "go-specialist", Severity: "minor", File: "x.go", Issue: "naming"},
 			},
 		}
-		prevData, _ := json.Marshal(prevReview)
-		archivedPath := filepath.Join(state.Dir(), "review.json.1")
-		if err := os.WriteFile(archivedPath, prevData, 0644); err != nil {
-			t.Fatalf("write archived result: %v", err)
-		}
-
-		got := engine.reviewersWithCriticalFindings("review")
+		got := neededReviewersFromPrior(prev)
 		if got == nil {
 			t.Fatal("expected non-nil set (empty map)")
 		}
@@ -10260,40 +10265,16 @@ func TestEngine_ParallelReview_SkipReviewerWithMinorFindings(t *testing.T) {
 	}
 }
 
-func TestEngine_PriorFindingsForReviewer(t *testing.T) {
-	t.Run("nil_on_first_generation", func(t *testing.T) {
-		phases := []PhaseConfig{
-			{
-				Name: "review",
-				Type: "parallel-review",
-				Reviewers: []ReviewerConfig{
-					{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
-				},
-			},
-		}
-		engine, _ := setupReviewEngine(t, phases, &flexMockRunner{})
-
-		got := engine.priorFindingsForReviewer("review", "go-specialist")
+func TestPriorFindingsForReviewer(t *testing.T) {
+	t.Run("nil_when_no_prior", func(t *testing.T) {
+		got := priorFindingsForReviewer(nil, "go-specialist")
 		if got != nil {
-			t.Errorf("expected nil on first generation, got %v", got)
+			t.Errorf("expected nil when prior is nil, got %v", got)
 		}
 	})
 
 	t.Run("returns_findings_for_reviewer", func(t *testing.T) {
-		phases := []PhaseConfig{
-			{
-				Name: "review",
-				Type: "parallel-review",
-				Reviewers: []ReviewerConfig{
-					{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
-					{Name: "ai-harness", Prompt: "prompts/review-harness.md", Focus: "AI harness"},
-				},
-			},
-		}
-		engine, state := setupReviewEngine(t, phases, &flexMockRunner{})
-
-		state.Meta().Phases["review"] = &PhaseState{Generation: 2}
-		prevReview := schemas.ReviewOutput{
+		prev := &schemas.ReviewOutput{
 			TicketKey: "TEST-1",
 			Verdict:   "rework",
 			Findings: []schemas.ReviewFinding{
@@ -10302,13 +10283,8 @@ func TestEngine_PriorFindingsForReviewer(t *testing.T) {
 				{Source: "ai-harness", Severity: "minor", File: "q.md", Issue: "style"},
 			},
 		}
-		prevData, _ := json.Marshal(prevReview)
-		archivedPath := filepath.Join(state.Dir(), "review.json.1")
-		if err := os.WriteFile(archivedPath, prevData, 0644); err != nil {
-			t.Fatalf("write archived result: %v", err)
-		}
 
-		got := engine.priorFindingsForReviewer("review", "ai-harness")
+		got := priorFindingsForReviewer(prev, "ai-harness")
 		if len(got) != 2 {
 			t.Fatalf("expected 2 findings for ai-harness, got %d", len(got))
 		}
@@ -10319,39 +10295,22 @@ func TestEngine_PriorFindingsForReviewer(t *testing.T) {
 		}
 
 		// go-specialist should only have its own findings.
-		goFindings := engine.priorFindingsForReviewer("review", "go-specialist")
+		goFindings := priorFindingsForReviewer(prev, "go-specialist")
 		if len(goFindings) != 1 {
 			t.Fatalf("expected 1 finding for go-specialist, got %d", len(goFindings))
 		}
 	})
 
 	t.Run("nil_for_unknown_reviewer", func(t *testing.T) {
-		phases := []PhaseConfig{
-			{
-				Name: "review",
-				Type: "parallel-review",
-				Reviewers: []ReviewerConfig{
-					{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
-				},
-			},
-		}
-		engine, state := setupReviewEngine(t, phases, &flexMockRunner{})
-
-		state.Meta().Phases["review"] = &PhaseState{Generation: 2}
-		prevReview := schemas.ReviewOutput{
+		prev := &schemas.ReviewOutput{
 			TicketKey: "TEST-1",
 			Verdict:   "rework",
 			Findings: []schemas.ReviewFinding{
 				{Source: "go-specialist", Severity: "minor", File: "x.go", Issue: "naming"},
 			},
 		}
-		prevData, _ := json.Marshal(prevReview)
-		archivedPath := filepath.Join(state.Dir(), "review.json.1")
-		if err := os.WriteFile(archivedPath, prevData, 0644); err != nil {
-			t.Fatalf("write archived result: %v", err)
-		}
 
-		got := engine.priorFindingsForReviewer("review", "nonexistent")
+		got := priorFindingsForReviewer(prev, "nonexistent")
 		if len(got) != 0 {
 			t.Errorf("expected no findings for unknown reviewer, got %d", len(got))
 		}

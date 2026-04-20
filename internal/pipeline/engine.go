@@ -1970,15 +1970,13 @@ type reviewerLog struct {
 	Content []byte
 }
 
-// reviewersWithCriticalFindings reads the archived review result from the
-// previous generation and returns the set of reviewer names that produced at
-// least one critical or major finding. Returns nil when there is no prior
-// generation (first run) or the archived result cannot be read/parsed.
-//
-// The caller uses this set to skip redundant reviewers on rework cycles:
-// any reviewer NOT in the returned set had no actionable findings and does
-// not need to re-run.
-func (e *Engine) reviewersWithCriticalFindings(phaseName string) map[string]bool {
+// loadPriorReview reads and parses the archived review result from the
+// previous generation. Returns nil when there is no prior generation (first
+// run) or the archived result cannot be read/parsed. On read/parse errors
+// an event is emitted so operators can detect the failure; the caller should
+// treat a nil return as "no prior data available" and run all reviewers
+// (safe fallback).
+func (e *Engine) loadPriorReview(phaseName string) *schemas.ReviewOutput {
 	ps := e.state.Meta().Phases[phaseName]
 	if ps == nil || ps.Generation <= 1 {
 		return nil
@@ -1986,16 +1984,37 @@ func (e *Engine) reviewersWithCriticalFindings(phaseName string) map[string]bool
 
 	raw, err := e.state.ReadArchivedResult(phaseName, ps.Generation-1)
 	if err != nil {
+		e.emit(Event{
+			Phase: phaseName,
+			Kind:  EventPhaseFailed,
+			Data:  map[string]any{"warning": "failed to read archived review result", "error": err.Error()},
+		})
 		return nil
 	}
 
 	var prevReview schemas.ReviewOutput
 	if err := json.Unmarshal(raw, &prevReview); err != nil {
+		e.emit(Event{
+			Phase: phaseName,
+			Kind:  EventPhaseFailed,
+			Data:  map[string]any{"warning": "failed to unmarshal archived review result", "error": err.Error()},
+		})
 		return nil
 	}
 
+	return &prevReview
+}
+
+// neededReviewersFromPrior derives the set of reviewer names that produced at
+// least one critical or major finding from a prior review result. Returns nil
+// when prev is nil (first run or load failure), meaning all reviewers should
+// run.
+func neededReviewersFromPrior(prev *schemas.ReviewOutput) map[string]bool {
+	if prev == nil {
+		return nil
+	}
 	needed := make(map[string]bool)
-	for _, finding := range prevReview.Findings {
+	for _, finding := range prev.Findings {
 		sev := strings.ToLower(finding.Severity)
 		if sev == "critical" || sev == "major" {
 			needed[finding.Source] = true
@@ -2004,28 +2023,16 @@ func (e *Engine) reviewersWithCriticalFindings(phaseName string) map[string]bool
 	return needed
 }
 
-// priorFindingsForReviewer returns the findings from the previous generation's
-// archived review result that belong to the given reviewer. This is used to
-// carry forward minor findings when a reviewer is skipped on rework cycles,
-// ensuring they are not silently dropped from the merged output.
-func (e *Engine) priorFindingsForReviewer(phaseName, reviewerName string) []schemas.ReviewFinding {
-	ps := e.state.Meta().Phases[phaseName]
-	if ps == nil || ps.Generation <= 1 {
+// priorFindingsForReviewer returns the findings from a prior review result
+// that belong to the given reviewer. This is used to carry forward minor
+// findings when a reviewer is skipped on rework cycles, ensuring they are
+// not silently dropped from the merged output.
+func priorFindingsForReviewer(prev *schemas.ReviewOutput, reviewerName string) []schemas.ReviewFinding {
+	if prev == nil {
 		return nil
 	}
-
-	raw, err := e.state.ReadArchivedResult(phaseName, ps.Generation-1)
-	if err != nil {
-		return nil
-	}
-
-	var prevReview schemas.ReviewOutput
-	if err := json.Unmarshal(raw, &prevReview); err != nil {
-		return nil
-	}
-
 	var findings []schemas.ReviewFinding
-	for _, f := range prevReview.Findings {
+	for _, f := range prev.Findings {
 		if f.Source == reviewerName {
 			findings = append(findings, f)
 		}
@@ -2094,11 +2101,16 @@ func (e *Engine) runParallelReview(ctx context.Context, phase PhaseConfig) error
 		}
 	}
 
-	// On rework cycles, determine which reviewers can be skipped.
-	// A reviewer is redundant if it had no critical/major findings in the
-	// previous review — only reviewers that flagged actionable issues need
-	// to re-verify the fixes.
-	neededReviewers := e.reviewersWithCriticalFindings(phase.Name)
+	// On rework cycles, load the prior review result once and derive which
+	// reviewers can be skipped. A reviewer is redundant if it had no
+	// critical/major findings in the previous review — only reviewers that
+	// flagged actionable issues need to re-verify the fixes.
+	//
+	// loadPriorReview returns nil on the first run or on load failure; in
+	// both cases neededReviewers will be nil and all reviewers run (safe
+	// fallback that avoids silently losing findings).
+	priorReview := e.loadPriorReview(phase.Name)
+	neededReviewers := neededReviewersFromPrior(priorReview)
 
 	// Channel for reviewer goroutines to send messages to the parent.
 	msgCh := make(chan reviewerMsg, len(phase.Reviewers)*10)
@@ -2120,13 +2132,13 @@ func (e *Engine) runParallelReview(ctx context.Context, phase PhaseConfig) error
 			// verdict could incorrectly become "pass" instead of
 			// "pass-with-follow-ups", causing the post-submit follow-up
 			// phase to be skipped.
-			priorFindings := e.priorFindingsForReviewer(phase.Name, reviewer.Name)
+			carried := priorFindingsForReviewer(priorReview, reviewer.Name)
 			e.emit(Event{
 				Phase: phase.Name,
 				Kind:  EventReviewerSkipped,
-				Data:  map[string]any{"reviewer": reviewer.Name, "reason": "no critical/major findings in prior cycle", "carried_findings": len(priorFindings)},
+				Data:  map[string]any{"reviewer": reviewer.Name, "reason": "no critical/major findings in prior cycle", "carried_findings": len(carried)},
 			})
-			results[idx] = reviewerResult{Name: reviewer.Name, Findings: priorFindings}
+			results[idx] = reviewerResult{Name: reviewer.Name, Findings: carried}
 			continue
 		}
 		wg.Add(1)
