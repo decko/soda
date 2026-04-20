@@ -113,7 +113,7 @@ func cleanTicket(ctx context.Context, stateDir, ticketKey string, dryRun, force 
 				wtArgs = append(wtArgs, "--force")
 			}
 			wtArgs = append(wtArgs, meta.Worktree)
-			out, wtErr := exec.Command("git", wtArgs...).CombinedOutput()
+			out, wtErr := exec.CommandContext(ctx, "git", wtArgs...).CombinedOutput()
 			if wtErr != nil {
 				fmt.Fprintf(os.Stderr, "Warning: git worktree remove %s: %s\n", meta.Worktree, string(out))
 			} else {
