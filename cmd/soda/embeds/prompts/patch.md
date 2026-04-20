@@ -38,40 +38,50 @@ Use this context to avoid re-introducing previously-fixed issues or repeating th
 
 ## FIXES REQUIRED
 
-You will address the issues listed below. Report one fix_result per item in the Fixes section (use fix_index matching the number shown).
+You will address the issues listed below **one at a time, in order**. Report one fix_result per item in the Fixes section (use fix_index matching the 0-based index).
+
+Do NOT address multiple findings in a single edit. Fix one, verify it, then move to the next.
 
 ### Verdict: {{.ReworkFeedback.Verdict}}
 
 {{- if .ReworkFeedback.FixesRequired}}
 ### Fixes
-{{range $idx, $fix := .ReworkFeedback.FixesRequired}}{{$idx}}. **{{$fix}}**
+{{range $idx, $fix := .ReworkFeedback.FixesRequired}}#### Finding {{add $idx 1}} of {{len $.ReworkFeedback.FixesRequired}}
+{{$idx}}. **{{$fix}}**
+→ Fix this finding, then verify before proceeding.
 {{end}}
 {{- end}}
 
 {{- if .ReworkFeedback.FailedCriteria}}
 ### Failed Acceptance Criteria
-{{range $idx, $fc := .ReworkFeedback.FailedCriteria}}{{$idx}}. **FAIL**: {{$fc.Criterion}}
+{{range $idx, $fc := .ReworkFeedback.FailedCriteria}}#### Finding {{add $idx 1}} of {{len $.ReworkFeedback.FailedCriteria}}
+{{$idx}}. **FAIL**: {{$fc.Criterion}}
    Evidence: {{$fc.Evidence}}
+→ Fix this finding, then verify before proceeding.
 {{end}}
 {{- end}}
 
 {{- if .ReworkFeedback.CodeIssues}}
 ### Code Issues
-{{range $idx, $ci := .ReworkFeedback.CodeIssues}}{{$idx}}. **{{$ci.Severity}}** {{$ci.File}}{{if $ci.Line}}:{{$ci.Line}}{{end}}: {{$ci.Issue}}
+{{range $idx, $ci := .ReworkFeedback.CodeIssues}}#### Finding {{add $idx 1}} of {{len $.ReworkFeedback.CodeIssues}}
+{{$idx}}. **{{$ci.Severity}}** {{$ci.File}}{{if $ci.Line}}:{{$ci.Line}}{{end}}: {{$ci.Issue}}
 {{- if $ci.SuggestedFix}}
    Suggested fix: {{$ci.SuggestedFix}}
 {{- end}}
+→ Fix this finding, then verify before proceeding.
 {{end}}
 {{- end}}
 
 {{- if .ReworkFeedback.FailedCommands}}
 ### Failed Commands
-{{range $idx, $cmd := .ReworkFeedback.FailedCommands}}{{$idx}}. `{{$cmd.Command}}` (exit {{$cmd.ExitCode}})
+{{range $idx, $cmd := .ReworkFeedback.FailedCommands}}#### Finding {{add $idx 1}} of {{len $.ReworkFeedback.FailedCommands}}
+{{$idx}}. `{{$cmd.Command}}` (exit {{$cmd.ExitCode}})
 {{- if $cmd.Output}}
 ```
 {{$cmd.Output}}
 ```
 {{- end}}
+→ Fix this finding, then verify before proceeding.
 {{end}}
 {{- end}}
 {{- end}}
@@ -108,5 +118,5 @@ Base: {{.BaseBranch}}
 {{- if .Config.TestCommand}}
 6. **Run the tests** after changes: `{{.Config.TestCommand}}`
 {{- end}}
-7. **Each fix_result must map 1:1** to the numbered items in the **Fixes** section only. Use the same 0-based index. Code Issues provide additional context but do not need separate fix_results.
+7. **Each fix_result must map 1:1** to the numbered items in the **Fixes** section only. Use the same 0-based index (the number before each fix). Display headers show 1-based "Finding X of N" but fix_index uses the 0-based number. Code Issues provide additional context but do not need separate fix_results.
 8. **Commit** the fix with a message referencing the ticket key and fix number.

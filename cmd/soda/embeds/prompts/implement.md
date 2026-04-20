@@ -37,61 +37,72 @@ Use this context to avoid re-introducing previously-fixed issues or repeating th
 ## MANDATORY: Specialist Review Findings (MUST address)
 
 The following issues were identified by specialist reviewers.
-You MUST address every critical and major finding below. Do not repeat the same mistakes.
+You MUST address every finding below **one at a time, in order**. Do not repeat the same mistakes.
 
-{{- range .ReworkFeedback.ReviewFindings}}
+Do NOT address multiple findings in a single edit. Fix one, verify it, then move to the next.
 
-### {{.Source}}
-- [{{.Severity}}] {{.File}}{{if .Line}}:{{.Line}}{{end}} — {{.Issue}}
-  Suggestion: {{.Suggestion}}
+{{- range $idx, $finding := .ReworkFeedback.ReviewFindings}}
+
+### Finding {{add $idx 1}} of {{len $.ReworkFeedback.ReviewFindings}}: {{$finding.Source}}
+- [{{$finding.Severity}}] {{$finding.File}}{{if $finding.Line}}:{{$finding.Line}}{{end}} — {{$finding.Issue}}
+  Suggestion: {{$finding.Suggestion}}
+→ Fix this finding, then verify before proceeding.
 {{- end}}
 
-After implementing, verify that each finding above is addressed before reporting completion.
 If any feedback above contradicts the Implementation Plan, the feedback takes precedence — it reflects issues found in the actual implementation.
 {{- else}}
 
 ## MANDATORY: Previous Verification Failures
 
 The following issues were identified in the previous implementation attempt.
-You MUST address every item below. Do not repeat the same mistakes.
+You MUST address every item below **one at a time, in order**. Do not repeat the same mistakes.
+
+Do NOT address multiple findings in a single edit. Fix one, verify it, then move to the next.
 
 ### Verdict: {{.ReworkFeedback.Verdict}}
 
 {{- if .ReworkFeedback.FixesRequired}}
 ### Fixes Required
-{{range .ReworkFeedback.FixesRequired}}- **{{.}}**
+{{range $idx, $fix := .ReworkFeedback.FixesRequired}}#### Finding {{add $idx 1}} of {{len $.ReworkFeedback.FixesRequired}}
+- **{{$fix}}**
+→ Fix this finding, then verify before proceeding.
 {{end}}
 {{- end}}
 
 {{- if .ReworkFeedback.FailedCriteria}}
 ### Failed Acceptance Criteria
-{{range .ReworkFeedback.FailedCriteria}}- **FAIL**: {{.Criterion}}
-  Evidence: {{.Evidence}}
+{{range $idx, $fc := .ReworkFeedback.FailedCriteria}}#### Finding {{add $idx 1}} of {{len $.ReworkFeedback.FailedCriteria}}
+- **FAIL**: {{$fc.Criterion}}
+  Evidence: {{$fc.Evidence}}
+→ Fix this finding, then verify before proceeding.
 {{end}}
 {{- end}}
 
 {{- if .ReworkFeedback.CodeIssues}}
 ### Code Issues
-{{range .ReworkFeedback.CodeIssues}}- **{{.Severity}}** {{.File}}{{if .Line}}:{{.Line}}{{end}}: {{.Issue}}
-{{- if .SuggestedFix}}
-  Suggested fix: {{.SuggestedFix}}
+{{range $idx, $ci := .ReworkFeedback.CodeIssues}}#### Finding {{add $idx 1}} of {{len $.ReworkFeedback.CodeIssues}}
+- **{{$ci.Severity}}** {{$ci.File}}{{if $ci.Line}}:{{$ci.Line}}{{end}}: {{$ci.Issue}}
+{{- if $ci.SuggestedFix}}
+  Suggested fix: {{$ci.SuggestedFix}}
 {{- end}}
+→ Fix this finding, then verify before proceeding.
 {{end}}
 {{- end}}
 
 {{- if .ReworkFeedback.FailedCommands}}
 ### Failed Commands
-{{range .ReworkFeedback.FailedCommands}}- `{{.Command}}` (exit {{.ExitCode}})
-{{- if .Output}}
+{{range $idx, $cmd := .ReworkFeedback.FailedCommands}}#### Finding {{add $idx 1}} of {{len $.ReworkFeedback.FailedCommands}}
+- `{{$cmd.Command}}` (exit {{$cmd.ExitCode}})
+{{- if $cmd.Output}}
 ```
-{{.Output}}
+{{$cmd.Output}}
 ```
 {{- end}}
+→ Fix this finding, then verify before proceeding.
 {{end}}
 {{- end}}
 
 If any feedback above contradicts the Implementation Plan, the feedback takes precedence — it reflects issues found in the actual implementation.
-After implementing, verify that each fix above is addressed before reporting completion.
 {{- end}}
 {{- end}}
 

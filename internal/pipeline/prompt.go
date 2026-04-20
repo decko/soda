@@ -266,13 +266,20 @@ func (loader *PromptLoader) LoadWithSource(name string) (*LoadResult, error) {
 	return nil, fmt.Errorf("prompt: %s not found in %v", name, loader.dirs)
 }
 
+// promptFuncs is a shared FuncMap registered on every prompt template.
+// Go templates have no built-in arithmetic; the add function enables
+// 1-based display indexing via {{add $idx 1}}.
+var promptFuncs = template.FuncMap{
+	"add": func(a, b int) int { return a + b },
+}
+
 // ValidateTemplate parses a Go text/template and executes it against a
 // zero-value PromptData. This catches syntax errors and references to
 // fields that don't exist on PromptData. Templates that only fail at
 // render time due to missing runtime data (e.g. nil pointer deref on
 // optional sections) are not caught here — they require RenderPrompt.
 func ValidateTemplate(tmpl string) error {
-	parsed, err := template.New("prompt").Option("missingkey=error").Parse(tmpl)
+	parsed, err := template.New("prompt").Funcs(promptFuncs).Option("missingkey=error").Parse(tmpl)
 	if err != nil {
 		return fmt.Errorf("prompt: parse template: %w", err)
 	}
@@ -287,7 +294,7 @@ func ValidateTemplate(tmpl string) error {
 
 // RenderPrompt executes a Go text/template against the given data.
 func RenderPrompt(tmpl string, data PromptData) (string, error) {
-	parsed, err := template.New("prompt").Option("missingkey=error").Parse(tmpl)
+	parsed, err := template.New("prompt").Funcs(promptFuncs).Option("missingkey=error").Parse(tmpl)
 	if err != nil {
 		return "", fmt.Errorf("prompt: parse template: %w", err)
 	}
