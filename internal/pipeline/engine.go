@@ -2069,22 +2069,47 @@ func (e *Engine) runParallelReview(ctx context.Context, phase PhaseConfig) error
 		return fmt.Errorf("engine: context cancelled during %s: %w", phase.Name, err)
 	}
 
-	// Collect errors from reviewers.
+	// Partition results into successes and failures.
+	var successResults []reviewerResult
 	var reviewErrors []string
 	for _, result := range results {
 		if result.Err != nil {
 			reviewErrors = append(reviewErrors, fmt.Sprintf("%s: %v", result.Name, result.Err))
+		} else {
+			successResults = append(successResults, result)
 		}
 	}
-	if len(reviewErrors) > 0 {
+
+	// Determine how many reviewers must succeed.
+	// MinReviewers == 0 means all reviewers are required (backwards compatible).
+	minRequired := phase.MinReviewers
+	if minRequired <= 0 {
+		minRequired = len(phase.Reviewers)
+	}
+
+	if len(successResults) < minRequired {
 		combinedErr := fmt.Errorf("engine: reviewer failures in %s: %s", phase.Name, strings.Join(reviewErrors, "; "))
 		_ = e.state.MarkFailed(phase.Name, combinedErr)
 		e.emitPhaseFailed(phase.Name, combinedErr)
 		return combinedErr
 	}
 
-	// Merge findings from all reviewers.
-	merged := e.mergeReviewFindings(phase, results)
+	// Emit partial-failure warnings for tolerated reviewer errors.
+	for _, result := range results {
+		if result.Err != nil {
+			e.emit(Event{
+				Phase: phase.Name,
+				Kind:  EventReviewerPartialFailure,
+				Data: map[string]any{
+					"reviewer": result.Name,
+					"error":    result.Err.Error(),
+				},
+			})
+		}
+	}
+
+	// Merge findings from successful reviewers only.
+	merged := e.mergeReviewFindings(phase, successResults)
 
 	// Serialize and store results.
 	output, err := json.Marshal(merged)
@@ -2104,7 +2129,8 @@ func (e *Engine) runParallelReview(ctx context.Context, phase PhaseConfig) error
 		return fmt.Errorf("engine: write artifact for %s: %w", phase.Name, err)
 	}
 
-	// Accumulate cost from all reviewers.
+	// Accumulate cost from ALL reviewers (including failed ones,
+	// since they may have incurred partial cost before failing).
 	totalCost := 0.0
 	for _, result := range results {
 		totalCost += result.Cost
