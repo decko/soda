@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -1286,11 +1288,15 @@ func (e *Engine) extractReviewFeedback() *ReworkFeedback {
 		Source:  "review",
 	}
 
-	// Only include critical and major findings.
+	// Only include critical and major findings, enriched with code snippets.
 	for _, finding := range result.Findings {
 		sev := strings.ToLower(finding.Severity)
 		if sev == "critical" || sev == "major" {
-			fb.ReviewFindings = append(fb.ReviewFindings, finding)
+			ef := EnrichedFinding{ReviewFinding: finding}
+			if finding.File != "" && finding.Line > 0 {
+				ef.CodeSnippet = readSnippet(e.workDir(PhaseConfig{}), finding.File, finding.Line, 5)
+			}
+			fb.ReviewFindings = append(fb.ReviewFindings, ef)
 		}
 	}
 
@@ -1298,6 +1304,30 @@ func (e *Engine) extractReviewFeedback() *ReworkFeedback {
 	fb.PriorCycles = e.collectPriorReviewCycles()
 
 	return fb
+}
+
+// readSnippet reads ±context lines around the given 1-based line number
+// from file in workDir. Returns empty string on any error (missing file,
+// invalid line, etc.) — callers treat this as best-effort enrichment.
+func readSnippet(workDir, file string, line, context int) string {
+	path := filepath.Join(workDir, file)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(string(data), "\n")
+	start := line - context - 1
+	if start < 0 {
+		start = 0
+	}
+	end := line + context
+	if end > len(lines) {
+		end = len(lines)
+	}
+	if start >= end {
+		return ""
+	}
+	return strings.Join(lines[start:end], "\n")
 }
 
 // collectPriorReviewCycles reads archived review results (review.json.1,

@@ -46,6 +46,12 @@ Do NOT address multiple findings in a single edit. Fix one, verify it, then move
 ### Finding {{add $idx 1}} of {{len $.ReworkFeedback.ReviewFindings}}: {{$finding.Source}}
 - [{{$finding.Severity}}] {{$finding.File}}{{if $finding.Line}}:{{$finding.Line}}{{end}} — {{$finding.Issue}}
   Suggestion: {{$finding.Suggestion}}
+{{- if $finding.CodeSnippet}}
+  Relevant code:
+```
+{{$finding.CodeSnippet}}
+```
+{{- end}}
 → Fix this finding, then verify before proceeding.
 {{- end}}
 
