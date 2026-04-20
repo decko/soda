@@ -271,6 +271,7 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 		PromptContext:        promptContext,
 		DetectedStack:        detectedStack,
 		Model:                cfg.Model,
+		BinaryVersion:        binaryVersionID(),
 		WorkDir:              workDir,
 		WorktreeBase:         filepath.Join(workDir, cfg.WorktreeDir),
 		BaseBranch:           "main",
@@ -705,6 +706,17 @@ func handleEvent(ctx context.Context, cancel context.CancelFunc, engine *pipelin
 			phase = p
 		}
 		prog.Message(fmt.Sprintf("  ⏹  Pipeline timeout after %s (during %s)", limit, phase))
+
+	case pipeline.EventBinaryVersionMismatch:
+		var stored string
+		if s, ok := event.Data["stored_version"].(string); ok {
+			stored = s
+		}
+		var current string
+		if c, ok := event.Data["current_version"].(string); ok {
+			current = c
+		}
+		prog.Message(fmt.Sprintf("Warning: binary version changed since pipeline started (was %s, now %s)", stored, current))
 	}
 }
 

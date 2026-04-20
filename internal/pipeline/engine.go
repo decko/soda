@@ -39,6 +39,7 @@ type EngineConfig struct {
 	PromptContext        ContextData
 	DetectedStack        DetectedStackData // auto-detected project stack info; zero value if detection was skipped
 	Model                string
+	BinaryVersion        string // binary build identifier; recorded in meta on first run, checked for staleness on resume
 	WorkDir              string
 	WorktreeBase         string
 	BaseBranch           string
@@ -185,6 +186,35 @@ func (e *Engine) waitIfPaused(ctx context.Context) error {
 	return ctx.Err()
 }
 
+// checkBinaryVersion records the binary version in meta on first run and
+// emits a warning event if the current binary differs from the version
+// that originally created the pipeline state.
+func (e *Engine) checkBinaryVersion() {
+	current := e.config.BinaryVersion
+	if current == "" {
+		return
+	}
+
+	stored := e.state.Meta().BinaryVersion
+	if stored == "" {
+		// First run: record the current binary version.
+		e.state.Meta().BinaryVersion = current
+		return
+	}
+
+	if stored != current {
+		e.emit(Event{
+			Kind: EventBinaryVersionMismatch,
+			Data: map[string]any{
+				"stored_version":  stored,
+				"current_version": current,
+			},
+		})
+		// Update to current so we don't warn again on the next phase.
+		e.state.Meta().BinaryVersion = current
+	}
+}
+
 // ensureWorktree creates a worktree if one hasn't been created yet and
 // WorktreeBase is configured. Called at the start of Run and Resume so
 // every phase executes inside the worktree.
@@ -312,6 +342,9 @@ func (e *Engine) Run(ctx context.Context) error {
 	ctx, cancel := e.applyPipelineTimeout(ctx)
 	defer cancel()
 
+	// Record or check binary version for staleness detection.
+	e.checkBinaryVersion()
+
 	// Cache ticket summary in meta for soda sessions/history display.
 	if e.state.Meta().Summary == "" && e.config.Ticket.Summary != "" {
 		e.state.Meta().Summary = e.config.Ticket.Summary
@@ -362,6 +395,9 @@ func (e *Engine) Resume(ctx context.Context, fromPhase string) error {
 	// Apply pipeline-level timeout if configured.
 	ctx, cancel := e.applyPipelineTimeout(ctx)
 	defer cancel()
+
+	// Check binary version for staleness detection on resume.
+	e.checkBinaryVersion()
 
 	// Cache ticket summary in meta for soda sessions/history display.
 	if e.state.Meta().Summary == "" && e.config.Ticket.Summary != "" {

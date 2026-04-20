@@ -40,6 +40,7 @@ type PipelineMeta struct {
 	Branch             string                 `json:"branch,omitempty"`
 	Worktree           string                 `json:"worktree,omitempty"`
 	StartedAt          time.Time              `json:"started_at"`
+	BinaryVersion      string                 `json:"binary_version,omitempty"`
 	TotalCost          float64                `json:"total_cost"`
 	ReworkCycles       int                    `json:"rework_cycles,omitempty"`
 	PatchCycles        int                    `json:"patch_cycles,omitempty"`

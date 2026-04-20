@@ -83,6 +83,7 @@ const (
 	EventReworkMinorsDowngraded   = "rework_minors_downgraded"
 	EventPipelineTimeout          = "pipeline_timeout"
 	EventPhaseCostsReset          = "phase_costs_reset"
+	EventBinaryVersionMismatch    = "binary_version_mismatch"
 )
 
 // ReadEvents reads and parses all events from the events.jsonl file in dir.
