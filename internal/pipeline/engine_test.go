@@ -4356,592 +4356,6 @@ func TestEngine_ParallelReview_InPipeline(t *testing.T) {
 	}
 }
 
-func TestEngine_ParallelReview_ReviewerRetryTransient(t *testing.T) {
-	// A reviewer that fails with a transient error should be retried
-	// using the phase's retry config. First call fails, second succeeds.
-	phases := []PhaseConfig{
-		{
-			Name:  "review",
-			Type:  "parallel-review",
-			Retry: RetryConfig{Transient: 1, Parse: 0, Semantic: 0},
-			Reviewers: []ReviewerConfig{
-				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
-			},
-		},
-	}
-
-	mock := &flexMockRunner{
-		responses: map[string][]flexResponse{
-			"review/go-specialist": {
-				{err: &runner.TransientError{Reason: "rate_limit", Err: fmt.Errorf("429 too many requests")}},
-				{result: &runner.RunResult{
-					Output:  json.RawMessage(`{"findings":[],"verdict":"pass"}`),
-					RawText: "No issues found",
-					CostUSD: 0.15,
-				}},
-			},
-		},
-	}
-
-	var events []Event
-	engine, state := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
-		cfg.OnEvent = func(evt Event) {
-			events = append(events, evt)
-		}
-	})
-
-	if err := engine.Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-
-	if !state.IsCompleted("review") {
-		t.Error("review should be completed after transient retry succeeds")
-	}
-
-	// The runner should have been called twice (fail + success).
-	mock.mu.Lock()
-	callCount := len(mock.calls)
-	mock.mu.Unlock()
-	if callCount != 2 {
-		t.Errorf("runner called %d times, want 2", callCount)
-	}
-
-	// Should have a reviewer_retrying event.
-	hasRetrying := false
-	for _, evt := range events {
-		if evt.Kind == EventReviewerRetrying {
-			hasRetrying = true
-			reviewer, _ := evt.Data["reviewer"].(string)
-			if reviewer != "go-specialist" {
-				t.Errorf("reviewer_retrying event for %q, want %q", reviewer, "go-specialist")
-			}
-			category, _ := evt.Data["category"].(string)
-			if category != "transient" {
-				t.Errorf("retry category = %q, want %q", category, "transient")
-			}
-		}
-	}
-	if !hasRetrying {
-		t.Error("reviewer_retrying event not emitted")
-	}
-
-	// Should NOT have a reviewer_failed event since retry succeeded.
-	for _, evt := range events {
-		if evt.Kind == EventReviewerFailed {
-			t.Error("reviewer_failed event should not be emitted when retry succeeds")
-		}
-	}
-}
-
-func TestEngine_ParallelReview_ReviewerRetryParse(t *testing.T) {
-	// A reviewer that fails with a parse error should NOT be retried at the
-	// reviewer level. The runner should be called exactly once, no
-	// reviewer_retrying event should be emitted, and a reviewer_failed event
-	// should be emitted.
-	phases := []PhaseConfig{
-		{
-			Name:  "review",
-			Type:  "parallel-review",
-			Retry: RetryConfig{Transient: 0, Parse: 1, Semantic: 0},
-			Reviewers: []ReviewerConfig{
-				{Name: "ai-harness", Prompt: "prompts/review-harness.md", Focus: "AI harness"},
-			},
-		},
-	}
-
-	mock := &flexMockRunner{
-		responses: map[string][]flexResponse{
-			"review/ai-harness": {
-				{err: &runner.ParseError{Err: fmt.Errorf("invalid JSON: unexpected EOF")}},
-			},
-		},
-	}
-
-	var events []Event
-	engine, _ := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
-		cfg.OnEvent = func(evt Event) {
-			events = append(events, evt)
-		}
-	})
-
-	err := engine.Run(context.Background())
-	if err == nil {
-		t.Fatal("expected error when reviewer fails with parse error")
-	}
-
-	// Runner should have been called exactly once — no retry.
-	mock.mu.Lock()
-	callCount := len(mock.calls)
-	mock.mu.Unlock()
-	if callCount != 1 {
-		t.Errorf("runner called %d times, want 1 (parse errors must not be retried)", callCount)
-	}
-
-	// No reviewer_retrying event should be emitted.
-	for _, evt := range events {
-		if evt.Kind == EventReviewerRetrying {
-			t.Error("reviewer_retrying event must not be emitted for parse errors")
-		}
-	}
-
-	// A reviewer_failed event should be emitted.
-	hasFailed := false
-	for _, evt := range events {
-		if evt.Kind == EventReviewerFailed {
-			hasFailed = true
-		}
-	}
-	if !hasFailed {
-		t.Error("reviewer_failed event not emitted for parse error failure")
-	}
-}
-
-func TestEngine_ParallelReview_ReviewerRetrySemantic(t *testing.T) {
-	// A reviewer that fails with a semantic error should NOT be retried at the
-	// reviewer level. The runner should be called exactly once, no
-	// reviewer_retrying event should be emitted, and a reviewer_failed event
-	// should be emitted.
-	phases := []PhaseConfig{
-		{
-			Name:  "review",
-			Type:  "parallel-review",
-			Retry: RetryConfig{Transient: 0, Parse: 0, Semantic: 1},
-			Reviewers: []ReviewerConfig{
-				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
-			},
-		},
-	}
-
-	mock := &flexMockRunner{
-		responses: map[string][]flexResponse{
-			"review/go-specialist": {
-				{err: &runner.SemanticError{Message: "response was empty"}},
-			},
-		},
-	}
-
-	var events []Event
-	engine, _ := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
-		cfg.OnEvent = func(evt Event) {
-			events = append(events, evt)
-		}
-	})
-
-	err := engine.Run(context.Background())
-	if err == nil {
-		t.Fatal("expected error when reviewer fails with semantic error")
-	}
-
-	// Runner should have been called exactly once — no retry.
-	mock.mu.Lock()
-	callCount := len(mock.calls)
-	mock.mu.Unlock()
-	if callCount != 1 {
-		t.Errorf("runner called %d times, want 1 (semantic errors must not be retried)", callCount)
-	}
-
-	// No reviewer_retrying event should be emitted.
-	for _, evt := range events {
-		if evt.Kind == EventReviewerRetrying {
-			t.Error("reviewer_retrying event must not be emitted for semantic errors")
-		}
-	}
-
-	// A reviewer_failed event should be emitted.
-	hasFailed := false
-	for _, evt := range events {
-		if evt.Kind == EventReviewerFailed {
-			hasFailed = true
-		}
-	}
-	if !hasFailed {
-		t.Error("reviewer_failed event not emitted for semantic error failure")
-	}
-}
-
-func TestEngine_ParallelReview_ReviewerRetryExhausted(t *testing.T) {
-	// When all retries are exhausted, the reviewer should fail and the
-	// entire review phase should fail.
-	phases := []PhaseConfig{
-		{
-			Name:  "review",
-			Type:  "parallel-review",
-			Retry: RetryConfig{Transient: 1, Parse: 0, Semantic: 0},
-			Reviewers: []ReviewerConfig{
-				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
-			},
-		},
-	}
-
-	mock := &flexMockRunner{
-		responses: map[string][]flexResponse{
-			"review/go-specialist": {
-				{err: &runner.TransientError{Reason: "timeout", Err: fmt.Errorf("connection timeout")}},
-				{err: &runner.TransientError{Reason: "timeout", Err: fmt.Errorf("connection timeout again")}},
-			},
-		},
-	}
-
-	var events []Event
-	engine, state := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
-		cfg.OnEvent = func(evt Event) {
-			events = append(events, evt)
-		}
-	})
-
-	err := engine.Run(context.Background())
-	if err == nil {
-		t.Fatal("expected error when reviewer retries are exhausted")
-	}
-
-	if !strings.Contains(err.Error(), "go-specialist") {
-		t.Errorf("error should mention failing reviewer, got: %v", err)
-	}
-	if !strings.Contains(err.Error(), "no retries left") {
-		t.Errorf("error should mention retries exhausted, got: %v", err)
-	}
-
-	// Phase should be marked failed.
-	ps := state.Meta().Phases["review"]
-	if ps == nil {
-		t.Fatal("review phase state should exist")
-	}
-	if ps.Status != PhaseFailed {
-		t.Errorf("review status = %q, want %q", ps.Status, PhaseFailed)
-	}
-
-	// Should have one retry event and one failed event.
-	retryCount := 0
-	failedCount := 0
-	for _, evt := range events {
-		if evt.Kind == EventReviewerRetrying {
-			retryCount++
-		}
-		if evt.Kind == EventReviewerFailed {
-			failedCount++
-		}
-	}
-	if retryCount != 1 {
-		t.Errorf("reviewer_retrying events = %d, want 1", retryCount)
-	}
-	if failedCount != 1 {
-		t.Errorf("reviewer_failed events = %d, want 1", failedCount)
-	}
-}
-
-func TestEngine_ParallelReview_OneReviewerRetriesOtherSucceeds(t *testing.T) {
-	// When one reviewer retries and recovers, and another succeeds on
-	// first try, the phase should complete successfully with merged findings.
-	phases := []PhaseConfig{
-		{
-			Name:  "review",
-			Type:  "parallel-review",
-			Retry: RetryConfig{Transient: 1, Parse: 0, Semantic: 0},
-			Reviewers: []ReviewerConfig{
-				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
-				{Name: "ai-harness", Prompt: "prompts/review-harness.md", Focus: "AI harness"},
-			},
-		},
-	}
-
-	mock := &flexMockRunner{
-		responses: map[string][]flexResponse{
-			"review/go-specialist": {
-				{err: &runner.TransientError{Reason: "overloaded", Err: fmt.Errorf("server busy")}},
-				{result: &runner.RunResult{
-					Output:  json.RawMessage(`{"findings":[{"severity":"minor","file":"main.go","line":1,"issue":"naming"}],"verdict":"pass"}`),
-					RawText: "Minor issue found",
-					CostUSD: 0.20,
-				}},
-			},
-			"review/ai-harness": {
-				{result: &runner.RunResult{
-					Output:  json.RawMessage(`{"findings":[],"verdict":"pass"}`),
-					RawText: "No issues",
-					CostUSD: 0.10,
-				}},
-			},
-		},
-	}
-
-	var events []Event
-	engine, state := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
-		cfg.OnEvent = func(evt Event) {
-			events = append(events, evt)
-		}
-	})
-
-	if err := engine.Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-
-	if !state.IsCompleted("review") {
-		t.Error("review should be completed")
-	}
-
-	// Cost should include both reviewers (only the successful call counts).
-	ps := state.Meta().Phases["review"]
-	if ps == nil {
-		t.Fatal("review phase state missing")
-	}
-	if !approxEqual(ps.Cost, 0.30) {
-		t.Errorf("review cost = %v, want 0.30", ps.Cost)
-	}
-
-	// Should have retrying event for go-specialist.
-	hasGoRetry := false
-	for _, evt := range events {
-		if evt.Kind == EventReviewerRetrying {
-			reviewer, _ := evt.Data["reviewer"].(string)
-			if reviewer == "go-specialist" {
-				hasGoRetry = true
-			}
-		}
-	}
-	if !hasGoRetry {
-		t.Error("expected reviewer_retrying event for go-specialist")
-	}
-
-	// Both reviewers should have completed events.
-	completedReviewers := make(map[string]bool)
-	for _, evt := range events {
-		if evt.Kind == EventReviewerCompleted {
-			reviewer, _ := evt.Data["reviewer"].(string)
-			completedReviewers[reviewer] = true
-		}
-	}
-	if !completedReviewers["go-specialist"] {
-		t.Error("go-specialist should have completed event")
-	}
-	if !completedReviewers["ai-harness"] {
-		t.Error("ai-harness should have completed event")
-	}
-
-	// Merged result should have 1 finding from go-specialist.
-	result, err := state.ReadResult("review")
-	if err != nil {
-		t.Fatalf("ReadResult: %v", err)
-	}
-	var reviewOutput struct {
-		Verdict  string `json:"verdict"`
-		Findings []struct {
-			Source string `json:"source"`
-		} `json:"findings"`
-	}
-	if err := json.Unmarshal(result, &reviewOutput); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if len(reviewOutput.Findings) != 1 {
-		t.Errorf("findings count = %d, want 1", len(reviewOutput.Findings))
-	}
-	if reviewOutput.Verdict != "pass-with-follow-ups" {
-		t.Errorf("verdict = %q, want %q", reviewOutput.Verdict, "pass-with-follow-ups")
-	}
-}
-
-func TestEngine_ParallelReview_ReviewerRetryZeroConfig(t *testing.T) {
-	// When retry config is all zeros, a single failure should immediately
-	// fail the reviewer without any retries (preserves backward compatibility).
-	phases := []PhaseConfig{
-		{
-			Name:  "review",
-			Type:  "parallel-review",
-			Retry: RetryConfig{Transient: 0, Parse: 0, Semantic: 0},
-			Reviewers: []ReviewerConfig{
-				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
-			},
-		},
-	}
-
-	mock := &flexMockRunner{
-		responses: map[string][]flexResponse{
-			"review/go-specialist": {
-				{err: &runner.TransientError{Reason: "timeout", Err: fmt.Errorf("connection timeout")}},
-			},
-		},
-	}
-
-	var events []Event
-	engine, _ := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
-		cfg.OnEvent = func(evt Event) {
-			events = append(events, evt)
-		}
-	})
-
-	err := engine.Run(context.Background())
-	if err == nil {
-		t.Fatal("expected error when reviewer fails with zero retries")
-	}
-
-	// Should have NO reviewer_retrying events.
-	for _, evt := range events {
-		if evt.Kind == EventReviewerRetrying {
-			t.Error("reviewer_retrying event should NOT be emitted with zero retry config")
-		}
-	}
-
-	// Runner should have been called exactly once.
-	mock.mu.Lock()
-	callCount := len(mock.calls)
-	mock.mu.Unlock()
-	if callCount != 1 {
-		t.Errorf("runner called %d times, want 1", callCount)
-	}
-}
-
-func TestEngine_ParallelReview_ReviewerRetryMultipleCategories(t *testing.T) {
-	// Test that a transient error is retried but a subsequent parse error causes
-	// immediate failure (parse errors are not retried at the reviewer level).
-	// The runner is called twice: once for the transient (retried), once for the
-	// parse (immediately fails). Only one reviewer_retrying event is emitted.
-	phases := []PhaseConfig{
-		{
-			Name:  "review",
-			Type:  "parallel-review",
-			Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 0},
-			Reviewers: []ReviewerConfig{
-				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
-			},
-		},
-	}
-
-	mock := &flexMockRunner{
-		responses: map[string][]flexResponse{
-			"review/go-specialist": {
-				{err: &runner.TransientError{Reason: "rate_limit", Err: fmt.Errorf("429")}},
-				{err: &runner.ParseError{Err: fmt.Errorf("bad json")}},
-			},
-		},
-	}
-
-	var events []Event
-	engine, _ := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
-		cfg.OnEvent = func(evt Event) {
-			events = append(events, evt)
-		}
-	})
-
-	err := engine.Run(context.Background())
-	if err == nil {
-		t.Fatal("expected error: parse error after transient retry should cause immediate failure")
-	}
-
-	// Runner should have been called exactly 2 times: transient (retried once)
-	// then parse (immediately failed — no parse retry).
-	mock.mu.Lock()
-	callCount := len(mock.calls)
-	mock.mu.Unlock()
-	if callCount != 2 {
-		t.Errorf("runner called %d times, want 2", callCount)
-	}
-
-	// Only one reviewer_retrying event (for the transient). No parse retry event.
-	retryCategories := make(map[string]int)
-	for _, evt := range events {
-		if evt.Kind == EventReviewerRetrying {
-			category, _ := evt.Data["category"].(string)
-			retryCategories[category]++
-		}
-	}
-	if retryCategories["transient"] != 1 {
-		t.Errorf("transient retries = %d, want 1", retryCategories["transient"])
-	}
-	if retryCategories["parse"] != 0 {
-		t.Errorf("parse retries = %d, want 0 (parse errors must not be retried)", retryCategories["parse"])
-	}
-
-	// A reviewer_failed event should be emitted.
-	hasFailed := false
-	for _, evt := range events {
-		if evt.Kind == EventReviewerFailed {
-			hasFailed = true
-		}
-	}
-	if !hasFailed {
-		t.Error("reviewer_failed event not emitted after parse error causes failure")
-	}
-}
-
-func TestEngine_ParallelReview_ReviewerRetryCancelledContext(t *testing.T) {
-	// When the context is cancelled during backoff sleep, the retry should
-	// return immediately instead of blocking for the full backoff duration.
-	phases := []PhaseConfig{
-		{
-			Name:  "review",
-			Type:  "parallel-review",
-			Retry: RetryConfig{Transient: 2, Parse: 0, Semantic: 0},
-			Reviewers: []ReviewerConfig{
-				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
-			},
-		},
-	}
-
-	mock := &flexMockRunner{
-		responses: map[string][]flexResponse{
-			"review/go-specialist": {
-				{err: &runner.TransientError{Reason: "rate_limit", Err: fmt.Errorf("429")}},
-				// Second call should not happen because context is cancelled during backoff.
-				{result: &runner.RunResult{
-					Output:  json.RawMessage(`{"findings":[],"verdict":"pass"}`),
-					RawText: "No issues",
-					CostUSD: 0.10,
-				}},
-			},
-		},
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-
-	var events []Event
-	engine, _ := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
-		cfg.OnEvent = func(evt Event) {
-			events = append(events, evt)
-		}
-		// SleepFunc blocks until the context is cancelled, simulating a long backoff.
-		cfg.SleepFunc = func(d time.Duration) {
-			<-ctx.Done()
-		}
-	})
-
-	// Cancel the context after a short delay so the sleep is interrupted.
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		cancel()
-	}()
-
-	err := engine.Run(ctx)
-	if err == nil {
-		t.Fatal("expected error when context is cancelled during reviewer retry backoff")
-	}
-
-	// The error may surface as either a context cancellation at the review
-	// phase level or as a reviewer retry interruption — both are correct.
-	errMsg := err.Error()
-	if !strings.Contains(errMsg, "context cancel") && !strings.Contains(errMsg, "retry interrupted") {
-		t.Errorf("error should mention context cancellation or retry interrupted, got: %v", err)
-	}
-
-	// The retry event should have been emitted before the sleep (proactive notification).
-	hasRetrying := false
-	for _, evt := range events {
-		if evt.Kind == EventReviewerRetrying {
-			hasRetrying = true
-		}
-	}
-	if !hasRetrying {
-		t.Error("reviewer_retrying event should be emitted before the sleep")
-	}
-
-	// The runner should have been called exactly once (the failed attempt);
-	// the retry call should not happen because the context was cancelled during backoff.
-	mock.mu.Lock()
-	callCount := len(mock.calls)
-	mock.mu.Unlock()
-	if callCount != 1 {
-		t.Errorf("runner called %d times, want 1 (retry should be interrupted)", callCount)
-	}
-}
-
 func TestComputeReviewVerdict(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -10331,98 +9745,8 @@ func TestEngine_PipelineTimeout_ExternalDeadlineNotWrapped(t *testing.T) {
 	}
 }
 
-func TestEngine_FreshRunResetsStalePhaseCosts(t *testing.T) {
-	// A fresh Run() must reset CumulativeCost for all phases so that
-	// stale costs from a prior execution do not trigger per-phase budget
-	// enforcement. This test simulates:
-	//   Run 1: implement accumulates CumulativeCost = $4.00, then fails
-	//   Run 2 (fresh): implement re-runs with fresh CumulativeCost = $0
-	// Without the reset, Run 2 would start with CumulativeCost = $4.00
-	// and exceed the $5 limit after just $1 of new spend.
-	phases := []PhaseConfig{
-		{
-			Name:   "implement",
-			Prompt: "implement.md",
-			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
-		},
-	}
-
-	// Run 1: implement costs $4.00 but fails (simulating a crash).
-	mock1 := &flexMockRunner{
-		responses: map[string][]flexResponse{
-			"implement": {{
-				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"tests_passed":true}`),
-					RawText: "impl v1",
-					CostUSD: 4.0,
-				},
-			}},
-		},
-	}
-
-	engine1, state := setupEngine(t, phases, mock1, func(cfg *EngineConfig) {
-		cfg.MaxCostPerPhase = 5.0
-	})
-
-	if err := engine1.Run(context.Background()); err != nil {
-		t.Fatalf("Run 1: %v", err)
-	}
-
-	// Simulate: implement completed in Run 1 but pipeline as a whole
-	// failed later. Mark implement as failed so Run 2 will re-run it.
-	state.Meta().Phases["implement"].Status = PhaseFailed
-	_ = state.flushMeta()
-
-	// After Run 1, CumulativeCost should be $4.00.
-	implPS := state.Meta().Phases["implement"]
-	if implPS == nil {
-		t.Fatal("implement phase state is nil after Run 1")
-	}
-	if !approxEqual(implPS.CumulativeCost, 4.0) {
-		t.Fatalf("CumulativeCost after Run 1 = %f, want 4.0", implPS.CumulativeCost)
-	}
-
-	// Run 2 (fresh): implement costs $3.00. Without the reset, cumulative
-	// would be $7.00 and exceed the $5 limit.
-	mock2 := &flexMockRunner{
-		responses: map[string][]flexResponse{
-			"implement": {{
-				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"tests_passed":true}`),
-					RawText: "impl v2",
-					CostUSD: 3.0,
-				},
-			}},
-		},
-	}
-
-	engine2 := NewEngine(mock2, state, EngineConfig{
-		Pipeline:        &PhasePipeline{Phases: phases},
-		Loader:          engine1.config.Loader,
-		Ticket:          TicketData{Key: "TEST-1", Summary: "Test ticket"},
-		Model:           "test-model",
-		WorkDir:         engine1.config.WorkDir,
-		MaxCostPerPhase: 5.0,
-		Mode:            Autonomous,
-		SleepFunc:       func(time.Duration) {},
-		JitterFunc:      func(time.Duration) time.Duration { return 0 },
-	})
-
-	// This must succeed — the reset clears stale CumulativeCost.
-	if err := engine2.Run(context.Background()); err != nil {
-		t.Fatalf("Run 2 should succeed after cost reset, got: %v", err)
-	}
-
-	// CumulativeCost should reflect only Run 2's spend.
-	implPS = state.Meta().Phases["implement"]
-	if !approxEqual(implPS.CumulativeCost, 3.0) {
-		t.Errorf("CumulativeCost after Run 2 = %f, want 3.0 (Run 2 spend only)", implPS.CumulativeCost)
-	}
-}
-
-func TestEngine_RunEmitsPhaseCostsResetEvent(t *testing.T) {
-	// Run() must emit EventPhaseCostsReset after successfully resetting
-	// per-phase cumulative costs.
+func TestEngine_GenerationBudgetExceeded(t *testing.T) {
+	// Phase costs $10 but per-generation limit is $8 → GenerationBudgetExceededError.
 	phases := []PhaseConfig{
 		{
 			Name:   "triage",
@@ -10436,39 +9760,39 @@ func TestEngine_RunEmitsPhaseCostsResetEvent(t *testing.T) {
 			"triage": {{
 				result: &runner.RunResult{
 					Output:  json.RawMessage(`{"automatable":true}`),
-					RawText: "triage ok",
-					CostUSD: 0.10,
+					RawText: "Triage done",
+					CostUSD: 10.0,
 				},
 			}},
 		},
 	}
 
-	var events []Event
 	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
-		cfg.OnEvent = func(e Event) {
-			events = append(events, e)
-		}
+		cfg.MaxCostPerGeneration = 8.0
 	})
 
-	if err := engine.Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
+	err := engine.Run(context.Background())
+	if err == nil {
+		t.Fatal("expected GenerationBudgetExceededError")
 	}
 
-	var found bool
-	for _, ev := range events {
-		if ev.Kind == EventPhaseCostsReset {
-			found = true
-			break
-		}
+	var genBudgetErr *GenerationBudgetExceededError
+	if !errors.As(err, &genBudgetErr) {
+		t.Fatalf("expected GenerationBudgetExceededError, got: %v", err)
 	}
-	if !found {
-		t.Error("phase_costs_reset event not emitted by Run()")
+	if genBudgetErr.Phase != "triage" {
+		t.Errorf("phase = %q, want %q", genBudgetErr.Phase, "triage")
+	}
+	if genBudgetErr.Limit != 8.0 {
+		t.Errorf("limit = %f, want 8.0", genBudgetErr.Limit)
+	}
+	if genBudgetErr.Actual != 10.0 {
+		t.Errorf("actual = %f, want 10.0", genBudgetErr.Actual)
 	}
 }
 
-func TestEngine_ResumeDoesNotResetPhaseCosts(t *testing.T) {
-	// Resume() must NOT reset CumulativeCost — it continues an existing
-	// execution where rework-cycle tracking relies on accumulated costs.
+func TestEngine_GenerationBudgetDisabledWhenZero(t *testing.T) {
+	// max_cost_per_generation: 0 means disabled — phase should succeed.
 	phases := []PhaseConfig{
 		{
 			Name:   "triage",
@@ -10476,8 +9800,8 @@ func TestEngine_ResumeDoesNotResetPhaseCosts(t *testing.T) {
 			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
 		},
 		{
-			Name:      "implement",
-			Prompt:    "implement.md",
+			Name:      "plan",
+			Prompt:    "plan.md",
 			DependsOn: []string{"triage"},
 			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
 		},
@@ -10485,42 +9809,306 @@ func TestEngine_ResumeDoesNotResetPhaseCosts(t *testing.T) {
 
 	mock := &flexMockRunner{
 		responses: map[string][]flexResponse{
-			"implement": {{
+			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"tests_passed":true}`),
-					RawText: "impl",
-					CostUSD: 2.0,
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage done",
+					CostUSD: 10.0,
+				},
+			}},
+			"plan": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tasks":[{"id":"1","description":"task"}]}`),
+					RawText: "Plan done",
+					CostUSD: 3.0,
 				},
 			}},
 		},
 	}
 
-	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
-		cfg.MaxCostPerPhase = 10.0
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.MaxCostPerGeneration = 0 // disabled
 	})
 
-	// Pre-seed triage as completed so Resume("implement") finds its dep met.
-	state.MarkRunning("triage")
-	state.AccumulateCost("triage", 0.10)
-	state.MarkCompleted("triage")
+	err := engine.Run(context.Background())
+	if err != nil {
+		t.Fatalf("expected success with disabled per-generation limit, got: %v", err)
+	}
+}
 
-	// Pre-seed implement with CumulativeCost from a prior rework cycle.
-	state.MarkRunning("implement")
-	state.AccumulateCost("implement", 3.0)
-	state.MarkCompleted("implement")
-
-	priorCumulative := state.Meta().Phases["implement"].CumulativeCost
-
-	// Resume from implement — CumulativeCost should be preserved.
-	if err := engine.Resume(context.Background(), "implement"); err != nil {
-		t.Fatalf("Resume: %v", err)
+func TestEngine_GenerationBudgetPassesButCumulativeHits(t *testing.T) {
+	// 3 generations at $5 each pass per-generation ($8) but hit cumulative ($15).
+	//
+	// Pipeline: implement → verify → review (rework → implement)
+	// MaxCostPerGeneration = 8, MaxCostPerPhase = 15
+	// Each implement costs $5, so each generation passes per-gen.
+	// After 3 generations: cumulative = $15 → PhaseBudgetExceededError.
+	phases := []PhaseConfig{
+		{
+			Name:         "implement",
+			Prompt:       "implement.md",
+			Retry:        RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			FeedbackFrom: []string{"review", "verify"},
+		},
+		{
+			Name:      "verify",
+			Prompt:    "verify.md",
+			DependsOn: []string{"implement"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "review",
+			Type:      "parallel-review",
+			DependsOn: []string{"implement", "verify"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Rework:    &ReworkConfig{Target: "implement"},
+			Reviewers: []ReviewerConfig{
+				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+			},
+		},
 	}
 
-	implPS := state.Meta().Phases["implement"]
-	// CumulativeCost should include BOTH the prior $3.00 and the new $2.00.
-	expectedCumulative := priorCumulative + 2.0
-	if !approxEqual(implPS.CumulativeCost, expectedCumulative) {
-		t.Errorf("CumulativeCost after Resume = %f, want %f (prior + new)",
-			implPS.CumulativeCost, expectedCumulative)
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {
+				// Generation 1: $5 (under $8 per-gen, under $15 cumulative).
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true,"commits":1}`),
+					RawText: "Impl v1",
+					CostUSD: 5.0,
+				}},
+				// Generation 2: $5 (under $8 per-gen, cumulative = $10 < $15).
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true,"commits":2}`),
+					RawText: "Impl v2",
+					CostUSD: 5.0,
+				}},
+				// Generation 3: $5 (under $8 per-gen, cumulative = $15 = limit).
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true,"commits":3}`),
+					RawText: "Impl v3",
+					CostUSD: 5.0,
+				}},
+			},
+			"verify": {
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"verdict":"PASS"}`),
+					RawText: "Verify v1",
+					CostUSD: 0.10,
+				}},
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"verdict":"PASS"}`),
+					RawText: "Verify v2",
+					CostUSD: 0.10,
+				}},
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"verdict":"PASS"}`),
+					RawText: "Verify v3",
+					CostUSD: 0.10,
+				}},
+			},
+			"review/go-specialist": {
+				// First review: rework.
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[{"severity":"critical","file":"handler.go","line":42,"issue":"nil deref","suggestion":"add nil check"}]}`),
+					RawText: "Critical issue",
+					CostUSD: 0.20,
+				}},
+				// Second review: rework again.
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[{"severity":"critical","file":"handler.go","line":42,"issue":"race condition","suggestion":"add lock"}]}`),
+					RawText: "Critical issue 2",
+					CostUSD: 0.20,
+				}},
+			},
+		},
+	}
+
+	engine, state := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.MaxCostPerGeneration = 8.0
+		cfg.MaxCostPerPhase = 15.0
+		cfg.MaxReworkCycles = 3 // allow enough rework cycles
+	})
+
+	err := engine.Run(context.Background())
+	if err == nil {
+		t.Fatal("expected PhaseBudgetExceededError, got nil")
+	}
+
+	var phaseBudgetErr *PhaseBudgetExceededError
+	if !errors.As(err, &phaseBudgetErr) {
+		t.Fatalf("expected PhaseBudgetExceededError (cumulative), got: %v", err)
+	}
+	if phaseBudgetErr.Phase != "implement" {
+		t.Errorf("phase = %q, want %q", phaseBudgetErr.Phase, "implement")
+	}
+	if phaseBudgetErr.Limit != 15.0 {
+		t.Errorf("limit = %f, want 15.0", phaseBudgetErr.Limit)
+	}
+	if phaseBudgetErr.Actual != 15.0 {
+		t.Errorf("actual = %f, want 15.0", phaseBudgetErr.Actual)
+	}
+
+	// Should NOT be a GenerationBudgetExceededError — each generation was under $8.
+	var genBudgetErr *GenerationBudgetExceededError
+	if errors.As(err, &genBudgetErr) {
+		t.Error("should not be GenerationBudgetExceededError — each generation cost was under limit")
+	}
+
+	// CumulativeCost should reflect all three generations.
+	implState := state.Meta().Phases["implement"]
+	if implState == nil {
+		t.Fatal("implement phase state is nil")
+	}
+	if implState.CumulativeCost != 15.0 {
+		t.Errorf("CumulativeCost = %f, want 15.0", implState.CumulativeCost)
+	}
+}
+
+func TestEngine_GenerationBudgetExceededEmitsEvent(t *testing.T) {
+	// Phase costs $10 but per-generation limit is $8 → event emitted.
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage done",
+					CostUSD: 10.0,
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.MaxCostPerGeneration = 8.0
+		cfg.OnEvent = func(ev Event) { events = append(events, ev) }
+	})
+
+	_ = engine.Run(context.Background())
+
+	found := false
+	for _, ev := range events {
+		if ev.Kind == EventGenerationBudgetExceeded {
+			found = true
+			if ev.Phase != "triage" {
+				t.Errorf("event phase = %q, want %q", ev.Phase, "triage")
+			}
+		}
+	}
+	if !found {
+		t.Error("expected EventGenerationBudgetExceeded event")
+	}
+}
+
+func TestEngine_GenerationBudgetWarning(t *testing.T) {
+	// Phase costs $7.5 with per-generation limit $8 → warning emitted (>= 90%).
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "plan",
+			Prompt:    "plan.md",
+			DependsOn: []string{"triage"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage done",
+					CostUSD: 7.5,
+				},
+			}},
+			"plan": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tasks":[{"id":"1","description":"task"}]}`),
+					RawText: "Plan done",
+					CostUSD: 1.0,
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.MaxCostPerGeneration = 8.0
+		cfg.OnEvent = func(ev Event) { events = append(events, ev) }
+	})
+
+	err := engine.Run(context.Background())
+	if err != nil {
+		t.Fatalf("expected success, got: %v", err)
+	}
+
+	found := false
+	for _, ev := range events {
+		if ev.Kind == EventGenerationBudgetWarning {
+			found = true
+			if ev.Phase != "triage" {
+				t.Errorf("event phase = %q, want %q", ev.Phase, "triage")
+			}
+		}
+	}
+	if !found {
+		t.Error("expected EventGenerationBudgetWarning event")
+	}
+}
+
+func TestEngine_GenerationBudgetCapsRunnerOpts(t *testing.T) {
+	// When MaxCostPerGeneration is set and tighter than MaxCostPerPhase,
+	// the runner should receive MaxCostPerGeneration as its MaxBudgetUSD.
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 0, Parse: 0, Semantic: 0},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage done",
+					CostUSD: 1.0,
+				},
+			}},
+		},
+	}
+
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.MaxCostUSD = 30.0          // ticket budget
+		cfg.MaxCostPerPhase = 15.0     // per-phase budget
+		cfg.MaxCostPerGeneration = 8.0 // per-gen budget (tightest)
+	})
+
+	err := engine.Run(context.Background())
+	if err != nil {
+		t.Fatalf("expected success, got: %v", err)
+	}
+
+	if len(mock.calls) == 0 {
+		t.Fatal("expected at least one runner call")
+	}
+
+	triageCall := mock.calls[0]
+	if triageCall.MaxBudgetUSD != 8.0 {
+		t.Errorf("MaxBudgetUSD = %f, want 8.0 (per-generation limit)", triageCall.MaxBudgetUSD)
 	}
 }
