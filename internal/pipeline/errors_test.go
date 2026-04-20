@@ -77,6 +77,31 @@ func TestPhaseBudgetExceededError(t *testing.T) {
 	}
 }
 
+func TestGenerationBudgetExceededError(t *testing.T) {
+	err := &GenerationBudgetExceededError{Limit: 5.00, Actual: 6.50, Phase: "implement"}
+	msg := err.Error()
+	if msg == "" {
+		t.Fatal("Error() should return non-empty string")
+	}
+	if !strings.Contains(msg, "implement") {
+		t.Errorf("Error() should contain phase name, got: %s", msg)
+	}
+	if !strings.Contains(msg, "5.00") {
+		t.Errorf("Error() should contain limit, got: %s", msg)
+	}
+	if !strings.Contains(msg, "6.50") {
+		t.Errorf("Error() should contain actual cost, got: %s", msg)
+	}
+
+	var target *GenerationBudgetExceededError
+	if !errors.As(err, &target) {
+		t.Error("errors.As should match GenerationBudgetExceededError")
+	}
+	if target.Phase != "implement" {
+		t.Errorf("Phase = %q, want %q", target.Phase, "implement")
+	}
+}
+
 func TestDependencyNotMetError(t *testing.T) {
 	err := &DependencyNotMetError{Phase: "implement", Dependency: "plan"}
 	msg := err.Error()

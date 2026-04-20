@@ -32,31 +32,32 @@ const DefaultMaxReworkCycles = 2
 
 // EngineConfig holds everything needed to construct an Engine.
 type EngineConfig struct {
-	Pipeline            *PhasePipeline
-	Loader              *PromptLoader
-	Ticket              TicketData
-	PromptConfig        PromptConfigData
-	PromptContext       ContextData
-	DetectedStack       DetectedStackData // auto-detected project stack info; zero value if detection was skipped
-	Model               string
-	WorkDir             string
-	WorktreeBase        string
-	BaseBranch          string
-	MaxCostUSD          float64
-	MaxCostPerPhase     float64       // per-phase cost cap; 0 means no per-phase limit
-	MaxPipelineDuration time.Duration // max wall-clock time for the entire pipeline; 0 means no limit
-	MaxReworkCycles     int           // max review→implement rework loops; 0 means use default (2)
-	Mode                Mode
-	OnEvent             func(Event)
-	PauseSignal         <-chan bool // receives true=pause, false=resume from TUI; nil disables
-	SleepFunc           func(time.Duration)
-	JitterFunc          func(max time.Duration) time.Duration
-	PRPoller            PRPoller          // for monitor phase polling; nil disables monitor
-	NowFunc             func() time.Time  // for testability; defaults to time.Now
-	AuthorityResolver   AuthorityResolver // for comment authority checks; nil → all authoritative
-	MonitorProfile      *MonitorProfile   // behavioral profile; nil → use polling config as-is
-	SelfUser            string            // PR author username for self-comment filtering
-	BotUsers            []string          // known bot usernames to filter
+	Pipeline             *PhasePipeline
+	Loader               *PromptLoader
+	Ticket               TicketData
+	PromptConfig         PromptConfigData
+	PromptContext        ContextData
+	DetectedStack        DetectedStackData // auto-detected project stack info; zero value if detection was skipped
+	Model                string
+	WorkDir              string
+	WorktreeBase         string
+	BaseBranch           string
+	MaxCostUSD           float64
+	MaxCostPerPhase      float64       // per-phase cost cap; 0 means no per-phase limit
+	MaxCostPerGeneration float64       // per-generation cost cap (ps.Cost); 0 means no per-generation limit
+	MaxPipelineDuration  time.Duration // max wall-clock time for the entire pipeline; 0 means no limit
+	MaxReworkCycles      int           // max review→implement rework loops; 0 means use default (2)
+	Mode                 Mode
+	OnEvent              func(Event)
+	PauseSignal          <-chan bool // receives true=pause, false=resume from TUI; nil disables
+	SleepFunc            func(time.Duration)
+	JitterFunc           func(max time.Duration) time.Duration
+	PRPoller             PRPoller          // for monitor phase polling; nil disables monitor
+	NowFunc              func() time.Time  // for testability; defaults to time.Now
+	AuthorityResolver    AuthorityResolver // for comment authority checks; nil → all authoritative
+	MonitorProfile       *MonitorProfile   // behavioral profile; nil → use polling config as-is
+	SelfUser             string            // PR author username for self-comment filtering
+	BotUsers             []string          // known bot usernames to filter
 }
 
 // maxReworkCycles returns the configured max rework cycles, defaulting to DefaultMaxReworkCycles.
@@ -713,7 +714,7 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 
 	_ = e.state.WriteLog(phase.Name, "prompt", []byte(rendered))
 
-	// Build runner opts. Tighten per-phase budget to remaining amount.
+	// Build runner opts. Tighten budget to the smallest remaining limit.
 	remaining := e.config.MaxCostUSD - e.state.Meta().TotalCost
 	if e.config.MaxCostUSD <= 0 {
 		remaining = 0 // no budget enforcement
@@ -724,6 +725,14 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 		perPhaseRemaining := e.config.MaxCostPerPhase - e.state.Meta().Phases[phase.Name].CumulativeCost
 		if remaining <= 0 || perPhaseRemaining < remaining {
 			remaining = perPhaseRemaining
+		}
+	}
+	// Cap with per-generation limit: use the remaining generation budget
+	// (MaxCostPerGeneration minus current generation cost) as the tighter bound.
+	if e.config.MaxCostPerGeneration > 0 {
+		genRemaining := e.config.MaxCostPerGeneration - e.state.Meta().Phases[phase.Name].Cost
+		if remaining <= 0 || genRemaining < remaining {
+			remaining = genRemaining
 		}
 	}
 	// Prefer per-phase model if set, otherwise use the global model.
@@ -936,39 +945,69 @@ func (e *Engine) checkBudget(phase PhaseConfig) error {
 	return nil
 }
 
-// checkPhaseBudget verifies a phase has not exceeded the per-phase cost cap.
-// Called after AccumulateCost so the phase's CumulativeCost reflects the full run
-// across all rework generations.
-// Emits a warning at 90% and returns PhaseBudgetExceededError when exceeded.
+// checkPhaseBudget verifies a phase has not exceeded cost caps.
+// It checks two limits in order:
+//  1. Per-generation: ps.Cost against MaxCostPerGeneration (resets each generation).
+//  2. Cumulative: ps.CumulativeCost against MaxCostPerPhase (spans all generations).
+//
+// Called after AccumulateCost so both Cost and CumulativeCost reflect the full run.
+// Emits warnings at 90% and returns the appropriate error when exceeded.
 func (e *Engine) checkPhaseBudget(phase PhaseConfig) error {
-	if e.config.MaxCostPerPhase <= 0 {
-		return nil
-	}
 	ps := e.state.Meta().Phases[phase.Name]
 	if ps == nil {
 		return nil
 	}
-	cost := ps.CumulativeCost
-	limit := e.config.MaxCostPerPhase
-	if cost >= limit {
-		e.emit(Event{
-			Phase: phase.Name,
-			Kind:  EventPhaseBudgetExceeded,
-			Data:  map[string]any{"phase_cost": cost, "limit": limit},
-		})
-		return &PhaseBudgetExceededError{
-			Limit:  limit,
-			Actual: cost,
-			Phase:  phase.Name,
+
+	// Per-generation check: ps.Cost resets on each MarkRunning call.
+	if e.config.MaxCostPerGeneration > 0 {
+		genCost := ps.Cost
+		genLimit := e.config.MaxCostPerGeneration
+		if genCost >= genLimit {
+			e.emit(Event{
+				Phase: phase.Name,
+				Kind:  EventGenerationBudgetExceeded,
+				Data:  map[string]any{"generation_cost": genCost, "limit": genLimit},
+			})
+			return &GenerationBudgetExceededError{
+				Limit:  genLimit,
+				Actual: genCost,
+				Phase:  phase.Name,
+			}
+		}
+		if genCost >= genLimit*0.9 {
+			e.emit(Event{
+				Phase: phase.Name,
+				Kind:  EventGenerationBudgetWarning,
+				Data:  map[string]any{"generation_cost": genCost, "limit": genLimit},
+			})
 		}
 	}
-	if cost >= limit*0.9 {
-		e.emit(Event{
-			Phase: phase.Name,
-			Kind:  EventPhaseBudgetWarning,
-			Data:  map[string]any{"phase_cost": cost, "limit": limit},
-		})
+
+	// Cumulative check: ps.CumulativeCost spans all generations.
+	if e.config.MaxCostPerPhase > 0 {
+		cost := ps.CumulativeCost
+		limit := e.config.MaxCostPerPhase
+		if cost >= limit {
+			e.emit(Event{
+				Phase: phase.Name,
+				Kind:  EventPhaseBudgetExceeded,
+				Data:  map[string]any{"phase_cost": cost, "limit": limit},
+			})
+			return &PhaseBudgetExceededError{
+				Limit:  limit,
+				Actual: cost,
+				Phase:  phase.Name,
+			}
+		}
+		if cost >= limit*0.9 {
+			e.emit(Event{
+				Phase: phase.Name,
+				Kind:  EventPhaseBudgetWarning,
+				Data:  map[string]any{"phase_cost": cost, "limit": limit},
+			})
+		}
 	}
+
 	return nil
 }
 
@@ -1936,6 +1975,13 @@ func (e *Engine) runParallelReview(ctx context.Context, phase PhaseConfig) error
 		perPhaseRemaining := e.config.MaxCostPerPhase - e.state.Meta().Phases[phase.Name].CumulativeCost
 		if budgetRemaining <= 0 || perPhaseRemaining < budgetRemaining {
 			budgetRemaining = perPhaseRemaining
+		}
+	}
+	// Cap with per-generation limit.
+	if e.config.MaxCostPerGeneration > 0 {
+		genRemaining := e.config.MaxCostPerGeneration - e.state.Meta().Phases[phase.Name].Cost
+		if budgetRemaining <= 0 || genRemaining < budgetRemaining {
+			budgetRemaining = genRemaining
 		}
 	}
 

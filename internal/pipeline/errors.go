@@ -31,6 +31,19 @@ func (e *PhaseBudgetExceededError) Error() string {
 		e.Phase, e.Limit, e.Actual)
 }
 
+// GenerationBudgetExceededError is returned when a single phase generation's
+// cost (ps.Cost) exceeds the configured per-generation limit.
+type GenerationBudgetExceededError struct {
+	Limit  float64
+	Actual float64
+	Phase  string
+}
+
+func (e *GenerationBudgetExceededError) Error() string {
+	return fmt.Sprintf("pipeline: generation budget exceeded in phase %s: limit $%.2f, actual $%.2f",
+		e.Phase, e.Limit, e.Actual)
+}
+
 // DependencyNotMetError is returned when a phase's prerequisite has not completed.
 type DependencyNotMetError struct {
 	Phase      string
