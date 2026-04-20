@@ -70,6 +70,7 @@ const (
 	EventReviewerFailed           = "reviewer_failed"
 	EventReviewerRetrying         = "reviewer_retrying"
 	EventReviewerPartialFailure   = "reviewer_partial_failure"
+	EventReviewerSkipped          = "reviewer_skipped"
 	EventReviewMerged             = "review_merged"
 	EventReworkRouted             = "rework_routed"
 	EventReworkMaxCycles          = "rework_max_cycles"

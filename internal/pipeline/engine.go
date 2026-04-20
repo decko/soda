@@ -1970,6 +1970,40 @@ type reviewerLog struct {
 	Content []byte
 }
 
+// reviewersWithCriticalFindings reads the archived review result from the
+// previous generation and returns the set of reviewer names that produced at
+// least one critical or major finding. Returns nil when there is no prior
+// generation (first run) or the archived result cannot be read/parsed.
+//
+// The caller uses this set to skip redundant reviewers on rework cycles:
+// any reviewer NOT in the returned set had no actionable findings and does
+// not need to re-run.
+func (e *Engine) reviewersWithCriticalFindings(phaseName string) map[string]bool {
+	ps := e.state.Meta().Phases[phaseName]
+	if ps == nil || ps.Generation <= 1 {
+		return nil
+	}
+
+	raw, err := e.state.ReadArchivedResult(phaseName, ps.Generation-1)
+	if err != nil {
+		return nil
+	}
+
+	var prevReview schemas.ReviewOutput
+	if err := json.Unmarshal(raw, &prevReview); err != nil {
+		return nil
+	}
+
+	needed := make(map[string]bool)
+	for _, finding := range prevReview.Findings {
+		sev := strings.ToLower(finding.Severity)
+		if sev == "critical" || sev == "major" {
+			needed[finding.Source] = true
+		}
+	}
+	return needed
+}
+
 // runParallelReview dispatches specialist reviewer subagents in parallel,
 // collects their findings, merges them into a single ReviewOutput, and
 // computes a verdict.
@@ -2031,16 +2065,34 @@ func (e *Engine) runParallelReview(ctx context.Context, phase PhaseConfig) error
 		}
 	}
 
+	// On rework cycles, determine which reviewers can be skipped.
+	// A reviewer is redundant if it had no critical/major findings in the
+	// previous review — only reviewers that flagged actionable issues need
+	// to re-verify the fixes.
+	neededReviewers := e.reviewersWithCriticalFindings(phase.Name)
+
 	// Channel for reviewer goroutines to send messages to the parent.
 	msgCh := make(chan reviewerMsg, len(phase.Reviewers)*10)
 
-	// Dispatch reviewers in parallel.
+	// Dispatch reviewers in parallel, skipping redundant ones.
 	var wg sync.WaitGroup
 	results := make([]reviewerResult, len(phase.Reviewers))
 
 	for idx, reviewer := range phase.Reviewers {
 		if idx > 0 && phase.ReviewerStagger.Duration > 0 {
 			e.config.SleepFunc(phase.ReviewerStagger.Duration)
+		}
+
+		// Skip reviewers that had no critical/major findings in the prior
+		// cycle. neededReviewers is nil on the first run, so all run.
+		if neededReviewers != nil && !neededReviewers[reviewer.Name] {
+			e.emit(Event{
+				Phase: phase.Name,
+				Kind:  EventReviewerSkipped,
+				Data:  map[string]any{"reviewer": reviewer.Name, "reason": "no critical/major findings in prior cycle"},
+			})
+			results[idx] = reviewerResult{Name: reviewer.Name} // zero findings, zero cost
+			continue
 		}
 		wg.Add(1)
 		go func(idx int, reviewer ReviewerConfig) {
