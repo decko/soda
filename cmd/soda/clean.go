@@ -27,12 +27,13 @@ func newCleanCmd() *cobra.Command {
 			}
 			all, _ := cmd.Flags().GetBool("all")
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
+			force, _ := cmd.Flags().GetBool("force")
 
 			if len(args) == 1 {
-				return cleanTicket(cfg.StateDir, args[0], dryRun)
+				return cleanTicket(cfg.StateDir, args[0], dryRun, force)
 			}
 			if all {
-				return cleanAll(cfg.StateDir, dryRun)
+				return cleanAll(cfg.StateDir, dryRun, force)
 			}
 			return fmt.Errorf("specify a ticket key or use --all")
 		},
@@ -40,11 +41,12 @@ func newCleanCmd() *cobra.Command {
 
 	cmd.Flags().Bool("all", false, "clean all tickets in terminal state")
 	cmd.Flags().Bool("dry-run", false, "show what would be cleaned without doing it")
+	cmd.Flags().Bool("force", false, "clean even if pipeline is running or not in terminal state")
 
 	return cmd
 }
 
-func cleanAll(stateDir string, dryRun bool) error {
+func cleanAll(stateDir string, dryRun, force bool) error {
 	entries, err := os.ReadDir(stateDir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -61,7 +63,7 @@ func cleanAll(stateDir string, dryRun bool) error {
 		if !entry.IsDir() {
 			continue
 		}
-		if err := cleanTicket(stateDir, entry.Name(), dryRun); err != nil {
+		if err := cleanTicket(stateDir, entry.Name(), dryRun, force); err != nil {
 			if !errors.Is(err, errSkipped) {
 				fmt.Fprintf(os.Stderr, "Warning: %s: %v\n", entry.Name(), err)
 			}
@@ -76,7 +78,7 @@ func cleanAll(stateDir string, dryRun bool) error {
 	return nil
 }
 
-func cleanTicket(stateDir, ticketKey string, dryRun bool) error {
+func cleanTicket(stateDir, ticketKey string, dryRun, force bool) error {
 	ticketDir := filepath.Join(stateDir, ticketKey)
 	metaPath := filepath.Join(ticketDir, "meta.json")
 
@@ -87,14 +89,14 @@ func cleanTicket(stateDir, ticketKey string, dryRun bool) error {
 
 	// Try to acquire flock to ensure pipeline is not running
 	lockPath := filepath.Join(ticketDir, "lock")
-	if !tryLock(lockPath) {
+	if !force && !tryLock(lockPath) {
 		fmt.Fprintf(os.Stderr, "Skipping %s: pipeline is running\n", ticketKey)
 		return errSkipped
 	}
 
 	// Check terminal state
-	if !isTerminal(meta) {
-		fmt.Fprintf(os.Stderr, "Skipping %s: not in terminal state\n", ticketKey)
+	if !force && !isTerminal(meta) {
+		fmt.Fprintf(os.Stderr, "Skipping %s: not in terminal state (use --force to override)\n", ticketKey)
 		return errSkipped
 	}
 
@@ -103,7 +105,12 @@ func cleanTicket(stateDir, ticketKey string, dryRun bool) error {
 		if dryRun {
 			fmt.Printf("Would remove worktree: %s\n", meta.Worktree)
 		} else {
-			out, wtErr := exec.Command("git", "worktree", "remove", meta.Worktree).CombinedOutput()
+			wtArgs := []string{"worktree", "remove"}
+			if force {
+				wtArgs = append(wtArgs, "--force")
+			}
+			wtArgs = append(wtArgs, meta.Worktree)
+			out, wtErr := exec.Command("git", wtArgs...).CombinedOutput()
 			if wtErr != nil {
 				fmt.Fprintf(os.Stderr, "Warning: git worktree remove %s: %s\n", meta.Worktree, string(out))
 			} else {
@@ -112,18 +119,26 @@ func cleanTicket(stateDir, ticketKey string, dryRun bool) error {
 		}
 	}
 
-	// Delete branch
+	// Delete branch (local + remote)
 	if meta.Branch != "" {
 		if dryRun {
 			fmt.Printf("Would delete branch: %s\n", meta.Branch)
+			fmt.Printf("Would delete remote branch: origin/%s\n", meta.Branch)
 		} else {
 			repoDir, err := resolveRepoDir()
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: cannot resolve repo dir to delete branch %s: %v\n", meta.Branch, err)
-			} else if brErr := sodagit.DeleteBranch(repoDir, meta.Branch); brErr != nil {
-				fmt.Fprintf(os.Stderr, "Warning: git branch delete %s: %v\n", meta.Branch, brErr)
 			} else {
-				fmt.Printf("Deleted branch: %s\n", meta.Branch)
+				if brErr := sodagit.DeleteBranch(repoDir, meta.Branch); brErr != nil {
+					fmt.Fprintf(os.Stderr, "Warning: git branch delete %s: %v\n", meta.Branch, brErr)
+				} else {
+					fmt.Printf("Deleted branch: %s\n", meta.Branch)
+				}
+				if rmErr := sodagit.DeleteRemoteBranch(repoDir, "origin", meta.Branch); rmErr != nil {
+					fmt.Fprintf(os.Stderr, "Warning: git remote branch delete origin/%s: %v\n", meta.Branch, rmErr)
+				} else {
+					fmt.Printf("Deleted remote branch: origin/%s\n", meta.Branch)
+				}
 			}
 		}
 	}
