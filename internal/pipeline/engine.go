@@ -367,7 +367,9 @@ func (e *Engine) Run(ctx context.Context) error {
 	e.emit(Event{Kind: EventEngineStarted})
 
 	if err := e.executePhases(ctx, e.config.Pipeline.Phases, false); err != nil {
-		return e.wrapTimeoutError(ctx, err)
+		wrapped := e.wrapTimeoutError(ctx, err)
+		e.emit(Event{Kind: EventEngineFailed, Data: map[string]any{"error": wrapped.Error()}})
+		return wrapped
 	}
 
 	e.emit(Event{Kind: EventEngineCompleted})
@@ -414,7 +416,9 @@ func (e *Engine) Resume(ctx context.Context, fromPhase string) error {
 	// The fromPhase (first in slice) is always re-run, even if completed.
 	// Mark it with forceFirst=true so executePhases skips the shouldSkip check.
 	if err := e.executePhases(ctx, e.config.Pipeline.Phases[startIdx:], true); err != nil {
-		return e.wrapTimeoutError(ctx, err)
+		wrapped := e.wrapTimeoutError(ctx, err)
+		e.emit(Event{Kind: EventEngineFailed, Data: map[string]any{"error": wrapped.Error()}})
+		return wrapped
 	}
 
 	e.emit(Event{Kind: EventEngineCompleted})
