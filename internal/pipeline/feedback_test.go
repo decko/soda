@@ -117,6 +117,182 @@ func TestExtractReviewFeedback(t *testing.T) {
 	})
 }
 
+func TestExtractVerifyFeedback(t *testing.T) {
+	t.Run("returns_nil_when_no_verify_result", func(t *testing.T) {
+		stateDir := t.TempDir()
+		state, _ := LoadOrCreate(stateDir, "TEST-1")
+
+		engine := &Engine{state: state, config: EngineConfig{}}
+		if fb := engine.extractVerifyFeedback(); fb != nil {
+			t.Error("expected nil when no verify result exists")
+		}
+	})
+
+	t.Run("returns_nil_when_verdict_is_PASS", func(t *testing.T) {
+		stateDir := t.TempDir()
+		state, _ := LoadOrCreate(stateDir, "TEST-1")
+		_ = state.MarkRunning("verify")
+		_ = state.WriteResult("verify", json.RawMessage(`{"verdict":"PASS","fixes_required":[]}`))
+		_ = state.MarkCompleted("verify")
+
+		engine := &Engine{state: state, config: EngineConfig{}}
+		if fb := engine.extractVerifyFeedback(); fb != nil {
+			t.Error("expected nil when verdict is PASS")
+		}
+	})
+
+	t.Run("only_critical_and_major_code_issues_included", func(t *testing.T) {
+		stateDir := t.TempDir()
+		state, _ := LoadOrCreate(stateDir, "TEST-1")
+		_ = state.MarkRunning("verify")
+		verifyResult := `{
+			"verdict": "FAIL",
+			"fixes_required": ["fix the bug"],
+			"code_issues": [
+				{"file":"a.go","line":10,"severity":"critical","issue":"nil deref","suggested_fix":"check nil"},
+				{"file":"b.go","line":20,"severity":"major","issue":"unchecked error","suggested_fix":"handle err"},
+				{"file":"c.go","line":30,"severity":"minor","issue":"naming","suggested_fix":"rename"},
+				{"file":"d.go","line":40,"severity":"info","issue":"style","suggested_fix":"reformat"}
+			]
+		}`
+		_ = state.WriteResult("verify", json.RawMessage(verifyResult))
+		_ = state.MarkCompleted("verify")
+
+		engine := &Engine{state: state, config: EngineConfig{}}
+		fb := engine.extractVerifyFeedback()
+		if fb == nil {
+			t.Fatal("expected non-nil feedback for FAIL verdict")
+		}
+
+		if len(fb.CodeIssues) != 2 {
+			t.Fatalf("CodeIssues count = %d, want 2 (only critical+major)", len(fb.CodeIssues))
+		}
+		if fb.CodeIssues[0].Severity != "critical" || fb.CodeIssues[0].File != "a.go" {
+			t.Errorf("first code issue = %+v, want critical/a.go", fb.CodeIssues[0])
+		}
+		if fb.CodeIssues[1].Severity != "major" || fb.CodeIssues[1].File != "b.go" {
+			t.Errorf("second code issue = %+v, want major/b.go", fb.CodeIssues[1])
+		}
+	})
+
+	t.Run("only_failed_criteria_included", func(t *testing.T) {
+		stateDir := t.TempDir()
+		state, _ := LoadOrCreate(stateDir, "TEST-1")
+		_ = state.MarkRunning("verify")
+		verifyResult := `{
+			"verdict": "FAIL",
+			"fixes_required": ["fix tests"],
+			"criteria_results": [
+				{"criterion":"must compile","passed":true,"evidence":"builds ok"},
+				{"criterion":"must pass tests","passed":false,"evidence":"3 tests failed"},
+				{"criterion":"must lint","passed":false,"evidence":"lint errors"}
+			]
+		}`
+		_ = state.WriteResult("verify", json.RawMessage(verifyResult))
+		_ = state.MarkCompleted("verify")
+
+		engine := &Engine{state: state, config: EngineConfig{}}
+		fb := engine.extractVerifyFeedback()
+		if fb == nil {
+			t.Fatal("expected non-nil feedback for FAIL verdict")
+		}
+
+		if len(fb.FailedCriteria) != 2 {
+			t.Fatalf("FailedCriteria count = %d, want 2", len(fb.FailedCriteria))
+		}
+		if fb.FailedCriteria[0].Criterion != "must pass tests" {
+			t.Errorf("first criterion = %q, want %q", fb.FailedCriteria[0].Criterion, "must pass tests")
+		}
+		if fb.FailedCriteria[1].Criterion != "must lint" {
+			t.Errorf("second criterion = %q, want %q", fb.FailedCriteria[1].Criterion, "must lint")
+		}
+	})
+
+	t.Run("only_failed_commands_included_with_truncated_output", func(t *testing.T) {
+		stateDir := t.TempDir()
+		state, _ := LoadOrCreate(stateDir, "TEST-1")
+		_ = state.MarkRunning("verify")
+
+		// Build output with more than 50 lines.
+		var longOutput strings.Builder
+		for i := 1; i <= 60; i++ {
+			longOutput.WriteString("error line " + strings.Repeat("x", 5) + "\n")
+		}
+
+		verifyResult := `{
+			"verdict": "FAIL",
+			"fixes_required": ["fix commands"],
+			"command_results": [
+				{"command":"go test ./...","exit_code":0,"output":"ok","passed":true},
+				{"command":"go vet ./...","exit_code":1,"output":"` + strings.ReplaceAll(longOutput.String(), "\n", `\n`) + `","passed":false},
+				{"command":"golint","exit_code":2,"output":"lint failure","passed":false}
+			]
+		}`
+		_ = state.WriteResult("verify", json.RawMessage(verifyResult))
+		_ = state.MarkCompleted("verify")
+
+		engine := &Engine{state: state, config: EngineConfig{}}
+		fb := engine.extractVerifyFeedback()
+		if fb == nil {
+			t.Fatal("expected non-nil feedback for FAIL verdict")
+		}
+
+		if len(fb.FailedCommands) != 2 {
+			t.Fatalf("FailedCommands count = %d, want 2 (only failed)", len(fb.FailedCommands))
+		}
+
+		// First failed command should have truncated output.
+		if !strings.Contains(fb.FailedCommands[0].Output, "... (truncated)") {
+			t.Errorf("expected truncated output for long command output, got: %q", fb.FailedCommands[0].Output)
+		}
+		if fb.FailedCommands[0].Command != "go vet ./..." {
+			t.Errorf("first failed command = %q, want %q", fb.FailedCommands[0].Command, "go vet ./...")
+		}
+
+		// Second failed command should have full output (short).
+		if fb.FailedCommands[1].Command != "golint" {
+			t.Errorf("second failed command = %q, want %q", fb.FailedCommands[1].Command, "golint")
+		}
+		if fb.FailedCommands[1].ExitCode != 2 {
+			t.Errorf("second failed command exit code = %d, want 2", fb.FailedCommands[1].ExitCode)
+		}
+	})
+
+	t.Run("fixes_required_is_populated", func(t *testing.T) {
+		stateDir := t.TempDir()
+		state, _ := LoadOrCreate(stateDir, "TEST-1")
+		_ = state.MarkRunning("verify")
+		verifyResult := `{
+			"verdict": "FAIL",
+			"fixes_required": ["fix the nil pointer", "add error handling"]
+		}`
+		_ = state.WriteResult("verify", json.RawMessage(verifyResult))
+		_ = state.MarkCompleted("verify")
+
+		engine := &Engine{state: state, config: EngineConfig{}}
+		fb := engine.extractVerifyFeedback()
+		if fb == nil {
+			t.Fatal("expected non-nil feedback for FAIL verdict")
+		}
+
+		if fb.Source != "verify" {
+			t.Errorf("Source = %q, want %q", fb.Source, "verify")
+		}
+		if fb.Verdict != "FAIL" {
+			t.Errorf("Verdict = %q, want %q", fb.Verdict, "FAIL")
+		}
+		if len(fb.FixesRequired) != 2 {
+			t.Fatalf("FixesRequired count = %d, want 2", len(fb.FixesRequired))
+		}
+		if fb.FixesRequired[0] != "fix the nil pointer" {
+			t.Errorf("FixesRequired[0] = %q, want %q", fb.FixesRequired[0], "fix the nil pointer")
+		}
+		if fb.FixesRequired[1] != "add error handling" {
+			t.Errorf("FixesRequired[1] = %q, want %q", fb.FixesRequired[1], "add error handling")
+		}
+	})
+}
+
 func TestExtractFeedbackFrom(t *testing.T) {
 	t.Run("review_source", func(t *testing.T) {
 		stateDir := t.TempDir()
