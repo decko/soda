@@ -9744,3 +9744,488 @@ func TestEngine_PipelineTimeout_ExternalDeadlineNotWrapped(t *testing.T) {
 		t.Error("external context deadline should not be wrapped as PipelineTimeoutError")
 	}
 }
+
+// --- Redundant reviewer skip on rework tests ---
+
+func TestEngine_ParallelReview_SkipRedundantOnRework(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:  "review",
+			Type:  "parallel-review",
+			Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Reviewers: []ReviewerConfig{
+				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+				{Name: "ai-harness", Prompt: "prompts/review-harness.md", Focus: "AI harness"},
+			},
+			Rework: &ReworkConfig{Target: "implement"},
+		},
+	}
+
+	// Only go-specialist should run (it had critical findings previously).
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"review/go-specialist": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[{"severity":"minor","file":"foo.go","issue":"style nit","suggestion":"fix it"}],"verdict":"pass"}`),
+					RawText: "Minor issue found",
+					CostUSD: 0.15,
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, state := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(e Event) {
+			events = append(events, e)
+		}
+	})
+
+	// Pre-populate: simulate a completed review with critical findings from
+	// go-specialist and only minor findings from ai-harness.
+	prevResult := schemas.ReviewOutput{
+		TicketKey: "TEST-1",
+		Verdict:   "rework",
+		Findings: []schemas.ReviewFinding{
+			{Source: "go-specialist", Severity: "critical", File: "main.go", Issue: "critical bug", Suggestion: "fix it"},
+			{Source: "ai-harness", Severity: "minor", File: "prompt.md", Issue: "formatting", Suggestion: "fix format"},
+		},
+	}
+	prevJSON, _ := json.Marshal(prevResult)
+	if err := state.WriteResult("review", json.RawMessage(prevJSON)); err != nil {
+		t.Fatalf("WriteResult: %v", err)
+	}
+	// Use PhasePending so shouldSkip doesn't skip the phase — we want
+	// runParallelReview to actually execute and apply the skip logic.
+	state.Meta().Phases["review"] = &PhaseState{
+		Status:     PhasePending,
+		Generation: 1,
+	}
+	state.Meta().ReworkCycles = 1
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Verify only go-specialist was called.
+	if len(mock.calls) != 1 {
+		t.Errorf("runner called %d times, want 1 (only go-specialist); phases: %v", len(mock.calls), phaseNames(mock.calls))
+	}
+	if len(mock.calls) > 0 && mock.calls[0].Phase != "review/go-specialist" {
+		t.Errorf("runner called for %q, want %q", mock.calls[0].Phase, "review/go-specialist")
+	}
+
+	// Verify ai-harness was skipped with the right event.
+	skippedCount := 0
+	for _, e := range events {
+		if e.Kind == EventReviewerSkippedRework {
+			skippedCount++
+			reviewer, _ := e.Data["reviewer"].(string)
+			if reviewer != "ai-harness" {
+				t.Errorf("skipped reviewer = %q, want %q", reviewer, "ai-harness")
+			}
+			carriedCount, _ := e.Data["carried_findings"].(int)
+			if carriedCount != 1 {
+				t.Errorf("carried_findings = %d, want 1", carriedCount)
+			}
+		}
+	}
+	if skippedCount != 1 {
+		t.Errorf("reviewer_skipped_rework events = %d, want 1", skippedCount)
+	}
+
+	// Verify the merged result includes carried findings from ai-harness.
+	result, err := state.ReadResult("review")
+	if err != nil {
+		t.Fatalf("ReadResult: %v", err)
+	}
+	var output schemas.ReviewOutput
+	if err := json.Unmarshal(result, &output); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	// Should have 2 findings: 1 from ai-harness (carried) + 1 from go-specialist (fresh).
+	if len(output.Findings) != 2 {
+		t.Errorf("findings count = %d, want 2", len(output.Findings))
+	}
+
+	// Verdict should be "pass-with-follow-ups" (only minor findings from both).
+	if output.Verdict != "pass-with-follow-ups" {
+		t.Errorf("verdict = %q, want %q", output.Verdict, "pass-with-follow-ups")
+	}
+}
+
+func TestEngine_ParallelReview_NoSkipOnFirstRun(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:  "review",
+			Type:  "parallel-review",
+			Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Reviewers: []ReviewerConfig{
+				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+				{Name: "ai-harness", Prompt: "prompts/review-harness.md", Focus: "AI harness"},
+			},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"review/go-specialist": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[],"verdict":"pass"}`),
+					CostUSD: 0.10,
+				},
+			}},
+			"review/ai-harness": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[],"verdict":"pass"}`),
+					CostUSD: 0.10,
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, _ := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(e Event) {
+			events = append(events, e)
+		}
+	})
+
+	// ReworkCycles is 0 (default) — no skip should happen.
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Both reviewers should have been called.
+	if len(mock.calls) != 2 {
+		t.Errorf("runner called %d times, want 2; phases: %v", len(mock.calls), phaseNames(mock.calls))
+	}
+
+	// No reviewer_skipped_rework events.
+	for _, e := range events {
+		if e.Kind == EventReviewerSkippedRework {
+			t.Errorf("unexpected reviewer_skipped_rework event: %v", e.Data)
+		}
+	}
+}
+
+func TestEngine_ParallelReview_AllReviewersCritical_NoSkip(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:  "review",
+			Type:  "parallel-review",
+			Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Reviewers: []ReviewerConfig{
+				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+				{Name: "ai-harness", Prompt: "prompts/review-harness.md", Focus: "AI harness"},
+			},
+			Rework: &ReworkConfig{Target: "implement"},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"review/go-specialist": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[],"verdict":"pass"}`),
+					CostUSD: 0.10,
+				},
+			}},
+			"review/ai-harness": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[],"verdict":"pass"}`),
+					CostUSD: 0.10,
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, state := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(e Event) {
+			events = append(events, e)
+		}
+	})
+
+	// Both reviewers had critical findings — neither should be skipped.
+	prevResult := schemas.ReviewOutput{
+		TicketKey: "TEST-1",
+		Verdict:   "rework",
+		Findings: []schemas.ReviewFinding{
+			{Source: "go-specialist", Severity: "critical", File: "main.go", Issue: "bug A", Suggestion: "fix A"},
+			{Source: "ai-harness", Severity: "major", File: "prompt.md", Issue: "bug B", Suggestion: "fix B"},
+		},
+	}
+	prevJSON, _ := json.Marshal(prevResult)
+	if err := state.WriteResult("review", json.RawMessage(prevJSON)); err != nil {
+		t.Fatalf("WriteResult: %v", err)
+	}
+	state.Meta().Phases["review"] = &PhaseState{
+		Status:     PhasePending,
+		Generation: 1,
+	}
+	state.Meta().ReworkCycles = 1
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Both reviewers should run (both had critical/major findings).
+	if len(mock.calls) != 2 {
+		t.Errorf("runner called %d times, want 2; phases: %v", len(mock.calls), phaseNames(mock.calls))
+	}
+
+	// No skip events.
+	for _, e := range events {
+		if e.Kind == EventReviewerSkippedRework {
+			t.Errorf("unexpected reviewer_skipped_rework event: %v", e.Data)
+		}
+	}
+}
+
+func TestEngine_ParallelReview_SkipReviewer_NoCarriedFindings(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:  "review",
+			Type:  "parallel-review",
+			Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Reviewers: []ReviewerConfig{
+				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+				{Name: "ai-harness", Prompt: "prompts/review-harness.md", Focus: "AI harness"},
+			},
+			Rework: &ReworkConfig{Target: "implement"},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"review/go-specialist": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[],"verdict":"pass"}`),
+					CostUSD: 0.10,
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, state := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(e Event) {
+			events = append(events, e)
+		}
+	})
+
+	// go-specialist had critical findings; ai-harness had NO findings at all.
+	prevResult := schemas.ReviewOutput{
+		TicketKey: "TEST-1",
+		Verdict:   "rework",
+		Findings: []schemas.ReviewFinding{
+			{Source: "go-specialist", Severity: "critical", File: "main.go", Issue: "critical bug", Suggestion: "fix it"},
+		},
+	}
+	prevJSON, _ := json.Marshal(prevResult)
+	if err := state.WriteResult("review", json.RawMessage(prevJSON)); err != nil {
+		t.Fatalf("WriteResult: %v", err)
+	}
+	state.Meta().Phases["review"] = &PhaseState{
+		Status:     PhasePending,
+		Generation: 1,
+	}
+	state.Meta().ReworkCycles = 1
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Only go-specialist should run.
+	if len(mock.calls) != 1 {
+		t.Errorf("runner called %d times, want 1; phases: %v", len(mock.calls), phaseNames(mock.calls))
+	}
+
+	// ai-harness skipped with 0 carried findings.
+	for _, e := range events {
+		if e.Kind == EventReviewerSkippedRework {
+			carriedCount, _ := e.Data["carried_findings"].(int)
+			if carriedCount != 0 {
+				t.Errorf("carried_findings = %d, want 0", carriedCount)
+			}
+		}
+	}
+
+	// Result should have only the fresh finding from go-specialist.
+	result, err := state.ReadResult("review")
+	if err != nil {
+		t.Fatalf("ReadResult: %v", err)
+	}
+	var output schemas.ReviewOutput
+	if err := json.Unmarshal(result, &output); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if output.Verdict != "pass" {
+		t.Errorf("verdict = %q, want %q", output.Verdict, "pass")
+	}
+}
+
+func TestRedundantReviewers_Unit(t *testing.T) {
+	// Unit test for the redundantReviewers method without full engine setup.
+	stateDir := t.TempDir()
+	state, err := LoadOrCreate(stateDir, "TEST-1")
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+
+	phase := PhaseConfig{
+		Name: "review",
+		Type: "parallel-review",
+		Reviewers: []ReviewerConfig{
+			{Name: "reviewer-a"},
+			{Name: "reviewer-b"},
+			{Name: "reviewer-c"},
+		},
+	}
+
+	engine := &Engine{
+		config: EngineConfig{},
+		state:  state,
+	}
+
+	t.Run("no skip when rework cycles is zero", func(t *testing.T) {
+		state.Meta().ReworkCycles = 0
+		skip, carry := engine.redundantReviewers(phase)
+		if skip != nil || carry != nil {
+			t.Errorf("expected nil, got skip=%v carry=%v", skip, carry)
+		}
+	})
+
+	t.Run("no skip when no phase state", func(t *testing.T) {
+		state.Meta().ReworkCycles = 1
+		delete(state.Meta().Phases, "review")
+		skip, carry := engine.redundantReviewers(phase)
+		if skip != nil || carry != nil {
+			t.Errorf("expected nil, got skip=%v carry=%v", skip, carry)
+		}
+	})
+
+	t.Run("no skip when generation is 1", func(t *testing.T) {
+		state.Meta().ReworkCycles = 1
+		state.Meta().Phases["review"] = &PhaseState{Generation: 1}
+		skip, carry := engine.redundantReviewers(phase)
+		if skip != nil || carry != nil {
+			t.Errorf("expected nil, got skip=%v carry=%v", skip, carry)
+		}
+	})
+
+	t.Run("skip reviewer without critical findings", func(t *testing.T) {
+		state.Meta().ReworkCycles = 1
+		state.Meta().Phases["review"] = &PhaseState{Generation: 2}
+
+		// Write archived result with reviewer-a having critical, reviewer-b minor, reviewer-c nothing.
+		prev := schemas.ReviewOutput{
+			TicketKey: "TEST-1",
+			Verdict:   "rework",
+			Findings: []schemas.ReviewFinding{
+				{Source: "reviewer-a", Severity: "critical", File: "a.go", Issue: "bug"},
+				{Source: "reviewer-b", Severity: "minor", File: "b.go", Issue: "style"},
+			},
+		}
+		data, _ := json.Marshal(prev)
+		archivedPath := filepath.Join(stateDir, "TEST-1", "review.json.1")
+		if err := os.WriteFile(archivedPath, data, 0644); err != nil {
+			t.Fatalf("write archived: %v", err)
+		}
+
+		skip, carry := engine.redundantReviewers(phase)
+		if skip == nil {
+			t.Fatal("expected skip set")
+		}
+		if !skip["reviewer-b"] {
+			t.Error("reviewer-b should be skipped")
+		}
+		if !skip["reviewer-c"] {
+			t.Error("reviewer-c should be skipped")
+		}
+		if skip["reviewer-a"] {
+			t.Error("reviewer-a should NOT be skipped")
+		}
+
+		// Carried findings should include reviewer-b's minor finding.
+		if len(carry) != 1 {
+			t.Fatalf("carried findings = %d, want 1", len(carry))
+		}
+		if carry[0].Source != "reviewer-b" {
+			t.Errorf("carried finding source = %q, want %q", carry[0].Source, "reviewer-b")
+		}
+	})
+
+	t.Run("no skip when all reviewers have critical findings", func(t *testing.T) {
+		state.Meta().ReworkCycles = 1
+		state.Meta().Phases["review"] = &PhaseState{Generation: 2}
+
+		prev := schemas.ReviewOutput{
+			TicketKey: "TEST-1",
+			Verdict:   "rework",
+			Findings: []schemas.ReviewFinding{
+				{Source: "reviewer-a", Severity: "critical", File: "a.go", Issue: "bug"},
+				{Source: "reviewer-b", Severity: "major", File: "b.go", Issue: "issue"},
+				{Source: "reviewer-c", Severity: "critical", File: "c.go", Issue: "problem"},
+			},
+		}
+		data, _ := json.Marshal(prev)
+		archivedPath := filepath.Join(stateDir, "TEST-1", "review.json.1")
+		if err := os.WriteFile(archivedPath, data, 0644); err != nil {
+			t.Fatalf("write archived: %v", err)
+		}
+
+		skip, carry := engine.redundantReviewers(phase)
+		if skip != nil || carry != nil {
+			t.Errorf("expected nil when all reviewers need rerun, got skip=%v carry=%v", skip, carry)
+		}
+	})
+
+	t.Run("no skip when no previous findings at all", func(t *testing.T) {
+		state.Meta().ReworkCycles = 1
+		state.Meta().Phases["review"] = &PhaseState{Generation: 2}
+
+		prev := schemas.ReviewOutput{
+			TicketKey: "TEST-1",
+			Verdict:   "rework",
+			Findings:  []schemas.ReviewFinding{},
+		}
+		data, _ := json.Marshal(prev)
+		archivedPath := filepath.Join(stateDir, "TEST-1", "review.json.1")
+		if err := os.WriteFile(archivedPath, data, 0644); err != nil {
+			t.Fatalf("write archived: %v", err)
+		}
+
+		skip, carry := engine.redundantReviewers(phase)
+		if skip != nil || carry != nil {
+			t.Errorf("expected nil when no findings, got skip=%v carry=%v", skip, carry)
+		}
+	})
+
+	t.Run("no skip when all would be skipped (source mismatch)", func(t *testing.T) {
+		state.Meta().ReworkCycles = 1
+		state.Meta().Phases["review"] = &PhaseState{Generation: 2}
+
+		// Findings from reviewers that don't match current config names.
+		prev := schemas.ReviewOutput{
+			TicketKey: "TEST-1",
+			Verdict:   "rework",
+			Findings: []schemas.ReviewFinding{
+				{Source: "old-reviewer-x", Severity: "critical", File: "x.go", Issue: "bug"},
+			},
+		}
+		data, _ := json.Marshal(prev)
+		archivedPath := filepath.Join(stateDir, "TEST-1", "review.json.1")
+		if err := os.WriteFile(archivedPath, data, 0644); err != nil {
+			t.Fatalf("write archived: %v", err)
+		}
+
+		// All current reviewers would be skipped → should run all instead.
+		skip, carry := engine.redundantReviewers(phase)
+		if skip != nil || carry != nil {
+			t.Errorf("expected nil when all would be skipped, got skip=%v carry=%v", skip, carry)
+		}
+	})
+}
