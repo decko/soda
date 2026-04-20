@@ -348,6 +348,7 @@ Atomic writes: always write to `.tmp` then rename. Archive on re-run (`verify.js
 - **Regression detection**: prevents patch from introducing new failures by comparing criteria between verify cycles.
 - **Post-submit best-effort**: follow-up phase failures are swallowed, not terminal. Pipeline succeeds even if follow-up can't create tickets.
 - **Agent-agnostic runner**: `internal/runner/` decouples the engine from Claude Code CLI specifics, enabling future backend swaps.
+- **Code snippet injection for rework**: when review triggers rework, the engine reads ±5 lines around each critical/major finding's `file:line` and injects them as `CodeSnippet` on `EnrichedFinding`. This eliminates a retrieval gap — the rework implement session sees the exact code without spending tokens on tool calls to find it. Validated by raki: reduced rework cycles by 25% and cost by 17%.
 
 ## Git workflow
 
@@ -392,8 +393,44 @@ Atomic writes: always write to `.tmp` then rename. Archive on re-run (`verify.js
 11. **`max_cost_per_phase` is cumulative**: `CumulativeCost` on `PhaseState` accumulates across rework/patch generations, not just the current generation.
 12. **Patch regression detection uses criterion text**: if acceptance criteria text changes between verify runs, regression detection may produce false negatives.
 13. **CI git config isolation**: tests that create git repos must set `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_SYSTEM=/dev/null` (via `t.Setenv`) to prevent `url.*.insteadOf` rewrites on CI runners.
+14. **`engine.go` is a merge conflict hotspot**: at ~2,800 lines with 60+ functions, every PR touching pipeline logic conflicts. Place new functions near related functions, not at the end. For new top-level concerns, extract to a separate file (see `review.go`, `feedback.go` decomposition plan).
+15. **`DefaultConfig()` values are compiled in**: `internal/config/config.go` returns hardcoded defaults (model, limits, worktree dir). Changing defaults requires a rebuild — `soda.yaml` overrides are loaded at runtime, but the fallback values are baked into the binary.
+16. **`ps.Cost` vs `ps.CumulativeCost`**: `Cost` resets per generation (zeroed in `MarkRunning`). `CumulativeCost` accumulates across rework/patch cycles. Budget enforcement (`checkPhaseBudget`) checks both: `MaxCostPerGeneration` against `Cost`, `MaxCostPerPhase` against `CumulativeCost`.
+17. **`EventPhaseFailed` is terminal**: the TUI and history module treat it as a hard failure. Never emit it for non-fatal warnings (e.g., failed to read archived review result) — use a warning-level event string instead.
+18. **Always use `exec.CommandContext`**: bare `exec.Command` in git/worktree operations can hang indefinitely. Use `exec.CommandContext(ctx, ...)` for any operation that could block (network, worktree removal).
+19. **Token data not persisted**: `RunResult` carries `TokensIn`/`TokensOut`/`CacheTokensIn` from the Claude CLI, but `PhaseState` in `meta.json` only stores `Cost` and `DurationMs`. Token counts are lost after the session, making raki's `token_efficiency` metric read 0.0.
+20. **`EnrichedFinding` wraps `schemas.ReviewFinding`**: defined in `prompt.go`, it adds `CodeSnippet` without changing the schema contract. Enrichment happens in `extractReviewFeedback()` only — the review phase still outputs plain `ReviewFinding`.
 
-## Implementation workflow
+## Raki evaluation framework
+
+[Raki](https://github.com/decko/raki) evaluates pipeline quality across completed sessions. The manifest at `raki.yaml` points at `.soda/` for session data.
+
+### Metrics
+
+| Metric | What it measures | Baseline (n=11) |
+|--------|-----------------|-----------------|
+| `first_pass_verify_rate` | Sessions passing verify without corrective patch | 1.0 |
+| `rework_cycles` | Mean review→implement rework loops per session | 0.64 |
+| `review_severity_distribution` | Finding counts by severity (critical/major/minor) | 0/12/128 |
+| `cost_efficiency` | Mean USD per session | $7.62 ($5.15–$11.35) |
+| `knowledge_retrieval_miss_rate` | Fraction of rework findings caused by missing context | 1.0 |
+| `phase_execution_time` | Mean wall-clock seconds per session | 847s (p50=801, p95=1309) |
+| `token_efficiency` | Mean tokens per phase | N/A (no token data) |
+
+### Interpretation
+
+- **`knowledge_retrieval_miss_rate = 1.0`** means the agent CAN fix every bug — rework only happens when it didn't SEE the relevant code. Improvements that inject more code into prompts (snippet injection, diff context) directly reduce rework. Agent reasoning improvements are not needed.
+- **Cost model**: sessions cost $5–$11 USD. Rework adds ~$3/cycle. A 2-rework session (~$11) costs ~2× a clean session (~$5.50).
+- **128 minor findings** across 11 sessions are signal for the follow-up phase (which creates tickets), not noise — the engine already filters to critical/major for rework feedback.
+
+### Running evaluation
+
+```bash
+raki run -m raki.yaml --no-llm    # operational metrics only, no API key needed
+raki validate -m raki.yaml        # check manifest without running
+```
+
+Reports are written to `results/`.
 
 **All development should be done using soda itself.** Run `soda run <ticket>` to implement issues through the pipeline. Manual implementation is acceptable when the pipeline is broken, the work is on soda's own infrastructure, or triage gates the ticket as "not automatable."
 
@@ -573,7 +610,12 @@ If yes, include a "Docs to update" section in the issue body listing the files t
 | `soda history <ticket> --phase <name>` | Drill down into a specific phase |
 | `soda sessions` | List all previous pipeline runs |
 | `soda clean <ticket>` | Remove pipeline state and worktree for a ticket |
+| `soda clean <ticket> --force` | Force-remove dirty worktrees and delete remote branches |
 | `soda clean --all [--dry-run]` | Clean all completed/failed sessions |
+| `soda log <ticket>` | Print formatted pipeline events |
+| `soda log <ticket> -f` | Tail events in real-time (poll-based follow) |
+| `soda validate` | Check config, phases, and prompts for errors without running |
+| `soda cost` | Show cumulative cost breakdown across all sessions |
 | `soda plugin install [--global] [--force]` | Install the SODA Claude Code plugin |
 | `soda plugin uninstall [--global]` | Remove the SODA Claude Code plugin |
 | `soda render-prompt --phase <phase> --ticket <key>` | Render a phase prompt template for debugging |
