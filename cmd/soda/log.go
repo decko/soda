@@ -29,15 +29,15 @@ func newLogCmd() *cobra.Command {
 			follow, _ := cmd.Flags().GetBool("follow")
 			since, _ := cmd.Flags().GetString("since")
 			phase, _ := cmd.Flags().GetString("phase")
-			n, _ := cmd.Flags().GetInt("n")
-			return runLog(cmd.OutOrStdout(), cfg.StateDir, args[0], follow, since, phase, n)
+			lastN, _ := cmd.Flags().GetInt("last")
+			return runLog(cmd.OutOrStdout(), cfg.StateDir, args[0], follow, since, phase, lastN)
 		},
 	}
 
 	cmd.Flags().BoolP("follow", "f", false, "follow new events (tail -f style)")
 	cmd.Flags().String("since", "", "show events since duration (e.g. 5m, 1h)")
 	cmd.Flags().String("phase", "", "filter events to a specific phase")
-	cmd.Flags().IntP("n", "n", 0, "show only the last N events")
+	cmd.Flags().IntP("last", "n", 0, "show only the last N events")
 
 	return cmd
 }
@@ -60,7 +60,7 @@ func runLog(w io.Writer, stateDir, ticketKey string, follow bool, since, phase s
 		return printEvents(w, eventsPath, sinceTime, phase, lastN)
 	}
 
-	return followEvents(w, eventsPath, sinceTime, phase)
+	return followEvents(w, eventsPath, sinceTime, phase, lastN)
 }
 
 // printEvents reads and prints all matching events from the file.
@@ -72,7 +72,7 @@ func printEvents(w io.Writer, path string, sinceTime time.Time, phase string, la
 
 	filtered := filterEvents(events, sinceTime, phase)
 
-	// Apply --n: show only the last N events.
+	// Apply --last: show only the last N events.
 	if lastN > 0 && len(filtered) > lastN {
 		filtered = filtered[len(filtered)-lastN:]
 	}
@@ -85,7 +85,7 @@ func printEvents(w io.Writer, path string, sinceTime time.Time, phase string, la
 
 // followEvents prints existing events then polls for new ones until a
 // terminal event is seen or the process receives SIGINT/SIGTERM.
-func followEvents(w io.Writer, path string, sinceTime time.Time, phase string) error {
+func followEvents(w io.Writer, path string, sinceTime time.Time, phase string, lastN int) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
@@ -100,7 +100,12 @@ func followEvents(w io.Writer, path string, sinceTime time.Time, phase string) e
 	}
 	offset = newOffset
 
-	for _, ev := range filterEvents(events, sinceTime, phase) {
+	filtered := filterEvents(events, sinceTime, phase)
+	// Apply --last: show only the last N historical events (tail -f -n semantics).
+	if lastN > 0 && len(filtered) > lastN {
+		filtered = filtered[len(filtered)-lastN:]
+	}
+	for _, ev := range filtered {
 		fmt.Fprintln(w, pipeline.FormatEvent(ev))
 	}
 	// Check terminal events on the unfiltered list so that --phase filters

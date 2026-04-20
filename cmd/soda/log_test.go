@@ -62,16 +62,16 @@ func TestNewLogCmd_Flags(t *testing.T) {
 		t.Errorf("--phase default = %q, want empty", phaseFlag.DefValue)
 	}
 
-	// Verify --n/-n flag exists and defaults to 0.
-	nFlag := cmd.Flags().Lookup("n")
-	if nFlag == nil {
-		t.Fatal("--n flag not found")
+	// Verify --last/-n flag exists and defaults to 0.
+	lastFlag := cmd.Flags().Lookup("last")
+	if lastFlag == nil {
+		t.Fatal("--last flag not found")
 	}
-	if nFlag.DefValue != "0" {
-		t.Errorf("--n default = %q, want %q", nFlag.DefValue, "0")
+	if lastFlag.DefValue != "0" {
+		t.Errorf("--last default = %q, want %q", lastFlag.DefValue, "0")
 	}
-	if nFlag.Shorthand != "n" {
-		t.Errorf("--n shorthand = %q, want %q", nFlag.Shorthand, "n")
+	if lastFlag.Shorthand != "n" {
+		t.Errorf("--last shorthand = %q, want %q", lastFlag.Shorthand, "n")
 	}
 }
 
@@ -261,7 +261,7 @@ func TestFollowEvents_TerminalEvent(t *testing.T) {
 
 	// followEvents should return immediately because events already contain
 	// a terminal event (engine_completed).
-	err := followEvents(&buf, eventsPath, time.Time{}, "")
+	err := followEvents(&buf, eventsPath, time.Time{}, "", 0)
 	if err != nil {
 		t.Fatalf("followEvents: %v", err)
 	}
@@ -293,7 +293,7 @@ func TestFollowEvents_TerminalFailed(t *testing.T) {
 	var buf bytes.Buffer
 	eventsPath := filepath.Join(ticketDir, "events.jsonl")
 
-	err := followEvents(&buf, eventsPath, time.Time{}, "")
+	err := followEvents(&buf, eventsPath, time.Time{}, "", 0)
 	if err != nil {
 		t.Fatalf("followEvents: %v", err)
 	}
@@ -327,7 +327,7 @@ func TestFollowEvents_PhaseFilterWithTerminalEvent(t *testing.T) {
 
 	// With --phase triage, engine_completed (Phase="") is filtered from
 	// output but must still cause follow mode to exit.
-	err := followEvents(&buf, eventsPath, time.Time{}, "triage")
+	err := followEvents(&buf, eventsPath, time.Time{}, "triage", 0)
 	if err != nil {
 		t.Fatalf("followEvents: %v", err)
 	}
@@ -342,6 +342,49 @@ func TestFollowEvents_PhaseFilterWithTerminalEvent(t *testing.T) {
 		if !strings.Contains(line, "[triage]") {
 			t.Errorf("expected [triage] in every line, got: %s", line)
 		}
+	}
+}
+
+func TestFollowEvents_LastN(t *testing.T) {
+	// Verify that --last limits the initial batch of events in follow mode
+	// (tail -f -n semantics).
+	stateDir := t.TempDir()
+	ticketDir := filepath.Join(stateDir, "TEST-LASTN")
+	if err := os.MkdirAll(ticketDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	ts := time.Date(2026, 4, 11, 10, 0, 0, 0, time.UTC)
+	events := []pipeline.Event{
+		{Timestamp: ts, Kind: pipeline.EventEngineStarted},
+		{Timestamp: ts.Add(time.Second), Phase: "triage", Kind: pipeline.EventPhaseStarted},
+		{Timestamp: ts.Add(2 * time.Second), Phase: "triage", Kind: pipeline.EventPhaseCompleted},
+		{Timestamp: ts.Add(3 * time.Second), Phase: "plan", Kind: pipeline.EventPhaseStarted},
+		{Timestamp: ts.Add(4 * time.Second), Kind: pipeline.EventEngineCompleted},
+	}
+	writeTestEvents(t, ticketDir, events)
+
+	var buf bytes.Buffer
+	eventsPath := filepath.Join(ticketDir, "events.jsonl")
+
+	// With lastN=2, only the last 2 filtered events should be printed before
+	// follow mode detects the terminal event and exits.
+	err := followEvents(&buf, eventsPath, time.Time{}, "", 2)
+	if err != nil {
+		t.Fatalf("followEvents: %v", err)
+	}
+
+	output := buf.String()
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	// Last 2 of all 5 events: plan phase_started and engine_completed.
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines with lastN=2, got %d:\n%s", len(lines), output)
+	}
+	if !strings.Contains(lines[0], "[plan] phase_started") {
+		t.Errorf("line 0 should be plan phase_started, got: %s", lines[0])
+	}
+	if !strings.Contains(lines[1], "engine_completed") {
+		t.Errorf("line 1 should be engine_completed, got: %s", lines[1])
 	}
 }
 
@@ -362,7 +405,7 @@ func TestFollowEvents_PipelineTimeoutTerminal(t *testing.T) {
 	var buf bytes.Buffer
 	eventsPath := filepath.Join(ticketDir, "events.jsonl")
 
-	err := followEvents(&buf, eventsPath, time.Time{}, "")
+	err := followEvents(&buf, eventsPath, time.Time{}, "", 0)
 	if err != nil {
 		t.Fatalf("followEvents: %v", err)
 	}
