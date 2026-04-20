@@ -131,6 +131,9 @@ func LoadPipeline(path string) (*PhasePipeline, error) {
 				return nil, fmt.Errorf("pipeline: phase %q feedback_from references unknown phase %q", phase.Name, src)
 			}
 		}
+		if phase.MinReviewers > len(phase.Reviewers) {
+			return nil, fmt.Errorf("pipeline: phase %q min_reviewers (%d) exceeds number of configured reviewers (%d)", phase.Name, phase.MinReviewers, len(phase.Reviewers))
+		}
 		if phase.Corrective != nil {
 			if _, ok := phaseNames[phase.Corrective.Phase]; !ok {
 				return nil, fmt.Errorf("pipeline: phase %q corrective.phase %q not found", phase.Name, phase.Corrective.Phase)
