@@ -41,6 +41,9 @@ func TestLoad(t *testing.T) {
 				if cfg.Limits.MaxCostPerPhase != 8.0 {
 					t.Errorf("MaxCostPerPhase = %f, want 8.0", cfg.Limits.MaxCostPerPhase)
 				}
+				if cfg.Limits.MaxCostPerGeneration != 5.0 {
+					t.Errorf("MaxCostPerGeneration = %f, want 5.0", cfg.Limits.MaxCostPerGeneration)
+				}
 				if cfg.Limits.MaxPipelineDuration != "2h" {
 					t.Errorf("MaxPipelineDuration = %q, want %q", cfg.Limits.MaxPipelineDuration, "2h")
 				}
