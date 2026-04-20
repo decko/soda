@@ -103,6 +103,73 @@ not valid json
 	})
 }
 
+func TestFormatEvent(t *testing.T) {
+	ts := time.Date(2026, 4, 11, 10, 5, 30, 0, time.UTC)
+
+	tests := []struct {
+		name  string
+		event Event
+		want  string
+	}{
+		{
+			name: "phase_started with data",
+			event: Event{
+				Timestamp: ts,
+				Phase:     "triage",
+				Kind:      EventPhaseStarted,
+				Data:      map[string]any{"generation": float64(1)},
+			},
+			want: "10:05:30 [triage] phase_started generation=1",
+		},
+		{
+			name: "engine_started no phase",
+			event: Event{
+				Timestamp: ts,
+				Kind:      EventEngineStarted,
+			},
+			want: "10:05:30 engine_started",
+		},
+		{
+			name: "no data",
+			event: Event{
+				Timestamp: ts,
+				Phase:     "plan",
+				Kind:      EventPhaseCompleted,
+			},
+			want: "10:05:30 [plan] phase_completed",
+		},
+		{
+			name: "multiple data keys sorted",
+			event: Event{
+				Timestamp: ts,
+				Phase:     "implement",
+				Kind:      EventPhaseCompleted,
+				Data:      map[string]any{"cost": 0.42, "duration_ms": float64(3000)},
+			},
+			want: "10:05:30 [implement] phase_completed cost=0.42 duration_ms=3000",
+		},
+		{
+			name: "string data value",
+			event: Event{
+				Timestamp: ts,
+				Phase:     "verify",
+				Kind:      EventPhaseFailed,
+				Data:      map[string]any{"error": "tests failed"},
+			},
+			want: "10:05:30 [verify] phase_failed error=tests failed",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := FormatEvent(tc.event)
+			if got != tc.want {
+				t.Errorf("FormatEvent() =\n  %q\nwant:\n  %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestLogEvent(t *testing.T) {
 	t.Run("appends_event_to_jsonl", func(t *testing.T) {
 		dir := t.TempDir()
