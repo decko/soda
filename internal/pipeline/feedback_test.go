@@ -2,6 +2,8 @@ package pipeline
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -394,6 +396,127 @@ func TestSummarizeVerifyFailures(t *testing.T) {
 	t.Run("empty_when_no_fixes", func(t *testing.T) {
 		if summary := summarizeVerifyFailures(nil); summary != "" {
 			t.Errorf("summary should be empty for nil fixes, got: %s", summary)
+		}
+	})
+}
+
+func TestReadSnippet(t *testing.T) {
+	// Helper: create a file with numbered lines.
+	writeFile := func(t *testing.T, dir, name, content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Build a 20-line file for most tests.
+	var lines []string
+	for i := 1; i <= 20; i++ {
+		lines = append(lines, "line"+strings.Repeat(" ", 0)+string(rune('A'-1+i)))
+	}
+	content20 := strings.Join(lines, "\n")
+
+	t.Run("line_near_start", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, dir, "f.go", content20)
+		got := readSnippet(dir, "f.go", 1, 5)
+		if got == "" {
+			t.Fatal("expected non-empty snippet for line=1")
+		}
+		// Should start from line 1 (start clamped to 0).
+		if !strings.HasPrefix(got, "line") {
+			t.Errorf("snippet should start with first line, got: %q", got)
+		}
+		// Should include lines 1..6 (line-context-1=max(0,-5)=0, line+context=6).
+		snippetLines := strings.Split(got, "\n")
+		if len(snippetLines) != 6 {
+			t.Errorf("snippet lines = %d, want 6", len(snippetLines))
+		}
+	})
+
+	t.Run("line_near_end", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, dir, "f.go", content20)
+		got := readSnippet(dir, "f.go", 20, 5)
+		if got == "" {
+			t.Fatal("expected non-empty snippet for line=20")
+		}
+		// Should include lines 15..20 (start=14, end=min(25,20)=20).
+		snippetLines := strings.Split(got, "\n")
+		if len(snippetLines) != 6 {
+			t.Errorf("snippet lines = %d, want 6", len(snippetLines))
+		}
+	})
+
+	t.Run("line_in_middle", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, dir, "f.go", content20)
+		got := readSnippet(dir, "f.go", 10, 3)
+		if got == "" {
+			t.Fatal("expected non-empty snippet for line=10")
+		}
+		// Should include lines 7..13 (start=6, end=13).
+		snippetLines := strings.Split(got, "\n")
+		if len(snippetLines) != 7 {
+			t.Errorf("snippet lines = %d, want 7", len(snippetLines))
+		}
+	})
+
+	t.Run("file_shorter_than_context_window", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, dir, "tiny.go", "only\nthree\nlines")
+		got := readSnippet(dir, "tiny.go", 2, 10)
+		if got == "" {
+			t.Fatal("expected non-empty snippet")
+		}
+		snippetLines := strings.Split(got, "\n")
+		if len(snippetLines) != 3 {
+			t.Errorf("snippet lines = %d, want 3 (entire file)", len(snippetLines))
+		}
+	})
+
+	t.Run("nonexistent_file_returns_empty", func(t *testing.T) {
+		dir := t.TempDir()
+		got := readSnippet(dir, "nope.go", 1, 5)
+		if got != "" {
+			t.Errorf("expected empty string for nonexistent file, got: %q", got)
+		}
+	})
+
+	t.Run("line_zero_returns_empty", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, dir, "f.go", content20)
+		// line=0, context=0 → start = 0-0-1 = -1 → clamped to 0; end = 0+0 = 0; start >= end → ""
+		got := readSnippet(dir, "f.go", 0, 0)
+		if got != "" {
+			t.Errorf("expected empty string for line=0 context=0, got: %q", got)
+		}
+	})
+
+	t.Run("empty_file_returns_empty", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, dir, "empty.go", "")
+		got := readSnippet(dir, "empty.go", 1, 5)
+		// An empty file split by \n gives [""], which is 1 element.
+		// start=max(0,-5)=0, end=min(6,1)=1 → returns "" (the single empty line).
+		// This is acceptable — the snippet is the empty content.
+		if strings.Contains(got, "\n") {
+			t.Errorf("expected at most one line for empty file, got: %q", got)
+		}
+	})
+
+	t.Run("path_traversal_blocked", func(t *testing.T) {
+		dir := t.TempDir()
+		// Create a file outside workDir.
+		parentFile := filepath.Join(filepath.Dir(dir), "secret.txt")
+		if err := os.WriteFile(parentFile, []byte("secret data"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		defer os.Remove(parentFile)
+
+		got := readSnippet(dir, "../secret.txt", 1, 5)
+		if got != "" {
+			t.Errorf("expected empty string for path traversal, got: %q", got)
 		}
 	})
 }
