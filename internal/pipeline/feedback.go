@@ -181,10 +181,14 @@ func (e *Engine) extractReviewFeedback() *ReworkFeedback {
 
 // readSnippet reads ±context lines around the given 1-based line number
 // from file in workDir. Returns empty string on any error (missing file,
-// invalid line, etc.) — callers treat this as best-effort enrichment.
+// invalid line, path outside workDir, etc.) — callers treat this as
+// best-effort enrichment.
 func readSnippet(workDir, file string, line, context int) string {
-	path := filepath.Join(workDir, file)
-	data, err := os.ReadFile(path)
+	resolved := filepath.Clean(filepath.Join(workDir, file))
+	if !strings.HasPrefix(resolved, filepath.Clean(workDir)+string(filepath.Separator)) {
+		return ""
+	}
+	data, err := os.ReadFile(resolved)
 	if err != nil {
 		return ""
 	}
