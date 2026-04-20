@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -26,6 +27,24 @@ func writeTestEvents(t *testing.T, ticketDir string, events []pipeline.Event) {
 	}
 	if err := os.WriteFile(filepath.Join(ticketDir, "events.jsonl"), buf.Bytes(), 0644); err != nil {
 		t.Fatalf("write events.jsonl: %v", err)
+	}
+}
+
+// appendTestEvent appends a single event to an existing events.jsonl file.
+func appendTestEvent(t *testing.T, eventsPath string, ev pipeline.Event) {
+	t.Helper()
+	data, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("marshal event: %v", err)
+	}
+	data = append(data, '\n')
+	f, err := os.OpenFile(eventsPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+	if err != nil {
+		t.Fatalf("open events.jsonl for append: %v", err)
+	}
+	defer f.Close()
+	if _, err := f.Write(data); err != nil {
+		t.Fatalf("append event: %v", err)
 	}
 }
 
@@ -413,6 +432,151 @@ func TestFollowEvents_PipelineTimeoutTerminal(t *testing.T) {
 	output := buf.String()
 	if !strings.Contains(output, "pipeline_timeout") {
 		t.Errorf("output should contain pipeline_timeout, got: %s", output)
+	}
+}
+
+func TestIsTerminatedRun(t *testing.T) {
+	tests := []struct {
+		name   string
+		events []pipeline.Event
+		want   bool
+	}{
+		{
+			name:   "empty events",
+			events: nil,
+			want:   false,
+		},
+		{
+			name: "single engine_started",
+			events: []pipeline.Event{
+				{Kind: pipeline.EventEngineStarted},
+			},
+			want: false,
+		},
+		{
+			name: "completed run",
+			events: []pipeline.Event{
+				{Kind: pipeline.EventEngineStarted},
+				{Kind: pipeline.EventEngineCompleted},
+			},
+			want: true,
+		},
+		{
+			name: "failed run",
+			events: []pipeline.Event{
+				{Kind: pipeline.EventEngineStarted},
+				{Kind: pipeline.EventEngineFailed},
+			},
+			want: true,
+		},
+		{
+			name: "resumed pipeline — new run after completed",
+			events: []pipeline.Event{
+				{Kind: pipeline.EventEngineStarted},
+				{Kind: pipeline.EventEngineCompleted},
+				{Kind: pipeline.EventEngineStarted},
+			},
+			want: false,
+		},
+		{
+			name: "resumed pipeline — second run also completed",
+			events: []pipeline.Event{
+				{Kind: pipeline.EventEngineStarted},
+				{Kind: pipeline.EventEngineCompleted},
+				{Kind: pipeline.EventEngineStarted},
+				{Kind: pipeline.EventEngineCompleted},
+			},
+			want: true,
+		},
+		{
+			name: "resumed pipeline — second run with phases, not yet terminated",
+			events: []pipeline.Event{
+				{Kind: pipeline.EventEngineStarted},
+				{Kind: pipeline.EventEngineCompleted},
+				{Kind: pipeline.EventEngineStarted},
+				{Phase: "triage", Kind: pipeline.EventPhaseStarted},
+				{Phase: "triage", Kind: pipeline.EventPhaseCompleted},
+			},
+			want: false,
+		},
+		{
+			name: "pipeline_timeout is terminal",
+			events: []pipeline.Event{
+				{Kind: pipeline.EventEngineStarted},
+				{Kind: pipeline.EventPipelineTimeout},
+			},
+			want: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := isTerminatedRun(tc.events)
+			if got != tc.want {
+				t.Errorf("isTerminatedRun() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestFollowEvents_ResumedPipeline(t *testing.T) {
+	// After a completed run and a Resume, the events file contains
+	// [engine_started, ..., engine_completed, engine_started, ...].
+	// Follow mode should NOT exit on the first engine_completed; it should
+	// recognize the second engine_started as the active run.
+	stateDir := t.TempDir()
+	ticketDir := filepath.Join(stateDir, "TEST-RESUME")
+	if err := os.MkdirAll(ticketDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	ts := time.Date(2026, 4, 11, 10, 0, 0, 0, time.UTC)
+	events := []pipeline.Event{
+		{Timestamp: ts, Kind: pipeline.EventEngineStarted},
+		{Timestamp: ts.Add(time.Second), Phase: "triage", Kind: pipeline.EventPhaseCompleted},
+		{Timestamp: ts.Add(2 * time.Second), Kind: pipeline.EventEngineCompleted},
+		// Pipeline was resumed:
+		{Timestamp: ts.Add(3 * time.Second), Kind: pipeline.EventEngineStarted},
+		{Timestamp: ts.Add(4 * time.Second), Phase: "plan", Kind: pipeline.EventPhaseStarted},
+	}
+	writeTestEvents(t, ticketDir, events)
+
+	eventsPath := filepath.Join(ticketDir, "events.jsonl")
+	var buf bytes.Buffer
+
+	// followEvents should NOT return immediately because the last
+	// engine_started is after the engine_completed (resumed pipeline).
+	// We use a context with timeout to avoid hanging forever.
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- followEvents(&buf, eventsPath, time.Time{}, "", 0)
+	}()
+
+	// Append a terminal event after a short delay to let follow mode
+	// enter the poll loop.
+	time.Sleep(200 * time.Millisecond)
+	appendTestEvent(t, eventsPath, pipeline.Event{
+		Timestamp: ts.Add(5 * time.Second),
+		Kind:      pipeline.EventEngineCompleted,
+	})
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("followEvents: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("followEvents did not return after terminal event was appended")
+	}
+
+	output := buf.String()
+	// All 6 events should be printed (5 initial + 1 appended).
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	if len(lines) != 6 {
+		t.Fatalf("expected 6 lines, got %d:\n%s", len(lines), output)
 	}
 }
 

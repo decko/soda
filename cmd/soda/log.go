@@ -111,10 +111,11 @@ func followEvents(w io.Writer, path string, sinceTime time.Time, phase string, l
 	}
 	// Check terminal events on the unfiltered list so that --phase filters
 	// cannot mask engine_completed / engine_failed (which have Phase="").
-	for _, ev := range events {
-		if isTerminalEvent(ev) {
-			return nil
-		}
+	// Scan backwards: only treat as terminated if the *last* terminal-or-started
+	// event is terminal. This handles resumed pipelines where the events file
+	// contains [engine_started, ..., engine_completed, engine_started, ...].
+	if isTerminatedRun(events) {
+		return nil
 	}
 
 	// Poll loop.
@@ -139,10 +140,9 @@ func followEvents(w io.Writer, path string, sinceTime time.Time, phase string, l
 				fmt.Fprintln(w, pipeline.FormatEvent(ev))
 			}
 			// Check terminal events on the unfiltered list.
-			for _, ev := range newEvents {
-				if isTerminalEvent(ev) {
-					return nil
-				}
+			// Use reverse scan to handle resumed pipelines correctly.
+			if isTerminatedRun(newEvents) {
+				return nil
 			}
 		}
 	}
@@ -235,6 +235,23 @@ func filterEvents(events []pipeline.Event, sinceTime time.Time, phase string) []
 		filtered = append(filtered, ev)
 	}
 	return filtered
+}
+
+// isTerminatedRun scans events backwards to determine if the pipeline's
+// most recent run has terminated. In an append-only events file, a resumed
+// pipeline produces [engine_started, ..., engine_completed, engine_started, ...].
+// We only treat the pipeline as terminated if the *last* terminal-or-started
+// event is a terminal event (not a new engine_started).
+func isTerminatedRun(events []pipeline.Event) bool {
+	for i := len(events) - 1; i >= 0; i-- {
+		if isTerminalEvent(events[i]) {
+			return true
+		}
+		if events[i].Kind == pipeline.EventEngineStarted {
+			return false // new run started after last terminal
+		}
+	}
+	return false
 }
 
 // isTerminalEvent returns true for events that indicate the pipeline
