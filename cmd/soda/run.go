@@ -162,6 +162,31 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 		return fmt.Errorf("run: %w", err)
 	}
 
+	// When resuming, check if the stored pipeline differs from the current flag.
+	fromPhaseFlag, _ := cmd.Flags().GetString("from")
+	if fromPhaseFlag != "" {
+		storedPipeline := state.Meta().Pipeline
+		if !cmd.Flags().Changed("pipeline") && storedPipeline != "" && storedPipeline != pipelineName {
+			// Auto-adopt the stored pipeline name so the resume uses the correct config.
+			fmt.Fprintf(os.Stderr, "Warning: original run used pipeline %q; adopting for resume\n", storedPipeline)
+			pipelineName = storedPipeline
+			newPhasesPath, newCleanup, reloadErr := resolvePhasesPath(pipelineName)
+			if reloadErr != nil {
+				return fmt.Errorf("run: %w", reloadErr)
+			}
+			if newCleanup != nil {
+				defer newCleanup()
+			}
+			pl, err = pipeline.LoadPipeline(newPhasesPath)
+			if err != nil {
+				return fmt.Errorf("run: %w", err)
+			}
+			pl.Name = pipelineName
+		} else if cmd.Flags().Changed("pipeline") && storedPipeline != pipelineName {
+			fmt.Fprintf(os.Stderr, "Warning: original run used pipeline %q, but resuming with %q\n", storedPipeline, pipelineName)
+		}
+	}
+
 	// Resolve mode
 	mode := pipeline.Autonomous
 	modeStr := cfg.Mode
