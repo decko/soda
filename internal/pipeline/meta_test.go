@@ -40,7 +40,7 @@ func TestMetaRoundTrip(t *testing.T) {
 		},
 	}
 
-	if err := writeMeta(path, original); err != nil {
+	if err := WriteMeta(path, original); err != nil {
 		t.Fatalf("writeMeta: %v", err)
 	}
 
@@ -133,7 +133,7 @@ func TestReadMeta(t *testing.T) {
 		TotalCost: 1.23,
 		Phases:    map[string]*PhaseState{},
 	}
-	if err := writeMeta(metaPath, meta); err != nil {
+	if err := WriteMeta(metaPath, meta); err != nil {
 		t.Fatalf("writeMeta: %v", err)
 	}
 
@@ -285,7 +285,7 @@ func TestMetaBinaryVersionRoundTrip(t *testing.T) {
 		Phases:        map[string]*PhaseState{},
 	}
 
-	if err := writeMeta(path, original); err != nil {
+	if err := WriteMeta(path, original); err != nil {
 		t.Fatalf("writeMeta: %v", err)
 	}
 
@@ -309,7 +309,7 @@ func TestMetaBinaryVersionOmitEmpty(t *testing.T) {
 		Phases:    map[string]*PhaseState{},
 	}
 
-	if err := writeMeta(path, original); err != nil {
+	if err := WriteMeta(path, original); err != nil {
 		t.Fatalf("writeMeta: %v", err)
 	}
 
@@ -344,7 +344,7 @@ func TestMetaTokenCountsRoundTrip(t *testing.T) {
 		},
 	}
 
-	if err := writeMeta(path, original); err != nil {
+	if err := WriteMeta(path, original); err != nil {
 		t.Fatalf("writeMeta: %v", err)
 	}
 
@@ -385,7 +385,7 @@ func TestMetaTokenCountsOmitEmpty(t *testing.T) {
 		},
 	}
 
-	if err := writeMeta(path, original); err != nil {
+	if err := WriteMeta(path, original); err != nil {
 		t.Fatalf("writeMeta: %v", err)
 	}
 
@@ -417,7 +417,7 @@ func TestMetaPipelineNameRoundTrip(t *testing.T) {
 		Phases:    map[string]*PhaseState{},
 	}
 
-	if err := writeMeta(path, original); err != nil {
+	if err := WriteMeta(path, original); err != nil {
 		t.Fatalf("writeMeta: %v", err)
 	}
 
@@ -441,7 +441,7 @@ func TestMetaPipelineNameOmitEmpty(t *testing.T) {
 		Phases:    map[string]*PhaseState{},
 	}
 
-	if err := writeMeta(path, original); err != nil {
+	if err := WriteMeta(path, original); err != nil {
 		t.Fatalf("writeMeta: %v", err)
 	}
 

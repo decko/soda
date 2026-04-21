@@ -113,8 +113,8 @@ func ReadMeta(path string) (*PipelineMeta, error) {
 	return &meta, nil
 }
 
-// writeMeta marshals and writes meta to path atomically.
-func writeMeta(path string, meta *PipelineMeta) error {
+// WriteMeta marshals and writes meta to path atomically.
+func WriteMeta(path string, meta *PipelineMeta) error {
 	data, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
 		return fmt.Errorf("pipeline: marshal meta: %w", err)

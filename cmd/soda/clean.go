@@ -19,7 +19,7 @@ var errSkipped = errors.New("skipped")
 func newCleanCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "clean [ticket]",
-		Short: "Remove completed/failed pipeline state and worktrees",
+		Short: "Remove worktrees and branches, preserving session data (use --purge for full wipe)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig(cmd)
@@ -29,13 +29,14 @@ func newCleanCmd() *cobra.Command {
 			all, _ := cmd.Flags().GetBool("all")
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
 			force, _ := cmd.Flags().GetBool("force")
+			purge, _ := cmd.Flags().GetBool("purge")
 
 			ctx := cmd.Context()
 			if len(args) == 1 {
-				return cleanTicket(ctx, cfg.StateDir, args[0], dryRun, force)
+				return cleanTicket(ctx, cfg.StateDir, args[0], dryRun, force, purge)
 			}
 			if all {
-				return cleanAll(ctx, cfg.StateDir, dryRun, force)
+				return cleanAll(ctx, cfg.StateDir, dryRun, force, purge)
 			}
 			return fmt.Errorf("specify a ticket key or use --all")
 		},
@@ -44,11 +45,12 @@ func newCleanCmd() *cobra.Command {
 	cmd.Flags().Bool("all", false, "clean all tickets in terminal state")
 	cmd.Flags().Bool("dry-run", false, "show what would be cleaned without doing it")
 	cmd.Flags().Bool("force", false, "clean even if not in terminal state (does not override running pipeline lock)")
+	cmd.Flags().Bool("purge", false, "remove all session data including state directory (default preserves meta, events, and artifacts)")
 
 	return cmd
 }
 
-func cleanAll(ctx context.Context, stateDir string, dryRun, force bool) error {
+func cleanAll(ctx context.Context, stateDir string, dryRun, force, purge bool) error {
 	entries, err := os.ReadDir(stateDir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -65,7 +67,7 @@ func cleanAll(ctx context.Context, stateDir string, dryRun, force bool) error {
 		if !entry.IsDir() {
 			continue
 		}
-		if err := cleanTicket(ctx, stateDir, entry.Name(), dryRun, force); err != nil {
+		if err := cleanTicket(ctx, stateDir, entry.Name(), dryRun, force, purge); err != nil {
 			if !errors.Is(err, errSkipped) {
 				fmt.Fprintf(os.Stderr, "Warning: %s: %v\n", entry.Name(), err)
 			}
@@ -80,7 +82,7 @@ func cleanAll(ctx context.Context, stateDir string, dryRun, force bool) error {
 	return nil
 }
 
-func cleanTicket(ctx context.Context, stateDir, ticketKey string, dryRun, force bool) error {
+func cleanTicket(ctx context.Context, stateDir, ticketKey string, dryRun, force, purge bool) error {
 	ticketDir := filepath.Join(stateDir, ticketKey)
 	metaPath := filepath.Join(ticketDir, "meta.json")
 
@@ -103,6 +105,10 @@ func cleanTicket(ctx context.Context, stateDir, ticketKey string, dryRun, force 
 		return errSkipped
 	}
 
+	// Track whether git resource cleanup succeeded so we only clear
+	// references in meta.json for resources that were actually removed.
+	var worktreeCleared, branchCleared bool
+
 	// Remove worktree
 	if meta.Worktree != "" {
 		if dryRun {
@@ -117,9 +123,12 @@ func cleanTicket(ctx context.Context, stateDir, ticketKey string, dryRun, force 
 			if wtErr != nil {
 				fmt.Fprintf(os.Stderr, "Warning: git worktree remove %s: %s\n", meta.Worktree, string(out))
 			} else {
+				worktreeCleared = true
 				fmt.Printf("Removed worktree: %s\n", meta.Worktree)
 			}
 		}
+	} else {
+		worktreeCleared = true // nothing to clean
 	}
 
 	// Delete branch (local + remote)
@@ -135,6 +144,7 @@ func cleanTicket(ctx context.Context, stateDir, ticketKey string, dryRun, force 
 				if brErr := sodagit.DeleteBranch(repoDir, meta.Branch); brErr != nil {
 					fmt.Fprintf(os.Stderr, "Warning: git branch delete %s: %v\n", meta.Branch, brErr)
 				} else {
+					branchCleared = true
 					fmt.Printf("Deleted branch: %s\n", meta.Branch)
 				}
 				if rmErr := sodagit.DeleteRemoteBranch(ctx, repoDir, "origin", meta.Branch); rmErr != nil {
@@ -144,19 +154,50 @@ func cleanTicket(ctx context.Context, stateDir, ticketKey string, dryRun, force 
 				}
 			}
 		}
+	} else {
+		branchCleared = true // nothing to clean
 	}
 
-	// Remove state directory
-	if dryRun {
-		fmt.Printf("Would remove state: %s\n", ticketDir)
-	} else {
-		if rmErr := os.RemoveAll(ticketDir); rmErr != nil {
-			return fmt.Errorf("remove state dir: %w", rmErr)
+	if purge {
+		// --purge: remove the entire state directory (full wipe).
+		if dryRun {
+			fmt.Printf("Would purge state: %s\n", ticketDir)
+		} else {
+			if rmErr := os.RemoveAll(ticketDir); rmErr != nil {
+				return fmt.Errorf("remove state dir: %w", rmErr)
+			}
+			fmt.Printf("Purged state: %s\n", ticketDir)
 		}
-		fmt.Printf("Removed state: %s\n", ticketDir)
+	} else {
+		// Default: preserve session data (meta.json, events.jsonl, artifacts, logs)
+		// but clear stale worktree/branch references and remove the lock file.
+		if dryRun {
+			fmt.Printf("Would preserve state: %s (clearing worktree/branch references)\n", ticketDir)
+		} else {
+			if err := clearCleanedRefs(metaPath, meta, worktreeCleared, branchCleared); err != nil {
+				return fmt.Errorf("update meta after clean: %w", err)
+			}
+			// Remove the lock file since the pipeline is not running.
+			os.Remove(lockPath)
+			fmt.Printf("Cleaned %s (session data preserved)\n", ticketKey)
+		}
 	}
 
 	return nil
+}
+
+// clearCleanedRefs updates meta.json to remove worktree and branch references
+// that were successfully cleaned away. Only clears each reference if the
+// corresponding cleanup operation succeeded, so that failed removals can be
+// retried on a subsequent clean.
+func clearCleanedRefs(metaPath string, meta *pipeline.PipelineMeta, worktreeCleared, branchCleared bool) error {
+	if worktreeCleared {
+		meta.Worktree = ""
+	}
+	if branchCleared {
+		meta.Branch = ""
+	}
+	return pipeline.WriteMeta(metaPath, meta)
 }
 
 // tryLock attempts a non-blocking flock. Returns true if lock was acquired
@@ -164,7 +205,10 @@ func cleanTicket(ctx context.Context, stateDir, ticketKey string, dryRun, force 
 func tryLock(lockPath string) bool {
 	fd, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
-		return true // no lock file means nothing is running
+		if errors.Is(err, os.ErrNotExist) {
+			return true // no lock file means nothing is running
+		}
+		return false // fail closed on unexpected errors (e.g. permission denied)
 	}
 	defer fd.Close()
 
