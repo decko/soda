@@ -149,6 +149,10 @@ type RepoConfig struct {
 }
 
 // ArtifactData holds rendered artifacts from previous phases.
+// The named fields cover the built-in pipeline phases. Extras holds
+// artifacts from custom (user-defined) phases keyed by phase name,
+// enabling config-driven pipelines to pass data between phases that
+// SODA doesn't know about at compile time.
 type ArtifactData struct {
 	Triage    string
 	Plan      string
@@ -157,6 +161,7 @@ type ArtifactData struct {
 	Review    string
 	Patch     string
 	Submit    SubmitArtifact
+	Extras    map[string]string
 }
 
 // SubmitArtifact holds parsed fields from the submit phase output.

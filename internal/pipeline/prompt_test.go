@@ -379,6 +379,20 @@ func TestValidateTemplate(t *testing.T) {
 			t.Fatalf("ValidateTemplate should accept add FuncMap: %v", err)
 		}
 	})
+
+	t.Run("valid_template_with_extras", func(t *testing.T) {
+		tmpl := `{{- if .Artifacts.Extras}}{{range $name, $content := .Artifacts.Extras}}Phase {{$name}}: {{$content}}{{end}}{{- end}}`
+		if err := ValidateTemplate(tmpl); err != nil {
+			t.Fatalf("ValidateTemplate should accept Extras: %v", err)
+		}
+	})
+
+	t.Run("valid_template_with_extras_index", func(t *testing.T) {
+		tmpl := `{{- if .Artifacts.Extras}}{{index .Artifacts.Extras "lint"}}{{- end}}`
+		if err := ValidateTemplate(tmpl); err != nil {
+			t.Fatalf("ValidateTemplate should accept Extras index: %v", err)
+		}
+	})
 }
 
 func TestRenderPrompt(t *testing.T) {
@@ -1252,6 +1266,77 @@ Context: {{.}}
 		count := strings.Count(result, "Fix this finding, then verify before proceeding")
 		if count != 3 {
 			t.Errorf("expected 3 verify instructions, got %d;\nresult: %s", count, result)
+		}
+	})
+
+	t.Run("renders_extras_artifact_with_range", func(t *testing.T) {
+		tmpl := `{{- if .Artifacts.Extras}}{{range $name, $content := .Artifacts.Extras}}Custom({{$name}}): {{$content}}
+{{end}}{{- end}}`
+		data := PromptData{
+			Artifacts: ArtifactData{
+				Extras: map[string]string{
+					"lint":     "All lint checks passed.",
+					"security": "No vulnerabilities found.",
+				},
+			},
+		}
+
+		result, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+		if !strings.Contains(result, "Custom(lint): All lint checks passed.") {
+			t.Errorf("result should contain lint extra, got: %s", result)
+		}
+		if !strings.Contains(result, "Custom(security): No vulnerabilities found.") {
+			t.Errorf("result should contain security extra, got: %s", result)
+		}
+	})
+
+	t.Run("renders_extras_artifact_with_index", func(t *testing.T) {
+		tmpl := `{{- if .Artifacts.Extras}}Lint: {{index .Artifacts.Extras "lint"}}{{- end}}`
+		data := PromptData{
+			Artifacts: ArtifactData{
+				Extras: map[string]string{
+					"lint": "All checks passed.",
+				},
+			},
+		}
+
+		result, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+		if !strings.Contains(result, "Lint: All checks passed.") {
+			t.Errorf("result should contain lint value via index, got: %s", result)
+		}
+	})
+
+	t.Run("omits_extras_when_nil", func(t *testing.T) {
+		tmpl := `{{- if .Artifacts.Extras}}Extras present{{- end}}`
+		data := PromptData{}
+		result, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+		if strings.Contains(result, "Extras present") {
+			t.Errorf("result should not contain extras when nil, got: %s", result)
+		}
+	})
+
+	t.Run("omits_extras_when_empty_map", func(t *testing.T) {
+		tmpl := `{{- if .Artifacts.Extras}}Extras present{{- end}}`
+		data := PromptData{
+			Artifacts: ArtifactData{
+				Extras: map[string]string{},
+			},
+		}
+		result, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+		if strings.Contains(result, "Extras present") {
+			t.Errorf("result should not contain extras when empty map, got: %s", result)
 		}
 	})
 }
