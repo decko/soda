@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -407,33 +408,43 @@ func TestFoo(t *testing.T) {}
 	t.Run("respects_max_size_limit", func(t *testing.T) {
 		dir := t.TempDir()
 
-		// Create a Go file with many functions to exceed the limit.
-		var b strings.Builder
-		b.WriteString("package big\n\n")
-		for i := 0; i < 500; i++ {
-			b.WriteString("func VeryLongFunctionName")
-			b.WriteString(strings.Repeat("X", 50))
-			b.WriteString("Number")
-			b.WriteString(string(rune('A' + (i % 26))))
-			// Use index to make names unique.
-			b.WriteString(strings.Repeat("Y", i%20))
-			b.WriteString("() {}\n\n")
-		}
-		if err := os.WriteFile(filepath.Join(dir, "big.go"), []byte(b.String()), 0644); err != nil {
-			t.Fatal(err)
+		// Create 10 small Go files, each individually small enough to fit
+		// but collectively exceeding a tight budget.
+		var fileNames []string
+		for i := 0; i < 10; i++ {
+			fname := fmt.Sprintf("f%d.go", i)
+			fileNames = append(fileNames, fname)
+			src := fmt.Sprintf("package x\nfunc Handler%d() error { return nil }\n", i)
+			if err := os.WriteFile(filepath.Join(dir, fname), []byte(src), 0644); err != nil {
+				t.Fatal(err)
+			}
 		}
 
-		plan := `{
+		// Build a plan referencing all 10 files.
+		var taskFiles []string
+		for _, f := range fileNames {
+			taskFiles = append(taskFiles, fmt.Sprintf("%q", f))
+		}
+		plan := fmt.Sprintf(`{
 			"ticket_key": "TEST-1",
 			"approach": "x",
 			"tasks": [
-				{"id":"T1","description":"x","files":["big.go"],"done_when":"x"}
+				{"id":"T1","description":"x","files":[%s],"done_when":"x"}
 			],
 			"verification": {"commands":[]}
-		}`
-		ctx := BuildSiblingContext(dir, json.RawMessage(plan), 0)
-		if len(ctx) > maxSiblingContextBytes+500 {
-			t.Errorf("context too large: %d bytes, limit is %d", len(ctx), maxSiblingContextBytes)
+		}`, strings.Join(taskFiles, ","))
+
+		const budget = 200
+		ctx := BuildSiblingContext(dir, json.RawMessage(plan), budget)
+		if ctx == "" {
+			t.Fatal("expected some output under budget")
+		}
+		if len(ctx) > budget {
+			t.Errorf("exceeded budget: %d > %d", len(ctx), budget)
+		}
+		// Not all 10 files should be present — the budget should have excluded some.
+		if strings.Count(ctx, "### f") >= 10 {
+			t.Error("budget should have excluded some files")
 		}
 	})
 }
