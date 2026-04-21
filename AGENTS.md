@@ -398,7 +398,7 @@ Atomic writes: always write to `.tmp` then rename. Archive on re-run (`verify.js
 16. **`ps.Cost` vs `ps.CumulativeCost`**: `Cost` resets per generation (zeroed in `MarkRunning`). `CumulativeCost` accumulates across rework/patch cycles. Budget enforcement (`checkPhaseBudget`) checks both: `MaxCostPerGeneration` against `Cost`, `MaxCostPerPhase` against `CumulativeCost`.
 17. **`EventPhaseFailed` is terminal**: the TUI and history module treat it as a hard failure. Never emit it for non-fatal warnings (e.g., failed to read archived review result) — use a warning-level event string instead.
 18. **Always use `exec.CommandContext`**: bare `exec.Command` in git/worktree operations can hang indefinitely. Use `exec.CommandContext(ctx, ...)` for any operation that could block (network, worktree removal).
-19. **Token data not persisted**: `RunResult` carries `TokensIn`/`TokensOut`/`CacheTokensIn` from the Claude CLI, but `PhaseState` in `meta.json` only stores `Cost` and `DurationMs`. Token counts are lost after the session, making raki's `token_efficiency` metric read 0.0.
+19. **Token data persisted in meta.json**: `PhaseState` stores `TokensIn`, `TokensOut`, and `CacheTokensIn` alongside `Cost` and `DurationMs`. Token counts are accumulated per-generation (zeroed on re-run) and emitted in `phase_completed` events. Legacy sessions without token data will show zero values.
 20. **`EnrichedFinding` wraps `schemas.ReviewFinding`**: defined in `prompt.go`, it adds `CodeSnippet` without changing the schema contract. Enrichment happens in `extractReviewFeedback()` only — the review phase still outputs plain `ReviewFinding`.
 
 ## Raki evaluation framework
@@ -415,7 +415,7 @@ Atomic writes: always write to `.tmp` then rename. Archive on re-run (`verify.js
 | `cost_efficiency` | Mean USD per session | $7.62 ($5.15–$11.35) |
 | `knowledge_retrieval_miss_rate` | Fraction of rework findings caused by missing context | 1.0 |
 | `phase_execution_time` | Mean wall-clock seconds per session | 847s (p50=801, p95=1309) |
-| `token_efficiency` | Mean tokens per phase | N/A (no token data) |
+| `token_efficiency` | Mean tokens per phase | available (persisted in meta.json) |
 
 ### Interpretation
 

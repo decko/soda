@@ -98,6 +98,154 @@ func TestEngine_HappyPathAllPhasesComplete(t *testing.T) {
 	}
 }
 
+func TestEngine_TokenCountsPersistedToMeta(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "plan",
+			Prompt:    "plan.md",
+			DependsOn: []string{"triage"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:        json.RawMessage(`{"automatable":true}`),
+					RawText:       "Triage: automatable",
+					CostUSD:       0.10,
+					TokensIn:      12000,
+					TokensOut:     1500,
+					CacheTokensIn: 4000,
+				},
+			}},
+			"plan": {{
+				result: &runner.RunResult{
+					Output:        json.RawMessage(`{"tasks":["task1","task2"]}`),
+					RawText:       "Plan: two tasks",
+					CostUSD:       0.20,
+					TokensIn:      25000,
+					TokensOut:     3000,
+					CacheTokensIn: 8000,
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(e Event) {
+			events = append(events, e)
+		}
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Verify token counts are persisted in PhaseState.
+	triagePS := state.Meta().Phases["triage"]
+	if triagePS.TokensIn != 12000 {
+		t.Errorf("triage TokensIn = %d, want 12000", triagePS.TokensIn)
+	}
+	if triagePS.TokensOut != 1500 {
+		t.Errorf("triage TokensOut = %d, want 1500", triagePS.TokensOut)
+	}
+	if triagePS.CacheTokensIn != 4000 {
+		t.Errorf("triage CacheTokensIn = %d, want 4000", triagePS.CacheTokensIn)
+	}
+
+	planPS := state.Meta().Phases["plan"]
+	if planPS.TokensIn != 25000 {
+		t.Errorf("plan TokensIn = %d, want 25000", planPS.TokensIn)
+	}
+	if planPS.TokensOut != 3000 {
+		t.Errorf("plan TokensOut = %d, want 3000", planPS.TokensOut)
+	}
+	if planPS.CacheTokensIn != 8000 {
+		t.Errorf("plan CacheTokensIn = %d, want 8000", planPS.CacheTokensIn)
+	}
+
+	// Verify token counts appear in phase_completed events.
+	for _, ev := range events {
+		if ev.Kind != EventPhaseCompleted {
+			continue
+		}
+		switch ev.Phase {
+		case "triage":
+			if tokIn := toInt64(ev.Data["tokens_in"]); tokIn != 12000 {
+				t.Errorf("triage completed event tokens_in = %d, want 12000", tokIn)
+			}
+			if tokOut := toInt64(ev.Data["tokens_out"]); tokOut != 1500 {
+				t.Errorf("triage completed event tokens_out = %d, want 1500", tokOut)
+			}
+			if cacheTok := toInt64(ev.Data["cache_tokens_in"]); cacheTok != 4000 {
+				t.Errorf("triage completed event cache_tokens_in = %d, want 4000", cacheTok)
+			}
+		case "plan":
+			if tokIn := toInt64(ev.Data["tokens_in"]); tokIn != 25000 {
+				t.Errorf("plan completed event tokens_in = %d, want 25000", tokIn)
+			}
+		}
+	}
+}
+
+func TestEngine_TokenCountsOmittedWhenZero(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage: automatable",
+					CostUSD: 0.10,
+					// TokensIn, TokensOut, CacheTokensIn are all zero
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(e Event) {
+			events = append(events, e)
+		}
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// When tokens are zero, the keys should be absent from the event data.
+	for _, ev := range events {
+		if ev.Kind != EventPhaseCompleted {
+			continue
+		}
+		if _, ok := ev.Data["tokens_in"]; ok {
+			t.Errorf("tokens_in should be omitted when zero, got %v", ev.Data["tokens_in"])
+		}
+		if _, ok := ev.Data["tokens_out"]; ok {
+			t.Errorf("tokens_out should be omitted when zero, got %v", ev.Data["tokens_out"])
+		}
+		if _, ok := ev.Data["cache_tokens_in"]; ok {
+			t.Errorf("cache_tokens_in should be omitted when zero, got %v", ev.Data["cache_tokens_in"])
+		}
+	}
+}
+
 func TestEngine_SkipsCompletedPhases(t *testing.T) {
 	phases := []PhaseConfig{
 		{

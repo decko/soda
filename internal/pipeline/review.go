@@ -14,10 +14,13 @@ import (
 
 // reviewerResult holds the outcome of a single reviewer subagent.
 type reviewerResult struct {
-	Name     string
-	Findings []schemas.ReviewFinding
-	Cost     float64
-	Err      error
+	Name          string
+	Findings      []schemas.ReviewFinding
+	Cost          float64
+	TokensIn      int64
+	TokensOut     int64
+	CacheTokensIn int64
+	Err           error
 }
 
 // reviewerMsg is sent from reviewer goroutines to the parent via channel.
@@ -303,14 +306,21 @@ func (e *Engine) runParallelReview(ctx context.Context, phase PhaseConfig) error
 		return fmt.Errorf("engine: write artifact for %s: %w", phase.Name, err)
 	}
 
-	// Accumulate cost from ALL reviewers (including failed ones,
+	// Accumulate cost and tokens from ALL reviewers (including failed ones,
 	// since they may have incurred partial cost before failing).
 	totalCost := 0.0
+	var totalTokensIn, totalTokensOut, totalCacheTokensIn int64
 	for _, result := range results {
 		totalCost += result.Cost
+		totalTokensIn += result.TokensIn
+		totalTokensOut += result.TokensOut
+		totalCacheTokensIn += result.CacheTokensIn
 	}
 	if err := e.state.AccumulateCost(phase.Name, totalCost); err != nil {
 		return fmt.Errorf("engine: accumulate cost for %s: %w", phase.Name, err)
+	}
+	if err := e.state.AccumulateTokens(phase.Name, totalTokensIn, totalTokensOut, totalCacheTokensIn); err != nil {
+		return fmt.Errorf("engine: accumulate tokens for %s: %w", phase.Name, err)
 	}
 
 	// Per-phase cost enforcement.
@@ -324,9 +334,19 @@ func (e *Engine) runParallelReview(ctx context.Context, phase PhaseConfig) error
 	if err := e.state.MarkCompleted(phase.Name); err != nil {
 		return fmt.Errorf("engine: mark completed %s: %w", phase.Name, err)
 	}
+	ps := e.state.Meta().Phases[phase.Name]
 	reviewCompletedData := map[string]any{
-		"duration_ms": e.state.Meta().Phases[phase.Name].DurationMs,
-		"cost":        e.state.Meta().Phases[phase.Name].Cost,
+		"duration_ms": ps.DurationMs,
+		"cost":        ps.Cost,
+	}
+	if ps.TokensIn > 0 {
+		reviewCompletedData["tokens_in"] = ps.TokensIn
+	}
+	if ps.TokensOut > 0 {
+		reviewCompletedData["tokens_out"] = ps.TokensOut
+	}
+	if ps.CacheTokensIn > 0 {
+		reviewCompletedData["cache_tokens_in"] = ps.CacheTokensIn
 	}
 	if summary := progress.PhaseSummary(phase.Name, json.RawMessage(output)); summary != "" {
 		reviewCompletedData["summary"] = summary
@@ -457,9 +477,12 @@ func (e *Engine) runReviewer(ctx context.Context, phase PhaseConfig, reviewer Re
 	})
 
 	sendResult(reviewerResult{
-		Name:     reviewer.Name,
-		Findings: findings,
-		Cost:     result.CostUSD,
+		Name:          reviewer.Name,
+		Findings:      findings,
+		Cost:          result.CostUSD,
+		TokensIn:      result.TokensIn,
+		TokensOut:     result.TokensOut,
+		CacheTokensIn: result.CacheTokensIn,
 	})
 }
 

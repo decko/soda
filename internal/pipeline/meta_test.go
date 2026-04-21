@@ -324,6 +324,88 @@ func TestMetaBinaryVersionOmitEmpty(t *testing.T) {
 	}
 }
 
+func TestMetaTokenCountsRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "meta.json")
+
+	original := &PipelineMeta{
+		Ticket:    "PROJ-281",
+		StartedAt: time.Now().Truncate(time.Second),
+		Phases: map[string]*PhaseState{
+			"triage": {
+				Status:        PhaseCompleted,
+				Cost:          0.12,
+				DurationMs:    8000,
+				TokensIn:      15000,
+				TokensOut:     2500,
+				CacheTokensIn: 5000,
+				Generation:    1,
+			},
+		},
+	}
+
+	if err := writeMeta(path, original); err != nil {
+		t.Fatalf("writeMeta: %v", err)
+	}
+
+	loaded, err := ReadMeta(path)
+	if err != nil {
+		t.Fatalf("ReadMeta: %v", err)
+	}
+
+	ps := loaded.Phases["triage"]
+	if ps == nil {
+		t.Fatal("triage phase missing")
+	}
+	if ps.TokensIn != 15000 {
+		t.Errorf("TokensIn = %d, want 15000", ps.TokensIn)
+	}
+	if ps.TokensOut != 2500 {
+		t.Errorf("TokensOut = %d, want 2500", ps.TokensOut)
+	}
+	if ps.CacheTokensIn != 5000 {
+		t.Errorf("CacheTokensIn = %d, want 5000", ps.CacheTokensIn)
+	}
+}
+
+func TestMetaTokenCountsOmitEmpty(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "meta.json")
+
+	original := &PipelineMeta{
+		Ticket:    "PROJ-281",
+		StartedAt: time.Now().Truncate(time.Second),
+		Phases: map[string]*PhaseState{
+			"triage": {
+				Status:     PhaseCompleted,
+				Cost:       0.12,
+				DurationMs: 8000,
+				Generation: 1,
+			},
+		},
+	}
+
+	if err := writeMeta(path, original); err != nil {
+		t.Fatalf("writeMeta: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+
+	// When token counts are zero, they should be omitted from JSON.
+	if strings.Contains(string(data), "tokens_in") {
+		t.Errorf("meta.json should omit tokens_in when zero, got:\n%s", data)
+	}
+	if strings.Contains(string(data), "tokens_out") {
+		t.Errorf("meta.json should omit tokens_out when zero, got:\n%s", data)
+	}
+	if strings.Contains(string(data), "cache_tokens_in") {
+		t.Errorf("meta.json should omit cache_tokens_in when zero, got:\n%s", data)
+	}
+}
+
 func TestPhaseStatusConstants(t *testing.T) {
 	// Verify JSON serialization matches expected strings
 	tests := []struct {

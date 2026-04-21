@@ -429,6 +429,52 @@ func TestLoadFullOutputs(t *testing.T) {
 	})
 }
 
+func TestBuildHistory_TokenCounts(t *testing.T) {
+	events := []Event{
+		{Phase: "triage", Kind: EventPhaseStarted, Data: map[string]any{"generation": float64(1)}},
+		{Phase: "triage", Kind: EventPhaseCompleted, Data: map[string]any{
+			"cost":            0.12,
+			"duration_ms":     float64(8000),
+			"tokens_in":       float64(15000),
+			"tokens_out":      float64(2500),
+			"cache_tokens_in": float64(5000),
+		}},
+		{Phase: "plan", Kind: EventPhaseStarted, Data: map[string]any{"generation": float64(1)}},
+		{Phase: "plan", Kind: EventPhaseCompleted, Data: map[string]any{
+			"cost":        0.31,
+			"duration_ms": float64(15000),
+			// No token data — should default to zero.
+		}},
+	}
+
+	h := BuildHistory(events, "")
+	if len(h.Entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(h.Entries))
+	}
+
+	// Triage should have token counts.
+	if h.Entries[0].TokensIn != 15000 {
+		t.Errorf("triage TokensIn = %d, want 15000", h.Entries[0].TokensIn)
+	}
+	if h.Entries[0].TokensOut != 2500 {
+		t.Errorf("triage TokensOut = %d, want 2500", h.Entries[0].TokensOut)
+	}
+	if h.Entries[0].CacheTokensIn != 5000 {
+		t.Errorf("triage CacheTokensIn = %d, want 5000", h.Entries[0].CacheTokensIn)
+	}
+
+	// Plan should have zero token counts (no token data in event).
+	if h.Entries[1].TokensIn != 0 {
+		t.Errorf("plan TokensIn = %d, want 0", h.Entries[1].TokensIn)
+	}
+	if h.Entries[1].TokensOut != 0 {
+		t.Errorf("plan TokensOut = %d, want 0", h.Entries[1].TokensOut)
+	}
+	if h.Entries[1].CacheTokensIn != 0 {
+		t.Errorf("plan CacheTokensIn = %d, want 0", h.Entries[1].CacheTokensIn)
+	}
+}
+
 // Ensure Event timestamp parsing works with BuildHistory.
 func TestBuildHistory_PreservesTimestamps(t *testing.T) {
 	ts := time.Date(2026, 4, 11, 10, 0, 0, 0, time.UTC)

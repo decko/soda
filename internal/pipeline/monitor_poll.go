@@ -703,9 +703,12 @@ func (e *Engine) respondToComments(ctx context.Context, phase PhaseConfig, class
 		return nil, fmt.Errorf("engine: monitor response round %d: %w", monState.ResponseRounds, err)
 	}
 
-	// Record cost.
+	// Record cost and tokens.
 	if err := e.state.AccumulateCost(phase.Name, result.CostUSD); err != nil {
 		return nil, fmt.Errorf("engine: accumulate monitor response cost: %w", err)
+	}
+	if err := e.state.AccumulateTokens(phase.Name, result.TokensIn, result.TokensOut, result.CacheTokensIn); err != nil {
+		return nil, fmt.Errorf("engine: accumulate monitor response tokens: %w", err)
 	}
 
 	// Parse output.

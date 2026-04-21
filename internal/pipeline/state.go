@@ -128,6 +128,9 @@ func (s *State) MarkRunning(phase string) error {
 	ps.Status = PhaseRunning
 	ps.Cost = 0
 	ps.DurationMs = 0
+	ps.TokensIn = 0
+	ps.TokensOut = 0
+	ps.CacheTokensIn = 0
 	ps.Error = ""
 	ps.PlanHash = ""
 	ps.startedAt = time.Now()
@@ -188,6 +191,19 @@ func (s *State) AccumulateCost(phase string, cost float64) error {
 	ps.Cost += cost
 	ps.CumulativeCost += cost
 	s.meta.TotalCost += cost
+	return s.flushMeta()
+}
+
+// AccumulateTokens adds token counts to the phase. Phase must exist (via MarkRunning).
+// Counts are per-generation and zeroed on re-run by MarkRunning.
+func (s *State) AccumulateTokens(phase string, tokensIn, tokensOut, cacheTokensIn int64) error {
+	ps := s.meta.Phases[phase]
+	if ps == nil {
+		return fmt.Errorf("pipeline: accumulate tokens: phase %q not started", phase)
+	}
+	ps.TokensIn += tokensIn
+	ps.TokensOut += tokensOut
+	ps.CacheTokensIn += cacheTokensIn
 	return s.flushMeta()
 }
 
