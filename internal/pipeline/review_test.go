@@ -2776,6 +2776,64 @@ func TestEngine_ParallelReview_APIConcurrencyLimit(t *testing.T) {
 	}
 }
 
+func TestEngine_ParallelReview_Serialized(t *testing.T) {
+	// 3 reviewers with concurrency limited to 1 — all runner.Run calls
+	// must be serialized (maxConcurrent must equal 1).
+	phases := []PhaseConfig{
+		{
+			Name:  "review",
+			Type:  "parallel-review",
+			Retry: RetryConfig{Transient: 0},
+			Reviewers: []ReviewerConfig{
+				{Name: "reviewer-1", Prompt: "prompts/r1.md", Focus: "r1"},
+				{Name: "reviewer-2", Prompt: "prompts/r2.md", Focus: "r2"},
+				{Name: "reviewer-3", Prompt: "prompts/r3.md", Focus: "r3"},
+			},
+		},
+	}
+
+	var maxConcurrent atomic.Int32
+	var currentConcurrent atomic.Int32
+
+	concRunner := &funcRunner{fn: func(ctx context.Context, opts runner.RunOpts) (*runner.RunResult, error) {
+		current := currentConcurrent.Add(1)
+		defer currentConcurrent.Add(-1)
+
+		// Track max concurrency.
+		for {
+			prev := maxConcurrent.Load()
+			if current <= prev || maxConcurrent.CompareAndSwap(prev, current) {
+				break
+			}
+		}
+
+		// Simulate API call duration.
+		time.Sleep(20 * time.Millisecond)
+
+		return &runner.RunResult{
+			Output:  json.RawMessage(`{"findings":[],"verdict":"pass"}`),
+			CostUSD: 0.05,
+		}, nil
+	}}
+
+	engine, state := setupReviewEngine(t, phases, concRunner, func(cfg *EngineConfig) {
+		cfg.MaxAPIConcurrency = 1
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !state.IsCompleted("review") {
+		t.Error("review should be completed")
+	}
+
+	observed := int(maxConcurrent.Load())
+	if observed != 1 {
+		t.Errorf("max concurrent API calls = %d, want exactly 1 (fully serialized)", observed)
+	}
+}
+
 func TestEngine_ParallelReview_NoConcurrencyLimit(t *testing.T) {
 	// 3 reviewers with no concurrency limit — all should be able to
 	// run simultaneously.
