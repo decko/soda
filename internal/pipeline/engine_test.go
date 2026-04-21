@@ -5133,3 +5133,284 @@ func TestEngine_PipelineTimeout_ExternalDeadlineNotWrapped(t *testing.T) {
 		t.Error("external context deadline should not be wrapped as PipelineTimeoutError")
 	}
 }
+
+func TestEngine_ExtrasArtifactForCustomPhase(t *testing.T) {
+	// A pipeline with a custom phase ("lint") whose artifact should be
+	// available to a downstream phase via Artifacts.Extras["lint"].
+	phases := []PhaseConfig{
+		{
+			Name:   "lint",
+			Prompt: "lint.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "implement",
+			Prompt:    "implement.md",
+			DependsOn: []string{"lint"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	lintArtifact := "Lint passed: no issues found in 42 files"
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"lint": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"passed":true}`),
+					RawText: lintArtifact,
+					CostUSD: 0.02,
+				},
+			}},
+			"implement": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true}`),
+					RawText: "Implementation done",
+					CostUSD: 0.10,
+				},
+			}},
+		},
+	}
+
+	stateDir := t.TempDir()
+	promptDir := t.TempDir()
+	workDir := t.TempDir()
+
+	templates := map[string]string{
+		"lint.md":      "Phase: lint\nTicket: {{.Ticket.Key}}\n",
+		"implement.md": "Phase: implement\nTicket: {{.Ticket.Key}}\n{{- if .Artifacts.Extras}}Lint output: {{index .Artifacts.Extras \"lint\"}}{{- end}}\n",
+	}
+	for name, content := range templates {
+		if err := os.WriteFile(filepath.Join(promptDir, name), []byte(content), 0644); err != nil {
+			t.Fatalf("write template %s: %v", name, err)
+		}
+	}
+
+	state, err := LoadOrCreate(stateDir, "TEST-302")
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+
+	engine := NewEngine(mock, state, EngineConfig{
+		Pipeline:   &PhasePipeline{Phases: phases},
+		Loader:     NewPromptLoader(promptDir),
+		Ticket:     TicketData{Key: "TEST-302", Summary: "Extras test"},
+		Model:      "test-model",
+		WorkDir:    workDir,
+		MaxCostUSD: 0,
+		Mode:       Autonomous,
+		SleepFunc:  func(time.Duration) {},
+		JitterFunc: func(time.Duration) time.Duration { return 0 },
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Both phases should be completed.
+	if !state.IsCompleted("lint") {
+		t.Error("lint phase should be completed")
+	}
+	if !state.IsCompleted("implement") {
+		t.Error("implement phase should be completed")
+	}
+
+	// The implement phase prompt should contain the lint artifact via Extras.
+	if len(mock.calls) != 2 {
+		t.Fatalf("runner called %d times, want 2", len(mock.calls))
+	}
+
+	implementPrompt := mock.calls[1].SystemPrompt
+	if !strings.Contains(implementPrompt, lintArtifact) {
+		t.Errorf("implement prompt should contain lint artifact via Extras;\nprompt: %q\nwanted: %q",
+			implementPrompt, lintArtifact)
+	}
+}
+
+func TestEngine_ExtrasMultipleCustomPhases(t *testing.T) {
+	// Multiple custom phases should all appear in Extras for a downstream phase.
+	phases := []PhaseConfig{
+		{
+			Name:   "lint",
+			Prompt: "lint.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:   "security",
+			Prompt: "security.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "implement",
+			Prompt:    "implement.md",
+			DependsOn: []string{"lint", "security"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	lintArtifact := "Lint: all clear"
+	securityArtifact := "Security: no vulnerabilities"
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"lint": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"passed":true}`),
+					RawText: lintArtifact,
+					CostUSD: 0.01,
+				},
+			}},
+			"security": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"passed":true}`),
+					RawText: securityArtifact,
+					CostUSD: 0.01,
+				},
+			}},
+			"implement": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true}`),
+					RawText: "Done",
+					CostUSD: 0.10,
+				},
+			}},
+		},
+	}
+
+	stateDir := t.TempDir()
+	promptDir := t.TempDir()
+	workDir := t.TempDir()
+
+	templates := map[string]string{
+		"lint.md":      "Phase: lint\n",
+		"security.md":  "Phase: security\n",
+		"implement.md": "Phase: implement\n{{- if .Artifacts.Extras}}{{range $name, $content := .Artifacts.Extras}}\n{{$name}}: {{$content}}{{end}}{{- end}}\n",
+	}
+	for name, content := range templates {
+		if err := os.WriteFile(filepath.Join(promptDir, name), []byte(content), 0644); err != nil {
+			t.Fatalf("write template %s: %v", name, err)
+		}
+	}
+
+	state, err := LoadOrCreate(stateDir, "TEST-302M")
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+
+	engine := NewEngine(mock, state, EngineConfig{
+		Pipeline:   &PhasePipeline{Phases: phases},
+		Loader:     NewPromptLoader(promptDir),
+		Ticket:     TicketData{Key: "TEST-302M", Summary: "Multi extras test"},
+		Model:      "test-model",
+		WorkDir:    workDir,
+		MaxCostUSD: 0,
+		Mode:       Autonomous,
+		SleepFunc:  func(time.Duration) {},
+		JitterFunc: func(time.Duration) time.Duration { return 0 },
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// All three phases should be completed.
+	for _, name := range []string{"lint", "security", "implement"} {
+		if !state.IsCompleted(name) {
+			t.Errorf("phase %q should be completed", name)
+		}
+	}
+
+	// The implement prompt should contain both custom artifacts.
+	implementPrompt := mock.calls[2].SystemPrompt
+	if !strings.Contains(implementPrompt, lintArtifact) {
+		t.Errorf("implement prompt should contain lint artifact;\nprompt: %q", implementPrompt)
+	}
+	if !strings.Contains(implementPrompt, securityArtifact) {
+		t.Errorf("implement prompt should contain security artifact;\nprompt: %q", implementPrompt)
+	}
+}
+
+func TestEngine_ExtrasNotUsedForBuiltinPhases(t *testing.T) {
+	// Built-in phase names (triage, plan) should use the named fields,
+	// not Extras. This test verifies the named fields still work and
+	// Extras is empty when only built-in phases are in the pipeline.
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "plan",
+			Prompt:    "plan.md",
+			DependsOn: []string{"triage"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage result here",
+					CostUSD: 0.05,
+				},
+			}},
+			"plan": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tasks":[{"id":"T1","description":"do stuff"}]}`),
+					RawText: "Plan output",
+					CostUSD: 0.10,
+				},
+			}},
+		},
+	}
+
+	stateDir := t.TempDir()
+	promptDir := t.TempDir()
+	workDir := t.TempDir()
+
+	// The plan template uses the named Triage field and checks Extras is empty.
+	templates := map[string]string{
+		"triage.md": "Phase: triage\n",
+		"plan.md":   "Phase: plan\nTriage: {{.Artifacts.Triage}}\n{{- if .Artifacts.Extras}}HAS_EXTRAS{{- end}}\n",
+	}
+	for name, content := range templates {
+		if err := os.WriteFile(filepath.Join(promptDir, name), []byte(content), 0644); err != nil {
+			t.Fatalf("write template %s: %v", name, err)
+		}
+	}
+
+	state, err := LoadOrCreate(stateDir, "TEST-302B")
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+
+	engine := NewEngine(mock, state, EngineConfig{
+		Pipeline:   &PhasePipeline{Phases: phases},
+		Loader:     NewPromptLoader(promptDir),
+		Ticket:     TicketData{Key: "TEST-302B", Summary: "Builtin test"},
+		Model:      "test-model",
+		WorkDir:    workDir,
+		MaxCostUSD: 0,
+		Mode:       Autonomous,
+		SleepFunc:  func(time.Duration) {},
+		JitterFunc: func(time.Duration) time.Duration { return 0 },
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// The plan prompt should contain the triage artifact via named field.
+	planPrompt := mock.calls[1].SystemPrompt
+	if !strings.Contains(planPrompt, "Triage result here") {
+		t.Errorf("plan prompt should contain triage artifact via named field;\nprompt: %q", planPrompt)
+	}
+
+	// The plan prompt should NOT contain HAS_EXTRAS marker — built-in
+	// deps should not populate Extras.
+	if strings.Contains(planPrompt, "HAS_EXTRAS") {
+		t.Error("plan prompt should not have Extras populated for built-in phase deps")
+	}
+}

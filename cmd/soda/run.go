@@ -779,7 +779,7 @@ func runDryRun(cfg *config.Config, pl *pipeline.PhasePipeline, loader *pipeline.
 	if cfg.StateDir != "" {
 		state, err := pipeline.LoadOrCreate(cfg.StateDir, ticketData.Key)
 		if err == nil {
-			loadArtifacts(state, &promptData)
+			loadArtifacts(state, &promptData, pl)
 		}
 	}
 

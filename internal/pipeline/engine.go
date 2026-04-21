@@ -871,6 +871,7 @@ func (e *Engine) buildPromptData(phase PhaseConfig) (PromptData, error) {
 		WorktreePath:  e.state.Meta().Worktree,
 		Branch:        e.state.Meta().Branch,
 		BaseBranch:    e.config.BaseBranch,
+		Artifacts:     ArtifactData{Extras: make(map[string]string)},
 	}
 
 	for _, dep := range phase.DependsOn {
@@ -896,6 +897,10 @@ func (e *Engine) buildPromptData(phase PhaseConfig) (PromptData, error) {
 			data.Artifacts.Patch = content
 		case "submit":
 			data.Artifacts.Submit.PRURL = e.extractPRURL()
+		default:
+			// Custom/user-defined phase: store in Extras map so
+			// templates can access via {{index .Artifacts.Extras "name"}}.
+			data.Artifacts.Extras[dep] = content
 		}
 	}
 
