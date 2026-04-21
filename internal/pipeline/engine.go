@@ -558,6 +558,12 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 		promptData.DiffContext = e.computeDiffContext(ctx)
 	}
 
+	// Inject implement diff into rework feedback so the LLM can see
+	// what was previously implemented when addressing rework findings.
+	if promptData.ReworkFeedback != nil {
+		promptData.ReworkFeedback.ImplementDiff = e.computeDiffContext(ctx)
+	}
+
 	// Store plan hash for staleness guard on phases that depend on plan.
 	for _, dep := range phase.DependsOn {
 		if dep == "plan" {

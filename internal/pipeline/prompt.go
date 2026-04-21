@@ -63,6 +63,7 @@ type ReworkFeedback struct {
 	FailedCommands []FailedCommand
 	ReviewFindings []EnrichedFinding
 	PriorCycles    []PriorCycle
+	ImplementDiff  string // git diff of current branch vs base; shows what was implemented before rework
 }
 
 // EnrichedFinding wraps a ReviewFinding with code context for rework prompts.
