@@ -28,15 +28,7 @@ func TestDiscoverDirs(t *testing.T) {
 
 func TestRunPipelines_EmbeddedDefault(t *testing.T) {
 	// Run from a temp dir with no pipeline files — should show embedded default.
-	origDir, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	tmpDir := t.TempDir()
-	if err := os.Chdir(tmpDir); err != nil {
-		t.Fatal(err)
-	}
-	defer os.Chdir(origDir)
+	t.Chdir(t.TempDir())
 
 	cmd := newPipelinesCmd()
 	var buf bytes.Buffer
@@ -56,15 +48,8 @@ func TestRunPipelines_EmbeddedDefault(t *testing.T) {
 }
 
 func TestRunPipelines_LocalPipelines(t *testing.T) {
-	origDir, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
 	tmpDir := t.TempDir()
-	if err := os.Chdir(tmpDir); err != nil {
-		t.Fatal(err)
-	}
-	defer os.Chdir(origDir)
+	t.Chdir(tmpDir)
 
 	// Create local pipeline files.
 	phases := "phases:\n  - name: triage\n    prompt: prompts/triage.md\n    timeout: 1m\n"
@@ -98,15 +83,7 @@ func TestRunPipelines_LocalPipelines(t *testing.T) {
 func TestRunPipelines_EmbeddedAlternativePipelines(t *testing.T) {
 	// Run from a temp dir with no pipeline files — should show all embedded
 	// pipelines including quick-fix and docs-only.
-	origDir, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	tmpDir := t.TempDir()
-	if err := os.Chdir(tmpDir); err != nil {
-		t.Fatal(err)
-	}
-	defer os.Chdir(origDir)
+	t.Chdir(t.TempDir())
 
 	cmd := newPipelinesCmd()
 	var buf bytes.Buffer
@@ -127,15 +104,8 @@ func TestRunPipelines_EmbeddedAlternativePipelines(t *testing.T) {
 func TestRunPipelines_LocalOverrideHidesEmbedded(t *testing.T) {
 	// When a local phases-quick-fix.yaml exists, it should show "local"
 	// source rather than "embedded".
-	origDir, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
 	tmpDir := t.TempDir()
-	if err := os.Chdir(tmpDir); err != nil {
-		t.Fatal(err)
-	}
-	defer os.Chdir(origDir)
+	t.Chdir(tmpDir)
 
 	// Create a local quick-fix pipeline file.
 	phases := "phases:\n  - name: implement\n    prompt: prompts/implement.md\n    timeout: 1m\n"
@@ -282,15 +252,7 @@ func TestKnownEmbeddedPipelines_AllDiscoverable(t *testing.T) {
 }
 
 func TestRunPipelines_TableHeader(t *testing.T) {
-	origDir, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	tmpDir := t.TempDir()
-	if err := os.Chdir(tmpDir); err != nil {
-		t.Fatal(err)
-	}
-	defer os.Chdir(origDir)
+	t.Chdir(t.TempDir())
 
 	cmd := newPipelinesCmd()
 	var buf bytes.Buffer
