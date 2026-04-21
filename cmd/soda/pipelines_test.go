@@ -143,6 +143,7 @@ func TestRunPipelines_LocalOverrideHidesEmbedded(t *testing.T) {
 }
 
 func TestResolvePhasesPath_EmbeddedQuickFix(t *testing.T) {
+	t.Chdir(t.TempDir())
 	path, cleanup, err := resolvePhasesPath("quick-fix")
 	if err != nil {
 		t.Fatalf("resolvePhasesPath(quick-fix) failed: %v", err)
@@ -157,7 +158,7 @@ func TestResolvePhasesPath_EmbeddedQuickFix(t *testing.T) {
 	}
 
 	if len(pl.Phases) != 3 {
-		t.Errorf("quick-fix: expected 3 phases, got %d", len(pl.Phases))
+		t.Fatalf("quick-fix: expected 3 phases, got %d", len(pl.Phases))
 	}
 
 	// Verify phase names and order.
@@ -170,6 +171,7 @@ func TestResolvePhasesPath_EmbeddedQuickFix(t *testing.T) {
 }
 
 func TestResolvePhasesPath_EmbeddedDocsOnly(t *testing.T) {
+	t.Chdir(t.TempDir())
 	path, cleanup, err := resolvePhasesPath("docs-only")
 	if err != nil {
 		t.Fatalf("resolvePhasesPath(docs-only) failed: %v", err)
@@ -184,7 +186,7 @@ func TestResolvePhasesPath_EmbeddedDocsOnly(t *testing.T) {
 	}
 
 	if len(pl.Phases) != 2 {
-		t.Errorf("docs-only: expected 2 phases, got %d", len(pl.Phases))
+		t.Fatalf("docs-only: expected 2 phases, got %d", len(pl.Phases))
 	}
 
 	// Verify phase names and order.
@@ -197,6 +199,7 @@ func TestResolvePhasesPath_EmbeddedDocsOnly(t *testing.T) {
 }
 
 func TestResolvePhasesPath_UnknownPipeline(t *testing.T) {
+	t.Chdir(t.TempDir())
 	_, _, err := resolvePhasesPath("nonexistent-pipeline")
 	if err == nil {
 		t.Fatal("expected error for unknown pipeline, got nil")
