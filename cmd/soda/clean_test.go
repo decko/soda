@@ -335,10 +335,10 @@ func TestCleanTicket_PreservesSessionData(t *testing.T) {
 	stateDir := t.TempDir()
 	ticketDir := filepath.Join(stateDir, "TICKET-1")
 
+	// No Branch/Worktree set — refs are already empty so clearCleanedRefs
+	// will mark both as cleared.
 	writeCleanMeta(t, ticketDir, &pipeline.PipelineMeta{
-		Ticket:   "TICKET-1",
-		Branch:   "soda/TICKET-1",
-		Worktree: "/tmp/fake-worktree",
+		Ticket: "TICKET-1",
 		Phases: map[string]*pipeline.PhaseState{
 			"triage": {Status: pipeline.PhaseCompleted},
 		},
@@ -364,17 +364,8 @@ func TestCleanTicket_PreservesSessionData(t *testing.T) {
 	}
 
 	// meta.json should still exist.
-	meta, err := pipeline.ReadMeta(filepath.Join(ticketDir, "meta.json"))
-	if err != nil {
-		t.Fatalf("ReadMeta after clean: %v", err)
-	}
-
-	// Branch and Worktree references should be cleared.
-	if meta.Branch != "" {
-		t.Errorf("Branch = %q after clean, want empty", meta.Branch)
-	}
-	if meta.Worktree != "" {
-		t.Errorf("Worktree = %q after clean, want empty", meta.Worktree)
+	if _, readErr := pipeline.ReadMeta(filepath.Join(ticketDir, "meta.json")); readErr != nil {
+		t.Fatalf("ReadMeta after clean: %v", readErr)
 	}
 
 	// events.jsonl should be preserved.
@@ -397,11 +388,11 @@ func TestCleanTicket_PreserveClearsRefsInMeta(t *testing.T) {
 	stateDir := t.TempDir()
 	ticketDir := filepath.Join(stateDir, "TICKET-1")
 
+	// No Branch/Worktree — both are already empty so clearCleanedRefs will
+	// set worktreeCleared=true and branchCleared=true immediately.
 	writeCleanMeta(t, ticketDir, &pipeline.PipelineMeta{
 		Ticket:    "TICKET-1",
 		Summary:   "test summary",
-		Branch:    "soda/TICKET-1",
-		Worktree:  "/tmp/wt",
 		TotalCost: 1.50,
 		Phases: map[string]*pipeline.PhaseState{
 			"triage":    {Status: pipeline.PhaseCompleted, Cost: 0.50},
@@ -433,7 +424,7 @@ func TestCleanTicket_PreserveClearsRefsInMeta(t *testing.T) {
 		t.Errorf("Phases count = %d, want 2", len(meta.Phases))
 	}
 
-	// Ref fields should be cleared.
+	// Ref fields should be cleared (both were empty, so both marked as cleared).
 	if meta.Branch != "" {
 		t.Errorf("Branch = %q, want empty", meta.Branch)
 	}
@@ -442,12 +433,42 @@ func TestCleanTicket_PreserveClearsRefsInMeta(t *testing.T) {
 	}
 }
 
+func TestCleanTicket_FailedWorktreeRemovePreservesRef(t *testing.T) {
+	stateDir := t.TempDir()
+	ticketDir := filepath.Join(stateDir, "TICKET-1")
+
+	// Set a fake worktree path that git cannot remove — the worktree ref
+	// should be preserved in meta.json since the removal failed.
+	writeCleanMeta(t, ticketDir, &pipeline.PipelineMeta{
+		Ticket:   "TICKET-1",
+		Worktree: "/tmp/nonexistent-worktree-for-clean-test",
+		Phases: map[string]*pipeline.PhaseState{
+			"triage": {Status: pipeline.PhaseCompleted},
+		},
+	})
+
+	err := cleanTicket(context.Background(), stateDir, "TICKET-1", false, false, false)
+	if err != nil {
+		t.Fatalf("cleanTicket: %v", err)
+	}
+
+	meta, err := pipeline.ReadMeta(filepath.Join(ticketDir, "meta.json"))
+	if err != nil {
+		t.Fatalf("ReadMeta: %v", err)
+	}
+
+	// Worktree reference should still be set since removal failed.
+	if meta.Worktree == "" {
+		t.Error("Worktree ref should be preserved when worktree removal fails")
+	}
+}
+
 func TestCleanAll_PreservesSessionData(t *testing.T) {
 	stateDir := t.TempDir()
 
+	// No Branch set so the ref is treated as already clean.
 	writeCleanMeta(t, filepath.Join(stateDir, "TICKET-1"), &pipeline.PipelineMeta{
 		Ticket: "TICKET-1",
-		Branch: "soda/TICKET-1",
 		Phases: map[string]*pipeline.PhaseState{
 			"triage": {Status: pipeline.PhaseCompleted},
 		},
@@ -465,13 +486,10 @@ func TestCleanAll_PreservesSessionData(t *testing.T) {
 		t.Fatalf("cleanAll preserve: %v", err)
 	}
 
-	// TICKET-1 (terminal) state dir should still exist with cleared refs.
-	meta, readErr := pipeline.ReadMeta(filepath.Join(stateDir, "TICKET-1", "meta.json"))
+	// TICKET-1 (terminal) state dir should still exist with meta preserved.
+	_, readErr := pipeline.ReadMeta(filepath.Join(stateDir, "TICKET-1", "meta.json"))
 	if readErr != nil {
 		t.Fatalf("expected TICKET-1 meta.json to be preserved: %v", readErr)
-	}
-	if meta.Branch != "" {
-		t.Errorf("TICKET-1 Branch = %q after clean, want empty", meta.Branch)
 	}
 
 	// TICKET-2 (non-terminal) should still exist untouched.

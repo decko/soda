@@ -105,6 +105,10 @@ func cleanTicket(ctx context.Context, stateDir, ticketKey string, dryRun, force,
 		return errSkipped
 	}
 
+	// Track whether git resource cleanup succeeded so we only clear
+	// references in meta.json for resources that were actually removed.
+	var worktreeCleared, branchCleared bool
+
 	// Remove worktree
 	if meta.Worktree != "" {
 		if dryRun {
@@ -119,9 +123,12 @@ func cleanTicket(ctx context.Context, stateDir, ticketKey string, dryRun, force,
 			if wtErr != nil {
 				fmt.Fprintf(os.Stderr, "Warning: git worktree remove %s: %s\n", meta.Worktree, string(out))
 			} else {
+				worktreeCleared = true
 				fmt.Printf("Removed worktree: %s\n", meta.Worktree)
 			}
 		}
+	} else {
+		worktreeCleared = true // nothing to clean
 	}
 
 	// Delete branch (local + remote)
@@ -137,6 +144,7 @@ func cleanTicket(ctx context.Context, stateDir, ticketKey string, dryRun, force,
 				if brErr := sodagit.DeleteBranch(repoDir, meta.Branch); brErr != nil {
 					fmt.Fprintf(os.Stderr, "Warning: git branch delete %s: %v\n", meta.Branch, brErr)
 				} else {
+					branchCleared = true
 					fmt.Printf("Deleted branch: %s\n", meta.Branch)
 				}
 				if rmErr := sodagit.DeleteRemoteBranch(ctx, repoDir, "origin", meta.Branch); rmErr != nil {
@@ -146,6 +154,8 @@ func cleanTicket(ctx context.Context, stateDir, ticketKey string, dryRun, force,
 				}
 			}
 		}
+	} else {
+		branchCleared = true // nothing to clean
 	}
 
 	if purge {
@@ -164,7 +174,7 @@ func cleanTicket(ctx context.Context, stateDir, ticketKey string, dryRun, force,
 		if dryRun {
 			fmt.Printf("Would preserve state: %s (clearing worktree/branch references)\n", ticketDir)
 		} else {
-			if err := clearCleanedRefs(metaPath, meta); err != nil {
+			if err := clearCleanedRefs(metaPath, meta, worktreeCleared, branchCleared); err != nil {
 				return fmt.Errorf("update meta after clean: %w", err)
 			}
 			// Remove the lock file since the pipeline is not running.
@@ -177,11 +187,16 @@ func cleanTicket(ctx context.Context, stateDir, ticketKey string, dryRun, force,
 }
 
 // clearCleanedRefs updates meta.json to remove worktree and branch references
-// that were cleaned away. This prevents stale references in commands like
-// soda status/sessions/history that read meta.json.
-func clearCleanedRefs(metaPath string, meta *pipeline.PipelineMeta) error {
-	meta.Worktree = ""
-	meta.Branch = ""
+// that were successfully cleaned away. Only clears each reference if the
+// corresponding cleanup operation succeeded, so that failed removals can be
+// retried on a subsequent clean.
+func clearCleanedRefs(metaPath string, meta *pipeline.PipelineMeta, worktreeCleared, branchCleared bool) error {
+	if worktreeCleared {
+		meta.Worktree = ""
+	}
+	if branchCleared {
+		meta.Branch = ""
+	}
 	return pipeline.WriteMeta(metaPath, meta)
 }
 
