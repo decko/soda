@@ -660,6 +660,9 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 	if err := e.state.AccumulateCost(phase.Name, result.CostUSD); err != nil {
 		return fmt.Errorf("engine: accumulate cost for %s: %w", phase.Name, err)
 	}
+	if err := e.state.AccumulateTokens(phase.Name, result.TokensIn, result.TokensOut, result.CacheTokensIn); err != nil {
+		return fmt.Errorf("engine: accumulate tokens for %s: %w", phase.Name, err)
+	}
 
 	// Per-phase cost enforcement: abort if this phase exceeded its budget.
 	if err := e.checkPhaseBudget(phase); err != nil {
@@ -672,9 +675,19 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 	if err := e.state.MarkCompleted(phase.Name); err != nil {
 		return fmt.Errorf("engine: mark completed %s: %w", phase.Name, err)
 	}
+	ps := e.state.Meta().Phases[phase.Name]
 	completedData := map[string]any{
-		"duration_ms": e.state.Meta().Phases[phase.Name].DurationMs,
-		"cost":        e.state.Meta().Phases[phase.Name].Cost,
+		"duration_ms": ps.DurationMs,
+		"cost":        ps.Cost,
+	}
+	if ps.TokensIn > 0 {
+		completedData["tokens_in"] = ps.TokensIn
+	}
+	if ps.TokensOut > 0 {
+		completedData["tokens_out"] = ps.TokensOut
+	}
+	if ps.CacheTokensIn > 0 {
+		completedData["cache_tokens_in"] = ps.CacheTokensIn
 	}
 	if result.Output != nil {
 		if summary := progress.PhaseSummary(phase.Name, result.Output); summary != "" {
