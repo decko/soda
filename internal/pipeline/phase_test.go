@@ -650,6 +650,36 @@ func TestLoadPipeline(t *testing.T) {
 		}
 	})
 
+	t.Run("errors_on_invalid_json_schema_file", func(t *testing.T) {
+		dir := t.TempDir()
+		schemaPath := filepath.Join(dir, "bad.json")
+		if err := os.WriteFile(schemaPath, []byte("not valid json{{{"), 0644); err != nil {
+			t.Fatalf("WriteFile schema: %v", err)
+		}
+
+		phasesPath := filepath.Join(dir, "phases.yaml")
+		content := `phases:
+  - name: custom-phase
+    prompt: prompts/custom.md
+    schema: bad.json
+    timeout: 1m
+`
+		if err := os.WriteFile(phasesPath, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		_, err := LoadPipeline(phasesPath)
+		if err == nil {
+			t.Fatal("expected error for invalid JSON schema file")
+		}
+		if !strings.Contains(err.Error(), "not valid JSON") {
+			t.Errorf("error = %q, want mention of not valid JSON", err)
+		}
+		if !strings.Contains(err.Error(), "bad.json") {
+			t.Errorf("error = %q, want mention of bad.json", err)
+		}
+	})
+
 	t.Run("errors_on_schema_path_traversal", func(t *testing.T) {
 		dir := t.TempDir()
 		phasesPath := filepath.Join(dir, "phases.yaml")

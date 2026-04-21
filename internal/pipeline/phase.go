@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -179,6 +180,9 @@ func LoadPipeline(path string) (*PhasePipeline, error) {
 			schemaData, err := os.ReadFile(schemaPath)
 			if err != nil {
 				return nil, fmt.Errorf("pipeline: phase %q: read schema file %s: %w", phase.Name, phase.Schema, err)
+			}
+			if !json.Valid(schemaData) {
+				return nil, fmt.Errorf("pipeline: phase %q: schema file %s is not valid JSON", phase.Name, phase.Schema)
 			}
 			phase.Schema = string(schemaData)
 		}
