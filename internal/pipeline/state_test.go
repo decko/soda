@@ -362,6 +362,89 @@ func TestAccumulateCost(t *testing.T) {
 	})
 }
 
+func TestAccumulateTokens(t *testing.T) {
+	t.Run("accumulates_token_counts", func(t *testing.T) {
+		dir := t.TempDir()
+		state, _ := LoadOrCreate(dir, "T-TOK-1")
+
+		state.MarkRunning("triage")
+		state.AccumulateTokens("triage", 10000, 2000, 3000)
+		state.AccumulateTokens("triage", 5000, 1000, 1500)
+
+		ps := state.meta.Phases["triage"]
+		if ps.TokensIn != 15000 {
+			t.Errorf("TokensIn = %d, want 15000", ps.TokensIn)
+		}
+		if ps.TokensOut != 3000 {
+			t.Errorf("TokensOut = %d, want 3000", ps.TokensOut)
+		}
+		if ps.CacheTokensIn != 4500 {
+			t.Errorf("CacheTokensIn = %d, want 4500", ps.CacheTokensIn)
+		}
+	})
+
+	t.Run("zeroed_on_rerun", func(t *testing.T) {
+		dir := t.TempDir()
+		state, _ := LoadOrCreate(dir, "T-TOK-2")
+
+		state.MarkRunning("plan")
+		state.AccumulateTokens("plan", 10000, 2000, 3000)
+		state.MarkCompleted("plan")
+
+		// Re-run should zero token counts.
+		state.MarkRunning("plan")
+
+		ps := state.meta.Phases["plan"]
+		if ps.TokensIn != 0 {
+			t.Errorf("TokensIn after rerun = %d, want 0", ps.TokensIn)
+		}
+		if ps.TokensOut != 0 {
+			t.Errorf("TokensOut after rerun = %d, want 0", ps.TokensOut)
+		}
+		if ps.CacheTokensIn != 0 {
+			t.Errorf("CacheTokensIn after rerun = %d, want 0", ps.CacheTokensIn)
+		}
+	})
+
+	t.Run("error_on_unstarted_phase", func(t *testing.T) {
+		dir := t.TempDir()
+		state, _ := LoadOrCreate(dir, "T-TOK-3")
+
+		err := state.AccumulateTokens("nonexistent", 100, 200, 300)
+		if err == nil {
+			t.Fatal("expected error for unstarted phase")
+		}
+	})
+
+	t.Run("persists_to_disk", func(t *testing.T) {
+		dir := t.TempDir()
+		state, _ := LoadOrCreate(dir, "T-TOK-4")
+
+		state.MarkRunning("verify")
+		state.AccumulateTokens("verify", 8000, 1500, 2000)
+		state.MarkCompleted("verify")
+
+		// Reload from disk and verify tokens were persisted.
+		state2, err := LoadOrCreate(dir, "T-TOK-4")
+		if err != nil {
+			t.Fatalf("reload: %v", err)
+		}
+		ps := state2.Meta().Phases["verify"]
+		if ps == nil {
+			t.Fatal("verify phase not found after reload")
+		}
+		if ps.TokensIn != 8000 {
+			t.Errorf("TokensIn after reload = %d, want 8000", ps.TokensIn)
+		}
+		if ps.TokensOut != 1500 {
+			t.Errorf("TokensOut after reload = %d, want 1500", ps.TokensOut)
+		}
+		if ps.CacheTokensIn != 2000 {
+			t.Errorf("CacheTokensIn after reload = %d, want 2000", ps.CacheTokensIn)
+		}
+	})
+}
+
 func TestWriteReadArtifact(t *testing.T) {
 	dir := t.TempDir()
 	state, _ := LoadOrCreate(dir, "T-1")
