@@ -366,6 +366,13 @@ func TestValidateTemplate(t *testing.T) {
 		}
 	})
 
+	t.Run("valid_template_with_implement_diff", func(t *testing.T) {
+		tmpl := `{{- if .ReworkFeedback}}{{- if .ReworkFeedback.ImplementDiff}}Diff: {{.ReworkFeedback.ImplementDiff}}{{- end}}{{- end}}`
+		if err := ValidateTemplate(tmpl); err != nil {
+			t.Fatalf("ValidateTemplate should accept ImplementDiff: %v", err)
+		}
+	})
+
 	t.Run("valid_template_with_add_funcmap", func(t *testing.T) {
 		tmpl := `{{- if .ReworkFeedback}}{{range $idx, $fix := .ReworkFeedback.FixesRequired}}Finding {{add $idx 1}} of {{len $.ReworkFeedback.FixesRequired}}{{end}}{{- end}}`
 		if err := ValidateTemplate(tmpl); err != nil {
@@ -1043,6 +1050,166 @@ Context: {{.}}
 		// Should also contain current fix.
 		if !strings.Contains(result, "fix the remaining test") {
 			t.Errorf("patch prompt should contain current fix;\ngot: %s", result)
+		}
+	})
+
+	t.Run("renders_implement_prompt_with_implement_diff", func(t *testing.T) {
+		tmplBytes, err := os.ReadFile(filepath.Join("..", "..", "cmd", "soda", "embeds", "prompts", "implement.md"))
+		if err != nil {
+			t.Skipf("skipping: cannot read embedded implement.md: %v", err)
+		}
+		tmpl := string(tmplBytes)
+
+		data := PromptData{
+			Ticket:       TicketData{Key: "TEST-282", Summary: "implement diff test"},
+			WorktreePath: "/tmp/wt",
+			Branch:       "soda/TEST-282",
+			BaseBranch:   "main",
+			Config:       PromptConfigData{Formatter: "gofmt -w .", TestCommand: "go test ./..."},
+			ReworkFeedback: &ReworkFeedback{
+				Source:  "review",
+				Verdict: "rework",
+				ReviewFindings: []EnrichedFinding{
+					{ReviewFinding: schemas.ReviewFinding{Severity: "critical", File: "handler.go", Line: 42, Issue: "nil deref", Suggestion: "check nil", Source: "go-specialist"}},
+				},
+				ImplementDiff: "--- a/handler.go\n+++ b/handler.go\n@@ -40,3 +40,5 @@\n func handle() {\n+\treturn obj.Value\n }",
+			},
+		}
+
+		result, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+
+		// Should contain the diff section.
+		if !strings.Contains(result, "Current Implementation Diff") {
+			t.Errorf("implement prompt should contain 'Current Implementation Diff' header;\ngot: %s", result)
+		}
+		if !strings.Contains(result, "--- a/handler.go") {
+			t.Errorf("implement prompt should contain the diff content;\ngot: %s", result)
+		}
+		if !strings.Contains(result, "base...HEAD") {
+			t.Errorf("implement prompt should describe the diff as base...HEAD;\ngot: %s", result)
+		}
+		// Should also contain the review findings.
+		if !strings.Contains(result, "nil deref") {
+			t.Errorf("implement prompt should still contain review finding;\ngot: %s", result)
+		}
+	})
+
+	t.Run("omits_implement_diff_when_empty", func(t *testing.T) {
+		tmplBytes, err := os.ReadFile(filepath.Join("..", "..", "cmd", "soda", "embeds", "prompts", "implement.md"))
+		if err != nil {
+			t.Skipf("skipping: cannot read embedded implement.md: %v", err)
+		}
+		tmpl := string(tmplBytes)
+
+		data := PromptData{
+			Ticket:       TicketData{Key: "TEST-282", Summary: "no diff test"},
+			WorktreePath: "/tmp/wt",
+			Branch:       "soda/TEST-282",
+			BaseBranch:   "main",
+			Config:       PromptConfigData{Formatter: "gofmt -w .", TestCommand: "go test ./..."},
+			ReworkFeedback: &ReworkFeedback{
+				Source:  "review",
+				Verdict: "rework",
+				ReviewFindings: []EnrichedFinding{
+					{ReviewFinding: schemas.ReviewFinding{Severity: "critical", File: "x.go", Line: 1, Issue: "bad", Suggestion: "fix", Source: "go-specialist"}},
+				},
+				// ImplementDiff is empty — should be omitted from output.
+			},
+		}
+
+		result, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+
+		if strings.Contains(result, "Current Implementation Diff") {
+			t.Errorf("implement prompt should NOT contain diff section when ImplementDiff is empty;\ngot: %s", result)
+		}
+		// Findings should still render.
+		if !strings.Contains(result, "bad") {
+			t.Errorf("implement prompt should contain current finding;\ngot: %s", result)
+		}
+	})
+
+	t.Run("omits_implement_diff_without_rework_feedback", func(t *testing.T) {
+		tmplBytes, err := os.ReadFile(filepath.Join("..", "..", "cmd", "soda", "embeds", "prompts", "implement.md"))
+		if err != nil {
+			t.Skipf("skipping: cannot read embedded implement.md: %v", err)
+		}
+		tmpl := string(tmplBytes)
+
+		data := PromptData{
+			Ticket:       TicketData{Key: "TEST-282", Summary: "no feedback test"},
+			WorktreePath: "/tmp/wt",
+			Branch:       "soda/TEST-282",
+			BaseBranch:   "main",
+			Config:       PromptConfigData{Formatter: "gofmt -w .", TestCommand: "go test ./..."},
+			// No ReworkFeedback at all.
+		}
+
+		result, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+
+		if strings.Contains(result, "Current Implementation Diff") {
+			t.Errorf("implement prompt should NOT contain diff section without rework feedback;\ngot: %s", result)
+		}
+	})
+
+	t.Run("renders_implement_prompt_with_diff_and_prior_cycles", func(t *testing.T) {
+		tmplBytes, err := os.ReadFile(filepath.Join("..", "..", "cmd", "soda", "embeds", "prompts", "implement.md"))
+		if err != nil {
+			t.Skipf("skipping: cannot read embedded implement.md: %v", err)
+		}
+		tmpl := string(tmplBytes)
+
+		data := PromptData{
+			Ticket:       TicketData{Key: "TEST-282", Summary: "diff with prior cycles"},
+			WorktreePath: "/tmp/wt",
+			Branch:       "soda/TEST-282",
+			BaseBranch:   "main",
+			Config:       PromptConfigData{Formatter: "gofmt -w .", TestCommand: "go test ./..."},
+			ReworkFeedback: &ReworkFeedback{
+				Source:  "review",
+				Verdict: "rework",
+				ReviewFindings: []EnrichedFinding{
+					{ReviewFinding: schemas.ReviewFinding{Severity: "major", File: "util.go", Line: 5, Issue: "unchecked error", Suggestion: "handle err", Source: "go-specialist"}},
+				},
+				ImplementDiff: "--- a/util.go\n+++ b/util.go\n@@ -1 +1 @@\n-old\n+new",
+				PriorCycles: []PriorCycle{
+					{Cycle: 1, Source: "review", Verdict: "rework", Summary: "[critical] handler.go:42 — nil deref"},
+				},
+			},
+		}
+
+		result, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+
+		// Diff should appear before prior cycles.
+		diffIdx := strings.Index(result, "Current Implementation Diff")
+		priorIdx := strings.Index(result, "Prior Review Cycles")
+		findingIdx := strings.Index(result, "Specialist Review Findings")
+
+		if diffIdx < 0 {
+			t.Fatal("implement prompt should contain 'Current Implementation Diff'")
+		}
+		if priorIdx < 0 {
+			t.Fatal("implement prompt should contain 'Prior Review Cycles'")
+		}
+		if findingIdx < 0 {
+			t.Fatal("implement prompt should contain 'Specialist Review Findings'")
+		}
+		if diffIdx > priorIdx {
+			t.Error("diff section should appear before prior cycles section")
+		}
+		if priorIdx > findingIdx {
+			t.Error("prior cycles section should appear before findings section")
 		}
 	})
 
