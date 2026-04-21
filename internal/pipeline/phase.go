@@ -12,6 +12,7 @@ import (
 
 // PhasePipeline holds the ordered list of phases loaded from phases.yaml.
 type PhasePipeline struct {
+	Name   string        `yaml:"-"` // pipeline name; set after loading (e.g. "default", "fast")
 	Phases []PhaseConfig `yaml:"phases"`
 }
 

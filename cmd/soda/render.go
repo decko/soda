@@ -30,6 +30,7 @@ func newRenderCmd() *cobra.Command {
 
 	cmd.Flags().String("phase", "", "phase to render (required)")
 	cmd.Flags().String("ticket", "", "ticket key (required)")
+	cmd.Flags().String("pipeline", "", "pipeline name (default: phases.yaml)")
 	cmd.MarkFlagRequired("phase")
 	cmd.MarkFlagRequired("ticket")
 
@@ -40,7 +41,8 @@ func runRender(cmd *cobra.Command, cfg *config.Config, phaseName, ticketKey stri
 	ctx := cmd.Context()
 
 	// Load pipeline config
-	phasesPath, cleanup, err := resolvePhasesPath()
+	pipelineName, _ := cmd.Flags().GetString("pipeline")
+	phasesPath, cleanup, err := resolvePhasesPath(pipelineName)
 	if err != nil {
 		return fmt.Errorf("render: %w", err)
 	}

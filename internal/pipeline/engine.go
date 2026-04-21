@@ -37,6 +37,7 @@ type EngineConfig struct {
 	PromptContext        ContextData
 	DetectedStack        DetectedStackData // auto-detected project stack info; zero value if detection was skipped
 	Model                string
+	PipelineName         string // pipeline config name (e.g. "fast"); empty means "default"
 	BinaryVersion        string // binary build identifier; recorded in meta on first run, checked for staleness on resume
 	WorkDir              string
 	WorktreeBase         string
@@ -264,6 +265,13 @@ func (e *Engine) Run(ctx context.Context) error {
 		e.state.Meta().Summary = e.config.Ticket.Summary
 	}
 
+	// Record pipeline name in meta for identification.
+	// Always update when explicitly set so re-running with a different
+	// --pipeline flag stores the correct name for future resumes.
+	if e.config.PipelineName != "" {
+		e.state.Meta().Pipeline = e.config.PipelineName
+	}
+
 	if err := e.ensureWorktree(ctx); err != nil {
 		return err
 	}
@@ -278,7 +286,15 @@ func (e *Engine) Run(ctx context.Context) error {
 	e.emit(Event{Kind: EventPhaseCostsReset})
 
 	e.reranPhases = make(map[string]bool)
-	e.emit(Event{Kind: EventEngineStarted})
+	startedData := map[string]any{}
+	if e.config.PipelineName != "" {
+		startedData["pipeline"] = e.config.PipelineName
+	}
+	if len(startedData) == 0 {
+		e.emit(Event{Kind: EventEngineStarted})
+	} else {
+		e.emit(Event{Kind: EventEngineStarted, Data: startedData})
+	}
 
 	if err := e.executePhases(ctx, e.config.Pipeline.Phases, false); err != nil {
 		wrapped := e.wrapTimeoutError(ctx, err)
@@ -323,12 +339,23 @@ func (e *Engine) Resume(ctx context.Context, fromPhase string) error {
 		e.state.Meta().Summary = e.config.Ticket.Summary
 	}
 
+	// Record pipeline name in meta for identification.
+	// Always update when explicitly set so re-running with a different
+	// --pipeline flag stores the correct name for future resumes.
+	if e.config.PipelineName != "" {
+		e.state.Meta().Pipeline = e.config.PipelineName
+	}
+
 	if err := e.ensureWorktree(ctx); err != nil {
 		return err
 	}
 
 	e.reranPhases = make(map[string]bool)
-	e.emit(Event{Kind: EventEngineStarted, Data: map[string]any{"resumed_from": fromPhase}})
+	resumeData := map[string]any{"resumed_from": fromPhase}
+	if e.config.PipelineName != "" {
+		resumeData["pipeline"] = e.config.PipelineName
+	}
+	e.emit(Event{Kind: EventEngineStarted, Data: resumeData})
 
 	// The fromPhase (first in slice) is always re-run, even if completed.
 	// Mark it with forceFirst=true so executePhases skips the shouldSkip check.

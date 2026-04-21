@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/decko/soda/internal/config"
+	"github.com/decko/soda/internal/pipeline"
 	"github.com/spf13/cobra"
 )
 
@@ -50,6 +51,7 @@ func newRootCmd() *cobra.Command {
 		newCostCmd(),
 		newRenderCmd(),
 		newValidateCmd(),
+		newPipelinesCmd(),
 		newPluginCmd(),
 		newVersionCmd(),
 	)
@@ -109,15 +111,42 @@ func extractEmbeddedPrompts() (string, error) {
 	return tmpDir, nil
 }
 
-// resolvePhasesPath returns a path to phases.yaml.
-// Prefers a local file in the working directory; falls back to extracting
-// the embedded copy to a temp file. Caller must remove the temp file
-// if cleanup is non-nil.
-func resolvePhasesPath() (path string, cleanup func(), err error) {
-	if _, statErr := os.Stat("phases.yaml"); statErr == nil {
-		return "phases.yaml", nil, nil
+// resolvePhasesPath returns a path to a pipeline configuration file.
+// When pipelineName is empty or "default", it resolves to phases.yaml;
+// otherwise it resolves to phases-<name>.yaml. The search order is:
+//
+//  1. Working directory
+//  2. User config directory (~/.config/soda/)
+//  3. Embedded default (only for the "default" pipeline)
+//
+// Caller must remove the temp file if cleanup is non-nil.
+func resolvePhasesPath(pipelineName string) (path string, cleanup func(), err error) {
+	if err := pipeline.ValidatePipelineName(pipelineName); err != nil {
+		return "", nil, err
+	}
+	filename := pipeline.PipelineFilename(pipelineName)
+
+	// Check working directory.
+	if _, statErr := os.Stat(filename); statErr == nil {
+		return filename, nil, nil
 	}
 
+	// Check user config directory.
+	configDir, _ := os.UserConfigDir()
+	if configDir != "" {
+		userPath := filepath.Join(configDir, "soda", filename)
+		if _, statErr := os.Stat(userPath); statErr == nil {
+			return userPath, nil, nil
+		}
+	}
+
+	// Named pipelines have no embedded fallback.
+	if pipelineName != "" && pipelineName != "default" {
+		return "", nil, fmt.Errorf("pipeline %q not found (looked for %s in . and %s)",
+			pipelineName, filename, filepath.Join(configDir, "soda"))
+	}
+
+	// Fall back to embedded default.
 	tmpFile, tmpErr := os.CreateTemp("", "soda-phases-*.yaml")
 	if tmpErr != nil {
 		return "", nil, fmt.Errorf("create temp phases file: %w", tmpErr)

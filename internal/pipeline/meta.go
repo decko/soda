@@ -40,6 +40,7 @@ type PhaseState struct {
 type PipelineMeta struct {
 	Ticket             string                 `json:"ticket"`
 	Summary            string                 `json:"summary,omitempty"`
+	Pipeline           string                 `json:"pipeline,omitempty"` // pipeline name used for this run; empty means "default"
 	Branch             string                 `json:"branch,omitempty"`
 	Worktree           string                 `json:"worktree,omitempty"`
 	StartedAt          time.Time              `json:"started_at"`

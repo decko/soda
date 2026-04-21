@@ -45,6 +45,7 @@ func newRunCmd() *cobra.Command {
 
 	cmd.Flags().String("mode", "", "execution mode: checkpoint or autonomous")
 	cmd.Flags().String("from", "", "resume from phase (or 'last')")
+	cmd.Flags().String("pipeline", "", "pipeline name (default: phases.yaml)")
 	cmd.Flags().Bool("dry-run", false, "render prompts without executing")
 	cmd.Flags().Bool("mock", false, "use mock runner for testing")
 	cmd.Flags().Bool("tui", false, "use interactive TUI display")
@@ -84,7 +85,8 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 	}
 
 	// Load pipeline config
-	phasesPath, phasesCleanup, err := resolvePhasesPath()
+	pipelineName, _ := cmd.Flags().GetString("pipeline")
+	phasesPath, phasesCleanup, err := resolvePhasesPath(pipelineName)
 	if err != nil {
 		return fmt.Errorf("run: %w", err)
 	}
@@ -94,6 +96,9 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 	pl, err := pipeline.LoadPipeline(phasesPath)
 	if err != nil {
 		return fmt.Errorf("run: %w", err)
+	}
+	if pipelineName != "" {
+		pl.Name = pipelineName
 	}
 
 	// Set up prompt loader
@@ -155,6 +160,31 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 	state, err := pipeline.LoadOrCreate(stateDir, ticketKey)
 	if err != nil {
 		return fmt.Errorf("run: %w", err)
+	}
+
+	// When resuming, check if the stored pipeline differs from the current flag.
+	fromPhaseFlag, _ := cmd.Flags().GetString("from")
+	if fromPhaseFlag != "" {
+		storedPipeline := state.Meta().Pipeline
+		if !cmd.Flags().Changed("pipeline") && storedPipeline != "" && storedPipeline != pipelineName {
+			// Auto-adopt the stored pipeline name so the resume uses the correct config.
+			fmt.Fprintf(os.Stderr, "Warning: original run used pipeline %q; adopting for resume\n", storedPipeline)
+			pipelineName = storedPipeline
+			newPhasesPath, newCleanup, reloadErr := resolvePhasesPath(pipelineName)
+			if reloadErr != nil {
+				return fmt.Errorf("run: %w", reloadErr)
+			}
+			if newCleanup != nil {
+				defer newCleanup()
+			}
+			pl, err = pipeline.LoadPipeline(newPhasesPath)
+			if err != nil {
+				return fmt.Errorf("run: %w", err)
+			}
+			pl.Name = pipelineName
+		} else if cmd.Flags().Changed("pipeline") && storedPipeline != pipelineName {
+			fmt.Fprintf(os.Stderr, "Warning: original run used pipeline %q, but resuming with %q\n", storedPipeline, pipelineName)
+		}
 	}
 
 	// Resolve mode
@@ -271,6 +301,7 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 		PromptContext:        promptContext,
 		DetectedStack:        detectedStack,
 		Model:                cfg.Model,
+		PipelineName:         pipelineName,
 		BinaryVersion:        binaryVersionID(),
 		WorkDir:              workDir,
 		WorktreeBase:         filepath.Join(workDir, cfg.WorktreeDir),
