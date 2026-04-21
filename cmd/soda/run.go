@@ -280,6 +280,7 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 		MaxCostPerGeneration: cfg.Limits.MaxCostPerGeneration,
 		MaxPipelineDuration:  maxPipelineDuration,
 		MaxDiffBytes:         cfg.Limits.MaxDiffBytes,
+		MaxAPIConcurrency:    cfg.Limits.MaxAPIConcurrency,
 		Mode:                 mode,
 		PRPoller:             prPoller,
 		SelfUser:             selfUser,
