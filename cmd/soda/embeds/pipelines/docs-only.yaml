@@ -7,7 +7,7 @@ phases:
   - name: implement
     prompt: prompts/docs-implement.md
     schema: |
-      {"type":"object","properties":{"ticket_key":{"type":"string"},"branch":{"type":"string"},"commits":{"type":"array","items":{"type":"object","properties":{"hash":{"type":"string"},"message":{"type":"string"},"task_id":{"type":"string"}},"required":["hash","message","task_id"]}},"files_changed":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"action":{"type":"string"}},"required":["path","action"]}},"task_results":{"type":"array","items":{"type":"object","properties":{"task_id":{"type":"string"},"status":{"type":"string"},"reason":{"type":"string"}},"required":["task_id","status"]}},"tests_passed":{"type":"boolean"},"test_output":{"type":"string"},"deviations":{"type":"array","items":{"type":"string"}}},"required":["ticket_key","branch","commits","files_changed","task_results","tests_passed"]}
+      {"type":"object","properties":{"ticket_key":{"type":"string"},"branch":{"type":"string"},"commits":{"type":"array","items":{"type":"object","properties":{"hash":{"type":"string"},"message":{"type":"string"},"task_id":{"type":"string"}},"required":["hash","message","task_id"]}},"files_changed":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"action":{"type":"string"}},"required":["path","action"]}},"task_results":{"type":"array","items":{"type":"object","properties":{"task_id":{"type":"string"},"status":{"type":"string"},"reason":{"type":"string"}},"required":["task_id","status"]}},"tests_passed":{"type":"boolean"},"test_output":{"type":"string"},"deviations":{"type":"array","items":{"type":"string"}}},"required":["ticket_key","branch","commits","files_changed"]}
     tools:
       - Read
       - Write
