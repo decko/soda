@@ -284,7 +284,15 @@ func (e *Engine) Run(ctx context.Context) error {
 	e.emit(Event{Kind: EventPhaseCostsReset})
 
 	e.reranPhases = make(map[string]bool)
-	e.emit(Event{Kind: EventEngineStarted})
+	startedData := map[string]any{}
+	if e.config.PipelineName != "" {
+		startedData["pipeline"] = e.config.PipelineName
+	}
+	if len(startedData) == 0 {
+		e.emit(Event{Kind: EventEngineStarted})
+	} else {
+		e.emit(Event{Kind: EventEngineStarted, Data: startedData})
+	}
 
 	if err := e.executePhases(ctx, e.config.Pipeline.Phases, false); err != nil {
 		wrapped := e.wrapTimeoutError(ctx, err)
@@ -334,7 +342,11 @@ func (e *Engine) Resume(ctx context.Context, fromPhase string) error {
 	}
 
 	e.reranPhases = make(map[string]bool)
-	e.emit(Event{Kind: EventEngineStarted, Data: map[string]any{"resumed_from": fromPhase}})
+	resumeData := map[string]any{"resumed_from": fromPhase}
+	if e.config.PipelineName != "" {
+		resumeData["pipeline"] = e.config.PipelineName
+	}
+	e.emit(Event{Kind: EventEngineStarted, Data: resumeData})
 
 	// The fromPhase (first in slice) is always re-run, even if completed.
 	// Mark it with forceFirst=true so executePhases skips the shouldSkip check.
