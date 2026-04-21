@@ -497,3 +497,37 @@ func TestCleanAll_PreservesSessionData(t *testing.T) {
 		t.Errorf("expected TICKET-2 to still exist: %v", statErr)
 	}
 }
+
+func TestTryLock_NonexistentPath(t *testing.T) {
+	// A lock path whose parent directory doesn't exist — os.OpenFile will
+	// return ErrNotExist, which should be treated as "no lock held".
+	got := tryLock("/tmp/nonexistent-dir-soda-test/lock")
+	if !got {
+		t.Error("tryLock should return true when lock file parent dir does not exist")
+	}
+}
+
+func TestTryLock_PermissionError(t *testing.T) {
+	// Create a directory where we can't open files for writing.
+	dir := t.TempDir()
+	lockPath := filepath.Join(dir, "lock")
+
+	// Create the lock file, then make the directory read-only so OpenFile
+	// fails with a permission error.
+	if err := os.WriteFile(lockPath, nil, 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.Chmod(lockPath, 0000); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	t.Cleanup(func() {
+		os.Chmod(lockPath, 0644) // restore so TempDir cleanup works
+	})
+
+	// A permission error should cause tryLock to fail closed (return false),
+	// NOT silently skip the flock safety check.
+	got := tryLock(lockPath)
+	if got {
+		t.Error("tryLock should return false (fail closed) on permission error")
+	}
+}

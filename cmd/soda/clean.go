@@ -205,7 +205,10 @@ func clearCleanedRefs(metaPath string, meta *pipeline.PipelineMeta, worktreeClea
 func tryLock(lockPath string) bool {
 	fd, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
-		return true // no lock file means nothing is running
+		if errors.Is(err, os.ErrNotExist) {
+			return true // no lock file means nothing is running
+		}
+		return false // fail closed on unexpected errors (e.g. permission denied)
 	}
 	defer fd.Close()
 
