@@ -128,6 +128,9 @@ func (s *State) MarkRunning(phase string) error {
 	ps.Status = PhaseRunning
 	ps.Cost = 0
 	ps.DurationMs = 0
+	ps.TokensIn = 0
+	ps.TokensOut = 0
+	ps.CacheTokensIn = 0
 	ps.Error = ""
 	ps.PlanHash = ""
 	ps.startedAt = time.Now()

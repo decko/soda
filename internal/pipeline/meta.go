@@ -27,6 +27,9 @@ type PhaseState struct {
 	Cost           float64     `json:"cost,omitempty"`
 	CumulativeCost float64     `json:"cumulative_cost,omitempty"`
 	DurationMs     int64       `json:"duration_ms,omitempty"`
+	TokensIn       int64       `json:"tokens_in,omitempty"`
+	TokensOut      int64       `json:"tokens_out,omitempty"`
+	CacheTokensIn  int64       `json:"cache_tokens_in,omitempty"`
 	Error          string      `json:"error,omitempty"`
 	Generation     int         `json:"generation,omitempty"`
 	PlanHash       string      `json:"plan_hash,omitempty"`
