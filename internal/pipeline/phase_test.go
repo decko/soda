@@ -531,4 +531,172 @@ func TestLoadPipeline(t *testing.T) {
 			t.Errorf("got %d phases, want 3", len(pipeline.Phases))
 		}
 	})
+
+	t.Run("schema_file_loaded", func(t *testing.T) {
+		dir := t.TempDir()
+		schemaContent := `{"type":"object","properties":{"verdict":{"type":"string"}}}`
+		schemaPath := filepath.Join(dir, "custom.json")
+		if err := os.WriteFile(schemaPath, []byte(schemaContent), 0644); err != nil {
+			t.Fatalf("WriteFile schema: %v", err)
+		}
+
+		phasesPath := filepath.Join(dir, "phases.yaml")
+		content := `phases:
+  - name: custom-phase
+    prompt: prompts/custom.md
+    schema: custom.json
+    timeout: 1m
+`
+		if err := os.WriteFile(phasesPath, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile phases: %v", err)
+		}
+
+		pipeline, err := LoadPipeline(phasesPath)
+		if err != nil {
+			t.Fatalf("LoadPipeline: %v", err)
+		}
+
+		if pipeline.Phases[0].Schema != schemaContent {
+			t.Errorf("schema mismatch:\ngot:  %s\nwant: %s", pipeline.Phases[0].Schema, schemaContent)
+		}
+	})
+
+	t.Run("schema_file_relative_path", func(t *testing.T) {
+		dir := t.TempDir()
+		subdir := filepath.Join(dir, "schemas")
+		if err := os.MkdirAll(subdir, 0755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		schemaContent := `{"type":"object","required":["action"]}`
+		if err := os.WriteFile(filepath.Join(subdir, "act.json"), []byte(schemaContent), 0644); err != nil {
+			t.Fatalf("WriteFile schema: %v", err)
+		}
+
+		phasesPath := filepath.Join(dir, "phases.yaml")
+		content := `phases:
+  - name: act
+    prompt: prompts/act.md
+    schema: schemas/act.json
+    timeout: 1m
+`
+		if err := os.WriteFile(phasesPath, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile phases: %v", err)
+		}
+
+		pipeline, err := LoadPipeline(phasesPath)
+		if err != nil {
+			t.Fatalf("LoadPipeline: %v", err)
+		}
+
+		if pipeline.Phases[0].Schema != schemaContent {
+			t.Errorf("schema mismatch:\ngot:  %s\nwant: %s", pipeline.Phases[0].Schema, schemaContent)
+		}
+	})
+
+	t.Run("schema_file_overrides_generated", func(t *testing.T) {
+		dir := t.TempDir()
+		schemaContent := `{"type":"object","properties":{"custom_triage":{"type":"boolean"}}}`
+		if err := os.WriteFile(filepath.Join(dir, "triage.json"), []byte(schemaContent), 0644); err != nil {
+			t.Fatalf("WriteFile schema: %v", err)
+		}
+
+		phasesPath := filepath.Join(dir, "phases.yaml")
+		content := `phases:
+  - name: triage
+    prompt: prompts/triage.md
+    schema: triage.json
+    timeout: 1m
+`
+		if err := os.WriteFile(phasesPath, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile phases: %v", err)
+		}
+
+		pipeline, err := LoadPipeline(phasesPath)
+		if err != nil {
+			t.Fatalf("LoadPipeline: %v", err)
+		}
+
+		// The file schema should override the generated triage schema.
+		if pipeline.Phases[0].Schema != schemaContent {
+			t.Errorf("file schema should override generated:\ngot:  %s\nwant: %s", pipeline.Phases[0].Schema, schemaContent)
+		}
+		if pipeline.Phases[0].Schema == schemas.SchemaFor("triage") {
+			t.Error("schema was not overridden — still matches generated triage schema")
+		}
+	})
+
+	t.Run("errors_on_missing_schema_file", func(t *testing.T) {
+		dir := t.TempDir()
+		phasesPath := filepath.Join(dir, "phases.yaml")
+		content := `phases:
+  - name: custom-phase
+    prompt: prompts/custom.md
+    schema: nonexistent.json
+    timeout: 1m
+`
+		if err := os.WriteFile(phasesPath, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		_, err := LoadPipeline(phasesPath)
+		if err == nil {
+			t.Fatal("expected error for missing schema file")
+		}
+		if !strings.Contains(err.Error(), "read schema file") {
+			t.Errorf("error = %q, want mention of read schema file", err)
+		}
+		if !strings.Contains(err.Error(), "nonexistent.json") {
+			t.Errorf("error = %q, want mention of nonexistent.json", err)
+		}
+	})
+
+	t.Run("inline_json_schema_not_treated_as_file", func(t *testing.T) {
+		dir := t.TempDir()
+		phasesPath := filepath.Join(dir, "phases.yaml")
+		inlineSchema := `{"type":"object","properties":{"status":{"type":"string"}}}`
+		content := `phases:
+  - name: custom-phase
+    prompt: prompts/custom.md
+    schema: '` + inlineSchema + `'
+    timeout: 1m
+`
+		if err := os.WriteFile(phasesPath, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		pipeline, err := LoadPipeline(phasesPath)
+		if err != nil {
+			t.Fatalf("LoadPipeline: %v", err)
+		}
+
+		if pipeline.Phases[0].Schema != inlineSchema {
+			t.Errorf("inline schema was modified:\ngot:  %s\nwant: %s", pipeline.Phases[0].Schema, inlineSchema)
+		}
+	})
+}
+
+func TestIsFilePath(t *testing.T) {
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		{"schema.json", true},
+		{"./schema.json", true},
+		{"schemas/custom.json", true},
+		{"/absolute/path/schema.json", true},
+		{"relative/path/schema", true},
+		{`windows\path\schema`, true},
+		{`{"type":"object"}`, false},
+		{"plain-string", false},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := isFilePath(tt.input)
+			if got != tt.want {
+				t.Errorf("isFilePath(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
 }
