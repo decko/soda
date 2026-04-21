@@ -20,6 +20,16 @@ Summary: {{.Ticket.Summary}}
 {{.Ticket.ExistingPlan}}
 {{- end}}
 
+{{- if .SiblingContext}}
+
+## Sibling Function Context
+
+The following function signatures exist in files referenced by the plan.
+Use these to understand the surrounding code, naming conventions, and interfaces.
+
+{{.SiblingContext}}
+{{- end}}
+
 {{- if .ReworkFeedback}}
 {{- if .ReworkFeedback.ImplementDiff}}
 

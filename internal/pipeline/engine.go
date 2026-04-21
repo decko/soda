@@ -904,6 +904,16 @@ func (e *Engine) buildPromptData(phase PhaseConfig) (PromptData, error) {
 		}
 	}
 
+	// Inject sibling-function context for phases that depend on the plan.
+	// This reads the plan result JSON, extracts referenced file paths,
+	// and collects function signatures so the LLM can see surrounding
+	// code in the files it needs to modify.
+	if data.Artifacts.Plan != "" {
+		if planResult, err := e.state.ReadResult("plan"); err == nil {
+			data.SiblingContext = BuildSiblingContext(e.workDir(phase), planResult)
+		}
+	}
+
 	// Inject rework feedback from configured sources. The FeedbackFrom
 	// list is read from the phase's own config. Sources are tried in
 	// priority order; the first one that produces feedback wins.
