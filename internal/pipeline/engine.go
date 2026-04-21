@@ -266,7 +266,9 @@ func (e *Engine) Run(ctx context.Context) error {
 	}
 
 	// Record pipeline name in meta for identification.
-	if e.state.Meta().Pipeline == "" && e.config.PipelineName != "" {
+	// Always update when explicitly set so re-running with a different
+	// --pipeline flag stores the correct name for future resumes.
+	if e.config.PipelineName != "" {
 		e.state.Meta().Pipeline = e.config.PipelineName
 	}
 
@@ -335,6 +337,13 @@ func (e *Engine) Resume(ctx context.Context, fromPhase string) error {
 	// Cache ticket summary in meta for soda sessions/history display.
 	if e.state.Meta().Summary == "" && e.config.Ticket.Summary != "" {
 		e.state.Meta().Summary = e.config.Ticket.Summary
+	}
+
+	// Record pipeline name in meta for identification.
+	// Always update when explicitly set so re-running with a different
+	// --pipeline flag stores the correct name for future resumes.
+	if e.config.PipelineName != "" {
+		e.state.Meta().Pipeline = e.config.PipelineName
 	}
 
 	if err := e.ensureWorktree(ctx); err != nil {
