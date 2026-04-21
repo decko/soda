@@ -1,0 +1,39 @@
+# SODA Docs-Only Pipeline
+#
+# A minimal pipeline for documentation-only changes that skip triage,
+# planning, and verification. Two phases: implement → submit.
+
+phases:
+  - name: implement
+    prompt: prompts/docs-implement.md
+    schema: |
+      {"type":"object","properties":{"ticket_key":{"type":"string"},"branch":{"type":"string"},"commits":{"type":"array","items":{"type":"object","properties":{"hash":{"type":"string"},"message":{"type":"string"},"task_id":{"type":"string"}},"required":["hash","message","task_id"]}},"files_changed":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"action":{"type":"string"}},"required":["path","action"]}},"task_results":{"type":"array","items":{"type":"object","properties":{"task_id":{"type":"string"},"status":{"type":"string"},"reason":{"type":"string"}},"required":["task_id","status"]}},"tests_passed":{"type":"boolean"},"test_output":{"type":"string"},"deviations":{"type":"array","items":{"type":"string"}}},"required":["ticket_key","branch","commits","files_changed"]}
+    tools:
+      - Read
+      - Write
+      - Edit
+      - Glob
+      - Grep
+      - Bash
+    timeout: 10m
+    retry:
+      transient: 2
+      parse: 1
+      semantic: 0
+    depends_on: []
+
+  - name: submit
+    prompt: prompts/submit.md
+    schema: |
+      {"type":"object","properties":{"ticket_key":{"type":"string"},"pr_url":{"type":"string"},"pr_number":{"type":"integer"},"title":{"type":"string"},"branch":{"type":"string"},"target":{"type":"string"},"forge":{"type":"string"}},"required":["ticket_key","pr_url","pr_number","title","branch","target","forge"]}
+    tools:
+      - Bash(git:*)
+      - Bash(gh:*)
+      - Bash(glab:*)
+    timeout: 3m
+    retry:
+      transient: 2
+      parse: 1
+      semantic: 0
+    depends_on:
+      - implement

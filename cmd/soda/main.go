@@ -18,6 +18,16 @@ var embeddedPrompts embed.FS
 //go:embed embeds/phases.yaml
 var embeddedPhases []byte
 
+//go:embed all:embeds/pipelines
+var embeddedPipelines embed.FS
+
+// knownEmbeddedPipelines maps pipeline names to their embedded file paths
+// within the embeddedPipelines filesystem.
+var knownEmbeddedPipelines = map[string]string{
+	"quick-fix": "embeds/pipelines/quick-fix.yaml",
+	"docs-only": "embeds/pipelines/docs-only.yaml",
+}
+
 var version = "dev"
 
 func main() {
@@ -140,10 +150,28 @@ func resolvePhasesPath(pipelineName string) (path string, cleanup func(), err er
 		}
 	}
 
-	// Named pipelines have no embedded fallback.
+	// Check known embedded pipelines.
 	if pipelineName != "" && pipelineName != "default" {
-		return "", nil, fmt.Errorf("pipeline %q not found (looked for %s in . and %s)",
-			pipelineName, filename, filepath.Join(configDir, "soda"))
+		embeddedPath, ok := knownEmbeddedPipelines[pipelineName]
+		if !ok {
+			return "", nil, fmt.Errorf("pipeline %q not found (looked for %s in . and %s)",
+				pipelineName, filename, filepath.Join(configDir, "soda"))
+		}
+		data, readErr := fs.ReadFile(embeddedPipelines, embeddedPath)
+		if readErr != nil {
+			return "", nil, fmt.Errorf("read embedded pipeline %q: %w", pipelineName, readErr)
+		}
+		tmpFile, tmpErr := os.CreateTemp("", "soda-phases-*.yaml")
+		if tmpErr != nil {
+			return "", nil, fmt.Errorf("create temp phases file: %w", tmpErr)
+		}
+		if _, writeErr := tmpFile.Write(data); writeErr != nil {
+			tmpFile.Close()
+			os.Remove(tmpFile.Name())
+			return "", nil, fmt.Errorf("write embedded phases: %w", writeErr)
+		}
+		tmpFile.Close()
+		return tmpFile.Name(), func() { os.Remove(tmpFile.Name()) }, nil
 	}
 
 	// Fall back to embedded default.

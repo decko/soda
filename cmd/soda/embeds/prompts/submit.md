@@ -8,8 +8,11 @@ Summary: {{.Ticket.Summary}}
 ## Implementation Report
 {{.Artifacts.Implement}}
 
+{{- if .Artifacts.Verify}}
+
 ## Verification Report
 {{.Artifacts.Verify}}
+{{- end}}
 
 ## Repo Configuration
 

@@ -302,6 +302,56 @@ func TestNewValidateCmd_NoArgs(t *testing.T) {
 	}
 }
 
+func TestRunValidate_QuickFixPipeline(t *testing.T) {
+	cfg := &config.Config{
+		TicketSource: "github",
+		Mode:         "autonomous",
+		Model:        "claude-sonnet-4-20250514",
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := runValidate(&stdout, &stderr, cfg, "quick-fix")
+	if err != nil {
+		t.Fatalf("runValidate(quick-fix) returned error: %v\nstdout: %s\nstderr: %s", err, stdout.String(), stderr.String())
+	}
+
+	output := stdout.String()
+	if !strings.Contains(output, "✓ phases:") {
+		t.Error("expected phases valid message for quick-fix")
+	}
+	if !strings.Contains(output, "3 phases loaded") {
+		t.Errorf("expected '3 phases loaded' for quick-fix, got: %s", output)
+	}
+	if !strings.Contains(output, "Validation passed") {
+		t.Error("expected validation passed for quick-fix")
+	}
+}
+
+func TestRunValidate_DocsOnlyPipeline(t *testing.T) {
+	cfg := &config.Config{
+		TicketSource: "github",
+		Mode:         "autonomous",
+		Model:        "claude-sonnet-4-20250514",
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := runValidate(&stdout, &stderr, cfg, "docs-only")
+	if err != nil {
+		t.Fatalf("runValidate(docs-only) returned error: %v\nstdout: %s\nstderr: %s", err, stdout.String(), stderr.String())
+	}
+
+	output := stdout.String()
+	if !strings.Contains(output, "✓ phases:") {
+		t.Error("expected phases valid message for docs-only")
+	}
+	if !strings.Contains(output, "2 phases loaded") {
+		t.Errorf("expected '2 phases loaded' for docs-only, got: %s", output)
+	}
+	if !strings.Contains(output, "Validation passed") {
+		t.Error("expected validation passed for docs-only")
+	}
+}
+
 func TestRunValidate_ErrorOutput(t *testing.T) {
 	// Test that errors go to stderr and success markers go to stdout.
 	cfg := &config.Config{

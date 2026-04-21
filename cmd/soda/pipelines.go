@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"text/tabwriter"
 
 	"github.com/decko/soda/internal/pipeline"
@@ -29,21 +30,42 @@ func runPipelines(cmd *cobra.Command) error {
 
 	pipelines := pipeline.DiscoverPipelines(dirs, sources)
 
-	// Always include the embedded default if not already found.
-	hasDefault := false
+	// Always include embedded pipelines if not already discovered on disk.
+	discovered := make(map[string]bool, len(pipelines))
 	for _, p := range pipelines {
-		if p.Name == "default" {
-			hasDefault = true
-			break
-		}
+		discovered[p.Name] = true
 	}
-	if !hasDefault {
+
+	// Embedded default pipeline.
+	if !discovered["default"] {
 		pipelines = append([]pipeline.PipelineInfo{{
 			Name:   "default",
 			Path:   "(embedded)",
 			Source: "embedded",
 		}}, pipelines...)
 	}
+
+	// Known embedded alternative pipelines.
+	for name := range knownEmbeddedPipelines {
+		if !discovered[name] {
+			pipelines = append(pipelines, pipeline.PipelineInfo{
+				Name:   name,
+				Path:   "(embedded)",
+				Source: "embedded",
+			})
+		}
+	}
+
+	// Re-sort: "default" first, then alphabetical.
+	sort.Slice(pipelines, func(i, j int) bool {
+		if pipelines[i].Name == "default" {
+			return true
+		}
+		if pipelines[j].Name == "default" {
+			return false
+		}
+		return pipelines[i].Name < pipelines[j].Name
+	})
 
 	if len(pipelines) == 0 {
 		fmt.Fprintln(cmd.OutOrStdout(), "No pipeline configurations found.")
