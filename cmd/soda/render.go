@@ -254,6 +254,7 @@ func buildJiraExtractors(cfg *config.Config) []ticket.ArtifactExtractor {
 }
 
 func loadArtifacts(state *pipeline.State, data *pipeline.PromptData, pl *pipeline.PhasePipeline) {
+	data.Artifacts.Extras = make(map[string]string)
 	builtins := map[string]bool{
 		"triage":    true,
 		"plan":      true,
@@ -286,9 +287,6 @@ func loadArtifacts(state *pipeline.State, data *pipeline.PromptData, pl *pipelin
 		for _, dep := range phase.DependsOn {
 			if !builtins[dep] {
 				if artifact, err := state.ReadArtifact(dep); err == nil {
-					if data.Artifacts.Extras == nil {
-						data.Artifacts.Extras = make(map[string]string)
-					}
 					data.Artifacts.Extras[dep] = string(artifact)
 				}
 			}
