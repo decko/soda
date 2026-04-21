@@ -673,6 +673,32 @@ func TestLoadPipeline(t *testing.T) {
 			t.Errorf("inline schema was modified:\ngot:  %s\nwant: %s", pipeline.Phases[0].Schema, inlineSchema)
 		}
 	})
+
+	t.Run("inline_json_schema_with_slashes_not_treated_as_file", func(t *testing.T) {
+		dir := t.TempDir()
+		phasesPath := filepath.Join(dir, "phases.yaml")
+		// Inline schemas containing forward slashes (e.g. $ref or $schema URLs)
+		// must not be misidentified as file paths.
+		inlineSchema := `{"$schema":"http://json-schema.org/draft-07/schema#","$ref":"#/definitions/Foo"}`
+		content := `phases:
+  - name: custom-phase
+    prompt: prompts/custom.md
+    schema: '` + inlineSchema + `'
+    timeout: 1m
+`
+		if err := os.WriteFile(phasesPath, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		pipeline, err := LoadPipeline(phasesPath)
+		if err != nil {
+			t.Fatalf("LoadPipeline: %v", err)
+		}
+
+		if pipeline.Phases[0].Schema != inlineSchema {
+			t.Errorf("inline schema with slashes was modified:\ngot:  %s\nwant: %s", pipeline.Phases[0].Schema, inlineSchema)
+		}
+	})
 }
 
 func TestIsFilePath(t *testing.T) {
@@ -687,6 +713,8 @@ func TestIsFilePath(t *testing.T) {
 		{"relative/path/schema", true},
 		{`windows\path\schema`, true},
 		{`{"type":"object"}`, false},
+		{`{"$ref":"#/definitions/Foo"}`, false},
+		{`{"$schema":"http://json-schema.org/draft-07/schema#"}`, false},
 		{"plain-string", false},
 		{"", false},
 	}

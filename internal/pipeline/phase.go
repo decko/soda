@@ -13,7 +13,11 @@ import (
 
 // isFilePath returns true if s looks like a file path rather than an inline
 // JSON schema string. It checks for path separators or a .json suffix.
+// Strings that start with '{' are treated as inline JSON, not file paths.
 func isFilePath(s string) bool {
+	if strings.HasPrefix(strings.TrimSpace(s), "{") {
+		return false
+	}
 	return strings.ContainsAny(s, "/\\") || strings.HasSuffix(s, ".json")
 }
 
