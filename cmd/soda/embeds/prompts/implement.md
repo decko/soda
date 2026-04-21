@@ -21,6 +21,17 @@ Summary: {{.Ticket.Summary}}
 {{- end}}
 
 {{- if .ReworkFeedback}}
+{{- if .ReworkFeedback.ImplementDiff}}
+
+## Current Implementation Diff
+
+The following diff shows what was implemented so far (base...HEAD).
+Use this to understand what changes already exist before applying fixes.
+
+```diff
+{{.ReworkFeedback.ImplementDiff}}
+```
+{{- end}}
 {{- if .ReworkFeedback.PriorCycles}}
 
 ## Context: Prior Review Cycles
