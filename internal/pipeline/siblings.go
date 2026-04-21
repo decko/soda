@@ -219,7 +219,14 @@ func exprString(expr ast.Expr) string {
 // referenced files, and returns a formatted string of function
 // signatures grouped by file. Returns an empty string if the plan
 // result is unavailable or contains no Go files.
-func BuildSiblingContext(workDir string, planResult json.RawMessage) string {
+//
+// maxBytes limits the total size of the returned string. When maxBytes
+// is 0, the default limit (maxSiblingContextBytes) is used.
+func BuildSiblingContext(workDir string, planResult json.RawMessage, maxBytes int) string {
+	if maxBytes <= 0 {
+		maxBytes = maxSiblingContextBytes
+	}
+
 	files, err := ExtractPlanFiles(planResult)
 	if err != nil || len(files) == 0 {
 		return ""
@@ -255,7 +262,7 @@ func BuildSiblingContext(workDir string, planResult json.RawMessage) string {
 		}
 
 		section := b.String()
-		if totalBytes+len(section) > maxSiblingContextBytes {
+		if totalBytes+len(section) > maxBytes {
 			break
 		}
 		totalBytes += len(section)

@@ -30,36 +30,37 @@ const DefaultMaxReworkCycles = 2
 
 // EngineConfig holds everything needed to construct an Engine.
 type EngineConfig struct {
-	Pipeline             *PhasePipeline
-	Loader               *PromptLoader
-	Ticket               TicketData
-	PromptConfig         PromptConfigData
-	PromptContext        ContextData
-	DetectedStack        DetectedStackData // auto-detected project stack info; zero value if detection was skipped
-	Model                string
-	PipelineName         string // pipeline config name (e.g. "fast"); empty means "default"
-	BinaryVersion        string // binary build identifier; recorded in meta on first run, checked for staleness on resume
-	WorkDir              string
-	WorktreeBase         string
-	BaseBranch           string
-	MaxCostUSD           float64
-	MaxCostPerPhase      float64       // per-phase cost cap; 0 means no per-phase limit
-	MaxCostPerGeneration float64       // per-generation cost cap (ps.Cost); 0 means no per-generation limit
-	MaxPipelineDuration  time.Duration // max wall-clock time for the entire pipeline; 0 means no limit
-	MaxReworkCycles      int           // max review→implement rework loops; 0 means use default (2)
-	MaxDiffBytes         int           // max bytes of git diff injected into rework prompts; 0 means use default (50000)
-	MaxAPIConcurrency    int           // max concurrent runner.Run calls; 0 means unlimited
-	Mode                 Mode
-	OnEvent              func(Event)
-	PauseSignal          <-chan bool // receives true=pause, false=resume from TUI; nil disables
-	SleepFunc            func(time.Duration)
-	JitterFunc           func(max time.Duration) time.Duration
-	PRPoller             PRPoller          // for monitor phase polling; nil disables monitor
-	NowFunc              func() time.Time  // for testability; defaults to time.Now
-	AuthorityResolver    AuthorityResolver // for comment authority checks; nil → all authoritative
-	MonitorProfile       *MonitorProfile   // behavioral profile; nil → use polling config as-is
-	SelfUser             string            // PR author username for self-comment filtering
-	BotUsers             []string          // known bot usernames to filter
+	Pipeline               *PhasePipeline
+	Loader                 *PromptLoader
+	Ticket                 TicketData
+	PromptConfig           PromptConfigData
+	PromptContext          ContextData
+	DetectedStack          DetectedStackData // auto-detected project stack info; zero value if detection was skipped
+	Model                  string
+	PipelineName           string // pipeline config name (e.g. "fast"); empty means "default"
+	BinaryVersion          string // binary build identifier; recorded in meta on first run, checked for staleness on resume
+	WorkDir                string
+	WorktreeBase           string
+	BaseBranch             string
+	MaxCostUSD             float64
+	MaxCostPerPhase        float64       // per-phase cost cap; 0 means no per-phase limit
+	MaxCostPerGeneration   float64       // per-generation cost cap (ps.Cost); 0 means no per-generation limit
+	MaxPipelineDuration    time.Duration // max wall-clock time for the entire pipeline; 0 means no limit
+	MaxReworkCycles        int           // max review→implement rework loops; 0 means use default (2)
+	MaxDiffBytes           int           // max bytes of git diff injected into rework prompts; 0 means use default (50000)
+	MaxAPIConcurrency      int           // max concurrent runner.Run calls; 0 means unlimited
+	MaxSiblingContextBytes int           // max bytes of sibling-function context injected into implement prompts; 0 means use default (20000)
+	Mode                   Mode
+	OnEvent                func(Event)
+	PauseSignal            <-chan bool // receives true=pause, false=resume from TUI; nil disables
+	SleepFunc              func(time.Duration)
+	JitterFunc             func(max time.Duration) time.Duration
+	PRPoller               PRPoller          // for monitor phase polling; nil disables monitor
+	NowFunc                func() time.Time  // for testability; defaults to time.Now
+	AuthorityResolver      AuthorityResolver // for comment authority checks; nil → all authoritative
+	MonitorProfile         *MonitorProfile   // behavioral profile; nil → use polling config as-is
+	SelfUser               string            // PR author username for self-comment filtering
+	BotUsers               []string          // known bot usernames to filter
 }
 
 // maxReworkCycles returns the configured max rework cycles, defaulting to DefaultMaxReworkCycles.
@@ -910,7 +911,7 @@ func (e *Engine) buildPromptData(phase PhaseConfig) (PromptData, error) {
 	// code in the files it needs to modify.
 	if data.Artifacts.Plan != "" {
 		if planResult, err := e.state.ReadResult("plan"); err == nil {
-			data.SiblingContext = BuildSiblingContext(e.workDir(phase), planResult)
+			data.SiblingContext = BuildSiblingContext(e.workDir(phase), planResult, e.config.MaxSiblingContextBytes)
 		}
 	}
 

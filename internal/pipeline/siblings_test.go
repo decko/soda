@@ -322,7 +322,7 @@ func validateInput(input string) bool {
 			"verification": {"commands":["go test ./..."]}
 		}`
 
-		ctx := BuildSiblingContext(dir, json.RawMessage(plan))
+		ctx := BuildSiblingContext(dir, json.RawMessage(plan), 0)
 		if ctx == "" {
 			t.Fatal("expected non-empty sibling context")
 		}
@@ -347,14 +347,14 @@ func validateInput(input string) bool {
 			],
 			"verification": {"commands":[]}
 		}`
-		ctx := BuildSiblingContext(dir, json.RawMessage(plan))
+		ctx := BuildSiblingContext(dir, json.RawMessage(plan), 0)
 		if ctx != "" {
 			t.Errorf("expected empty context for nonexistent files, got: %s", ctx)
 		}
 	})
 
 	t.Run("returns_empty_for_nil_plan", func(t *testing.T) {
-		ctx := BuildSiblingContext(t.TempDir(), nil)
+		ctx := BuildSiblingContext(t.TempDir(), nil, 0)
 		if ctx != "" {
 			t.Errorf("expected empty context for nil plan, got: %s", ctx)
 		}
@@ -373,7 +373,7 @@ func validateInput(input string) bool {
 			],
 			"verification": {"commands":[]}
 		}`
-		ctx := BuildSiblingContext(dir, json.RawMessage(plan))
+		ctx := BuildSiblingContext(dir, json.RawMessage(plan), 0)
 		if ctx != "" {
 			t.Errorf("expected empty context for non-Go files, got: %s", ctx)
 		}
@@ -395,7 +395,7 @@ func TestFoo(t *testing.T) {}
 			],
 			"verification": {"commands":[]}
 		}`
-		ctx := BuildSiblingContext(dir, json.RawMessage(plan))
+		ctx := BuildSiblingContext(dir, json.RawMessage(plan), 0)
 		if ctx == "" {
 			t.Errorf("expected non-empty context for test files, got empty")
 		}
@@ -431,7 +431,7 @@ func TestFoo(t *testing.T) {}
 			],
 			"verification": {"commands":[]}
 		}`
-		ctx := BuildSiblingContext(dir, json.RawMessage(plan))
+		ctx := BuildSiblingContext(dir, json.RawMessage(plan), 0)
 		if len(ctx) > maxSiblingContextBytes+500 {
 			t.Errorf("context too large: %d bytes, limit is %d", len(ctx), maxSiblingContextBytes)
 		}
