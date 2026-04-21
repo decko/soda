@@ -60,17 +60,36 @@ func runStatus(stateDir string) error {
 		return fmt.Errorf("status: read state dir: %w", err)
 	}
 
-	// Load pipeline config for deterministic phase ordering.
-	phasesPath, cleanup, phasesErr := resolvePhasesPath("")
-	if phasesErr != nil {
-		return fmt.Errorf("status: %w", phasesErr)
+	// Cache loaded pipeline configs by name to avoid redundant I/O.
+	type pipelineCache struct {
+		pl      *pipeline.PhasePipeline
+		cleanup func()
 	}
-	if cleanup != nil {
-		defer cleanup()
-	}
-	pl, phasesErr := pipeline.LoadPipeline(phasesPath)
-	if phasesErr != nil {
-		return fmt.Errorf("status: %w", phasesErr)
+	plCache := map[string]*pipelineCache{}
+	defer func() {
+		for _, c := range plCache {
+			if c.cleanup != nil {
+				c.cleanup()
+			}
+		}
+	}()
+	loadPipelineFor := func(name string) (*pipeline.PhasePipeline, error) {
+		if cached, ok := plCache[name]; ok {
+			return cached.pl, nil
+		}
+		phasesPath, cleanup, err := resolvePhasesPath(name)
+		if err != nil {
+			return nil, err
+		}
+		pl, err := pipeline.LoadPipeline(phasesPath)
+		if err != nil {
+			if cleanup != nil {
+				cleanup()
+			}
+			return nil, err
+		}
+		plCache[name] = &pipelineCache{pl: pl, cleanup: cleanup}
+		return pl, nil
 	}
 
 	// Read the cost ledger once and compute per-ticket cost trends.
@@ -91,6 +110,13 @@ func runStatus(stateDir string) error {
 
 		meta, metaErr := pipeline.ReadMeta(metaPath)
 		if metaErr != nil {
+			continue
+		}
+
+		// Use the pipeline name stored in meta to load the correct phase config.
+		pl, plErr := loadPipelineFor(meta.Pipeline)
+		if plErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not load pipeline %q for %s: %v\n", meta.Pipeline, meta.Ticket, plErr)
 			continue
 		}
 
