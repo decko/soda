@@ -19,7 +19,7 @@ var errSkipped = errors.New("skipped")
 func newCleanCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "clean [ticket]",
-		Short: "Remove completed/failed pipeline state and worktrees",
+		Short: "Remove worktrees and branches, preserving session data (use --purge for full wipe)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig(cmd)
@@ -29,13 +29,14 @@ func newCleanCmd() *cobra.Command {
 			all, _ := cmd.Flags().GetBool("all")
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
 			force, _ := cmd.Flags().GetBool("force")
+			purge, _ := cmd.Flags().GetBool("purge")
 
 			ctx := cmd.Context()
 			if len(args) == 1 {
-				return cleanTicket(ctx, cfg.StateDir, args[0], dryRun, force)
+				return cleanTicket(ctx, cfg.StateDir, args[0], dryRun, force, purge)
 			}
 			if all {
-				return cleanAll(ctx, cfg.StateDir, dryRun, force)
+				return cleanAll(ctx, cfg.StateDir, dryRun, force, purge)
 			}
 			return fmt.Errorf("specify a ticket key or use --all")
 		},
@@ -44,11 +45,12 @@ func newCleanCmd() *cobra.Command {
 	cmd.Flags().Bool("all", false, "clean all tickets in terminal state")
 	cmd.Flags().Bool("dry-run", false, "show what would be cleaned without doing it")
 	cmd.Flags().Bool("force", false, "clean even if not in terminal state (does not override running pipeline lock)")
+	cmd.Flags().Bool("purge", false, "remove all session data including state directory (default preserves meta, events, and artifacts)")
 
 	return cmd
 }
 
-func cleanAll(ctx context.Context, stateDir string, dryRun, force bool) error {
+func cleanAll(ctx context.Context, stateDir string, dryRun, force, purge bool) error {
 	entries, err := os.ReadDir(stateDir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -65,7 +67,7 @@ func cleanAll(ctx context.Context, stateDir string, dryRun, force bool) error {
 		if !entry.IsDir() {
 			continue
 		}
-		if err := cleanTicket(ctx, stateDir, entry.Name(), dryRun, force); err != nil {
+		if err := cleanTicket(ctx, stateDir, entry.Name(), dryRun, force, purge); err != nil {
 			if !errors.Is(err, errSkipped) {
 				fmt.Fprintf(os.Stderr, "Warning: %s: %v\n", entry.Name(), err)
 			}
@@ -80,7 +82,7 @@ func cleanAll(ctx context.Context, stateDir string, dryRun, force bool) error {
 	return nil
 }
 
-func cleanTicket(ctx context.Context, stateDir, ticketKey string, dryRun, force bool) error {
+func cleanTicket(ctx context.Context, stateDir, ticketKey string, dryRun, force, purge bool) error {
 	ticketDir := filepath.Join(stateDir, ticketKey)
 	metaPath := filepath.Join(ticketDir, "meta.json")
 
@@ -146,17 +148,41 @@ func cleanTicket(ctx context.Context, stateDir, ticketKey string, dryRun, force 
 		}
 	}
 
-	// Remove state directory
-	if dryRun {
-		fmt.Printf("Would remove state: %s\n", ticketDir)
-	} else {
-		if rmErr := os.RemoveAll(ticketDir); rmErr != nil {
-			return fmt.Errorf("remove state dir: %w", rmErr)
+	if purge {
+		// --purge: remove the entire state directory (full wipe).
+		if dryRun {
+			fmt.Printf("Would purge state: %s\n", ticketDir)
+		} else {
+			if rmErr := os.RemoveAll(ticketDir); rmErr != nil {
+				return fmt.Errorf("remove state dir: %w", rmErr)
+			}
+			fmt.Printf("Purged state: %s\n", ticketDir)
 		}
-		fmt.Printf("Removed state: %s\n", ticketDir)
+	} else {
+		// Default: preserve session data (meta.json, events.jsonl, artifacts, logs)
+		// but clear stale worktree/branch references and remove the lock file.
+		if dryRun {
+			fmt.Printf("Would preserve state: %s (clearing worktree/branch references)\n", ticketDir)
+		} else {
+			if err := clearCleanedRefs(metaPath, meta); err != nil {
+				return fmt.Errorf("update meta after clean: %w", err)
+			}
+			// Remove the lock file since the pipeline is not running.
+			os.Remove(lockPath)
+			fmt.Printf("Cleaned %s (session data preserved)\n", ticketKey)
+		}
 	}
 
 	return nil
+}
+
+// clearCleanedRefs updates meta.json to remove worktree and branch references
+// that were cleaned away. This prevents stale references in commands like
+// soda status/sessions/history that read meta.json.
+func clearCleanedRefs(metaPath string, meta *pipeline.PipelineMeta) error {
+	meta.Worktree = ""
+	meta.Branch = ""
+	return pipeline.WriteMeta(metaPath, meta)
 }
 
 // tryLock attempts a non-blocking flock. Returns true if lock was acquired

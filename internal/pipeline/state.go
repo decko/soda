@@ -47,7 +47,7 @@ func LoadOrCreate(stateDir, ticketKey string) (*State, error) {
 		Phases:    make(map[string]*PhaseState),
 	}
 
-	if err := writeMeta(metaPath, meta); err != nil {
+	if err := WriteMeta(metaPath, meta); err != nil {
 		return nil, err
 	}
 
@@ -82,7 +82,7 @@ func (s *State) Meta() *PipelineMeta {
 
 // flushMeta writes the current meta to disk atomically.
 func (s *State) flushMeta() error {
-	return writeMeta(filepath.Join(s.dir, "meta.json"), s.meta)
+	return WriteMeta(filepath.Join(s.dir, "meta.json"), s.meta)
 }
 
 // validateTicketKey checks for empty strings and path traversal.
