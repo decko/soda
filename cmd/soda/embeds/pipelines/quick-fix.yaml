@@ -1,0 +1,57 @@
+# SODA Quick-Fix Pipeline
+#
+# A shortened pipeline for small, well-understood fixes that skip
+# triage and planning. Three phases: implement → verify → submit.
+
+phases:
+  - name: implement
+    prompt: prompts/quick-fix-implement.md
+    schema: |
+      {"type":"object","properties":{"ticket_key":{"type":"string"},"branch":{"type":"string"},"commits":{"type":"array","items":{"type":"object","properties":{"hash":{"type":"string"},"message":{"type":"string"},"task_id":{"type":"string"}},"required":["hash","message","task_id"]}},"files_changed":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"action":{"type":"string"}},"required":["path","action"]}},"task_results":{"type":"array","items":{"type":"object","properties":{"task_id":{"type":"string"},"status":{"type":"string"},"reason":{"type":"string"}},"required":["task_id","status"]}},"tests_passed":{"type":"boolean"},"test_output":{"type":"string"},"deviations":{"type":"array","items":{"type":"string"}}},"required":["ticket_key","branch","commits","files_changed","task_results","tests_passed"]}
+    tools:
+      - Read
+      - Write
+      - Edit
+      - Glob
+      - Grep
+      - Bash
+    timeout: 15m
+    retry:
+      transient: 2
+      parse: 1
+      semantic: 0
+    depends_on: []
+
+  - name: verify
+    prompt: prompts/verify.md
+    schema: |
+      {"type":"object","properties":{"ticket_key":{"type":"string"},"verdict":{"type":"string"},"criteria_results":{"type":"array","items":{"type":"object","properties":{"criterion":{"type":"string"},"passed":{"type":"boolean"},"evidence":{"type":"string"}},"required":["criterion","passed","evidence"]}},"command_results":{"type":"array","items":{"type":"object","properties":{"command":{"type":"string"},"exit_code":{"type":"integer"},"output":{"type":"string"},"passed":{"type":"boolean"}},"required":["command","exit_code","output","passed"]}},"code_issues":{"type":"array","items":{"type":"object","properties":{"file":{"type":"string"},"line":{"type":"integer"},"severity":{"type":"string"},"issue":{"type":"string"},"suggested_fix":{"type":"string"}},"required":["file","severity","issue"]}},"fixes_required":{"type":"array","items":{"type":"string"}}},"required":["ticket_key","verdict","criteria_results","command_results"]}
+    tools:
+      - Read
+      - Glob
+      - Grep
+      - Bash
+    timeout: 8m
+    retry:
+      transient: 2
+      parse: 1
+      semantic: 1
+    depends_on:
+      - implement
+
+  - name: submit
+    prompt: prompts/submit.md
+    schema: |
+      {"type":"object","properties":{"ticket_key":{"type":"string"},"pr_url":{"type":"string"},"pr_number":{"type":"integer"},"title":{"type":"string"},"branch":{"type":"string"},"target":{"type":"string"},"forge":{"type":"string"}},"required":["ticket_key","pr_url","pr_number","title","branch","target","forge"]}
+    tools:
+      - Bash(git:*)
+      - Bash(gh:*)
+      - Bash(glab:*)
+    timeout: 3m
+    retry:
+      transient: 2
+      parse: 1
+      semantic: 0
+    depends_on:
+      - implement
+      - verify
