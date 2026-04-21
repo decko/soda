@@ -87,6 +87,7 @@ const (
 	EventPipelineTimeout          = "pipeline_timeout"
 	EventPhaseCostsReset          = "phase_costs_reset"
 	EventBinaryVersionMismatch    = "binary_version_mismatch"
+	EventAPISemaphoreWait         = "api_semaphore_wait"
 )
 
 // FormatEvent formats an event as a compact, human-readable line:

@@ -47,6 +47,7 @@ type EngineConfig struct {
 	MaxPipelineDuration  time.Duration // max wall-clock time for the entire pipeline; 0 means no limit
 	MaxReworkCycles      int           // max review→implement rework loops; 0 means use default (2)
 	MaxDiffBytes         int           // max bytes of git diff injected into rework prompts; 0 means use default (50000)
+	MaxAPIConcurrency    int           // max concurrent runner.Run calls; 0 means unlimited
 	Mode                 Mode
 	OnEvent              func(Event)
 	PauseSignal          <-chan bool // receives true=pause, false=resume from TUI; nil disables
@@ -83,6 +84,7 @@ type Engine struct {
 	runner           runner.Runner
 	config           EngineConfig
 	state            *State
+	apiSem           *Semaphore // limits concurrent runner.Run calls; nil means unlimited
 	confirmCh        chan struct{}
 	reranPhases      map[string]bool // phases that ran (not skipped) in this execution
 	pauseMu          sync.Mutex
@@ -108,6 +110,7 @@ func NewEngine(r runner.Runner, state *State, cfg EngineConfig) *Engine {
 		runner: r,
 		config: cfg,
 		state:  state,
+		apiSem: NewSemaphore(cfg.MaxAPIConcurrency),
 	}
 	e.pauseCond = sync.NewCond(&e.pauseMu)
 
@@ -721,7 +724,12 @@ func (e *Engine) runWithRetry(ctx context.Context, phase PhaseConfig, opts runne
 
 	attempt := 0
 	for {
+		if err := e.apiSem.Acquire(ctx); err != nil {
+			return nil, fmt.Errorf("engine: phase %s semaphore acquire: %w", phase.Name, err)
+		}
 		result, err := e.runner.Run(ctx, opts)
+		e.apiSem.Release()
+
 		if err == nil {
 			return result, nil
 		}
