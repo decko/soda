@@ -500,6 +500,68 @@ func TestLoadPipeline(t *testing.T) {
 		}
 	})
 
+	t.Run("errors_on_invalid_depends_on", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "phases.yaml")
+		content := `phases:
+  - name: triage
+    prompt: prompts/triage.md
+    timeout: 1m
+  - name: plan
+    prompt: prompts/plan.md
+    timeout: 5m
+    depends_on:
+      - triage
+      - nonexistent
+`
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		_, err := LoadPipeline(path)
+		if err == nil {
+			t.Fatal("expected error for invalid depends_on")
+		}
+		if !strings.Contains(err.Error(), "depends_on") {
+			t.Errorf("error = %q, want mention of depends_on", err)
+		}
+		if !strings.Contains(err.Error(), "nonexistent") {
+			t.Errorf("error = %q, want mention of %q", err, "nonexistent")
+		}
+	})
+
+	t.Run("valid_depends_on", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "phases.yaml")
+		content := `phases:
+  - name: triage
+    prompt: prompts/triage.md
+    timeout: 1m
+  - name: plan
+    prompt: prompts/plan.md
+    timeout: 5m
+    depends_on:
+      - triage
+  - name: implement
+    prompt: prompts/implement.md
+    timeout: 10m
+    depends_on:
+      - triage
+      - plan
+`
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		pipeline, err := LoadPipeline(path)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(pipeline.Phases) != 3 {
+			t.Errorf("got %d phases, want 3", len(pipeline.Phases))
+		}
+	})
+
 	t.Run("valid_corrective_config", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "phases.yaml")

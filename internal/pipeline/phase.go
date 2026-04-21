@@ -118,10 +118,15 @@ func LoadPipeline(path string) (*PhasePipeline, error) {
 		phaseNames[p.Name] = struct{}{}
 	}
 
-	// Validate cross-references: ReworkConfig.Target, FeedbackFrom,
-	// CorrectiveConfig.Phase, and CorrectiveConfig.EscalateTo must
-	// refer to phases that exist in the pipeline.
+	// Validate cross-references: DependsOn, ReworkConfig.Target,
+	// FeedbackFrom, CorrectiveConfig.Phase, and CorrectiveConfig.EscalateTo
+	// must refer to phases that exist in the pipeline.
 	for _, phase := range pipeline.Phases {
+		for _, dep := range phase.DependsOn {
+			if _, ok := phaseNames[dep]; !ok {
+				return nil, fmt.Errorf("pipeline: phase %q depends_on references unknown phase %q", phase.Name, dep)
+			}
+		}
 		if phase.Rework != nil {
 			if _, ok := phaseNames[phase.Rework.Target]; !ok {
 				return nil, fmt.Errorf("pipeline: phase %q rework target %q not found in pipeline", phase.Name, phase.Rework.Target)
