@@ -236,12 +236,24 @@ func BuildSiblingContext(workDir string, planResult json.RawMessage, maxBytes in
 	totalBytes := 0
 	for _, relPath := range files {
 		absPath := filepath.Join(workDir, relPath)
-		if _, err := os.Stat(absPath); err != nil {
+		// Validate resolved path stays within workDir to prevent path traversal
+		// from LLM-generated plan file paths.
+		absResolved, err := filepath.Abs(absPath)
+		if err != nil {
+			continue
+		}
+		workDirResolved, err := filepath.Abs(workDir)
+		if err != nil {
+			continue
+		}
+		if !strings.HasPrefix(absResolved, workDirResolved+string(filepath.Separator)) && absResolved != workDirResolved {
+			continue
+		}
+		if _, err = os.Stat(absPath); err != nil {
 			continue
 		}
 
 		var sigs []string
-		var err error
 		if strings.HasSuffix(relPath, "_test.go") {
 			sigs, err = ExtractGoTestPatterns(absPath)
 		} else {
