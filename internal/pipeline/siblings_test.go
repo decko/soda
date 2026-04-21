@@ -379,7 +379,7 @@ func validateInput(input string) bool {
 		}
 	})
 
-	t.Run("skips_test_files", func(t *testing.T) {
+	t.Run("includes_test_file_patterns", func(t *testing.T) {
 		dir := t.TempDir()
 		if err := os.WriteFile(filepath.Join(dir, "handler_test.go"), []byte(`package x
 import "testing"
@@ -396,8 +396,11 @@ func TestFoo(t *testing.T) {}
 			"verification": {"commands":[]}
 		}`
 		ctx := BuildSiblingContext(dir, json.RawMessage(plan))
-		if ctx != "" {
-			t.Errorf("expected empty context for test files, got: %s", ctx)
+		if ctx == "" {
+			t.Errorf("expected non-empty context for test files, got empty")
+		}
+		if !strings.Contains(ctx, "TestFoo") {
+			t.Errorf("expected test function in context, got: %s", ctx)
 		}
 	})
 

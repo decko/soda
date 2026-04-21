@@ -50,12 +50,37 @@ func ExtractPlanFiles(planResult json.RawMessage) ([]string, error) {
 
 // ExtractGoSignatures parses a Go source file and returns a list of
 // function/method signature lines (without bodies). Returns nil for
-// non-Go files or parse errors (best-effort).
+// non-Go files, test files, or parse errors (best-effort).
 func ExtractGoSignatures(filePath string) ([]string, error) {
 	if !strings.HasSuffix(filePath, ".go") {
 		return nil, nil
 	}
 	if strings.HasSuffix(filePath, "_test.go") {
+		return nil, nil
+	}
+
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, filePath, nil, 0)
+	if err != nil {
+		return nil, fmt.Errorf("siblings: parse %s: %w", filePath, err)
+	}
+
+	var sigs []string
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok {
+			continue
+		}
+		sigs = append(sigs, formatFuncSignature(fn))
+	}
+	return sigs, nil
+}
+
+// ExtractGoTestPatterns parses a Go test file (_test.go) and returns a
+// list of function signature lines. Returns nil for non-test Go files,
+// non-Go files, or parse errors (best-effort).
+func ExtractGoTestPatterns(filePath string) ([]string, error) {
+	if !strings.HasSuffix(filePath, "_test.go") {
 		return nil, nil
 	}
 
@@ -208,7 +233,13 @@ func BuildSiblingContext(workDir string, planResult json.RawMessage) string {
 			continue
 		}
 
-		sigs, err := ExtractGoSignatures(absPath)
+		var sigs []string
+		var err error
+		if strings.HasSuffix(relPath, "_test.go") {
+			sigs, err = ExtractGoTestPatterns(absPath)
+		} else {
+			sigs, err = ExtractGoSignatures(absPath)
+		}
 		if err != nil || len(sigs) == 0 {
 			continue
 		}
