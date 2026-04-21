@@ -896,6 +896,13 @@ func (e *Engine) buildPromptData(phase PhaseConfig) (PromptData, error) {
 			data.Artifacts.Patch = content
 		case "submit":
 			data.Artifacts.Submit.PRURL = e.extractPRURL()
+		default:
+			// Custom/user-defined phase: store in Extras map so
+			// templates can access via {{index .Artifacts.Extras "name"}}.
+			if data.Artifacts.Extras == nil {
+				data.Artifacts.Extras = make(map[string]string)
+			}
+			data.Artifacts.Extras[dep] = content
 		}
 	}
 
