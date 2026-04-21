@@ -99,7 +99,7 @@ func runRender(cmd *cobra.Command, cfg *config.Config, phaseName, ticketKey stri
 	if stateDir != "" {
 		state, stateErr := pipeline.LoadOrCreate(stateDir, ticketKey)
 		if stateErr == nil {
-			loadArtifacts(state, &promptData)
+			loadArtifacts(state, &promptData, pl)
 		}
 	}
 
@@ -253,7 +253,17 @@ func buildJiraExtractors(cfg *config.Config) []ticket.ArtifactExtractor {
 	return extractors
 }
 
-func loadArtifacts(state *pipeline.State, data *pipeline.PromptData) {
+func loadArtifacts(state *pipeline.State, data *pipeline.PromptData, pl *pipeline.PhasePipeline) {
+	builtins := map[string]bool{
+		"triage":    true,
+		"plan":      true,
+		"implement": true,
+		"verify":    true,
+		"review":    true,
+		"patch":     true,
+		"submit":    true,
+	}
+
 	if artifact, err := state.ReadArtifact("triage"); err == nil {
 		data.Artifacts.Triage = string(artifact)
 	}
@@ -268,5 +278,20 @@ func loadArtifacts(state *pipeline.State, data *pipeline.PromptData) {
 	}
 	if artifact, err := state.ReadArtifact("review"); err == nil {
 		data.Artifacts.Review = string(artifact)
+	}
+
+	// Populate Extras for custom (non-built-in) phase artifacts referenced
+	// in DependsOn lists, so templates can access {{.Artifacts.Extras}}.
+	for _, phase := range pl.Phases {
+		for _, dep := range phase.DependsOn {
+			if !builtins[dep] {
+				if artifact, err := state.ReadArtifact(dep); err == nil {
+					if data.Artifacts.Extras == nil {
+						data.Artifacts.Extras = make(map[string]string)
+					}
+					data.Artifacts.Extras[dep] = string(artifact)
+				}
+			}
+		}
 	}
 }
