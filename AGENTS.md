@@ -143,7 +143,7 @@ The pipeline creates a worktree **before any phase runs**. All phases — includ
 - Consistent WorkDir across all phases
 - Enforces "never work on main" convention
 
-Worktree path: `.worktrees/soda/<ticket-key>`. Cleaned up only on explicit `soda clean` or after PR merge — never automatically on failure (human may want to inspect).
+Worktree path: `.worktrees/soda/<ticket-key>`. Cleaned up only on explicit `soda clean` or after PR merge — never automatically on failure (human may want to inspect). `soda clean` preserves session data (`.soda/<ticket>/`) for raki metrics; use `--purge` to remove everything.
 
 ## Project structure
 
@@ -609,9 +609,11 @@ If yes, include a "Docs to update" section in the issue body listing the files t
 | `soda history <ticket> --detail` | Show full structured JSON output per phase |
 | `soda history <ticket> --phase <name>` | Drill down into a specific phase |
 | `soda sessions` | List all previous pipeline runs |
-| `soda clean <ticket>` | Remove pipeline state and worktree for a ticket |
+| `soda clean <ticket>` | Remove worktree and branches, preserve session data |
+| `soda clean <ticket> --purge` | Remove everything including session data (`.soda/<ticket>/`) |
 | `soda clean <ticket> --force` | Force-remove dirty worktrees and delete remote branches |
-| `soda clean --all [--dry-run]` | Clean all completed/failed sessions |
+| `soda clean --all [--dry-run]` | Clean all worktrees/branches, preserve session data |
+| `soda clean --all --purge` | Clean everything including all session data |
 | `soda log <ticket>` | Print formatted pipeline events |
 | `soda log <ticket> -f` | Tail events in real-time (poll-based follow) |
 | `soda validate` | Check config, phases, and prompts for errors without running |
