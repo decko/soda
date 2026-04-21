@@ -6,6 +6,33 @@ import (
 	"testing"
 )
 
+func TestValidatePipelineName(t *testing.T) {
+	tests := []struct {
+		name    string
+		wantErr bool
+	}{
+		{"", false},
+		{"default", false},
+		{"fast", false},
+		{"ci-lite", false},
+		{"foo/bar", true},
+		{`foo\bar`, true},
+		{"foo/../bar", true},
+		{"../etc/passwd", true},
+		{"..", true},
+		{"foo/../../bar", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidatePipelineName(tt.name)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidatePipelineName(%q) error = %v, wantErr %v", tt.name, err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestPipelineFilename(t *testing.T) {
 	tests := []struct {
 		name string

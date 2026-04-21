@@ -121,6 +121,9 @@ func extractEmbeddedPrompts() (string, error) {
 //
 // Caller must remove the temp file if cleanup is non-nil.
 func resolvePhasesPath(pipelineName string) (path string, cleanup func(), err error) {
+	if err := pipeline.ValidatePipelineName(pipelineName); err != nil {
+		return "", nil, err
+	}
 	filename := pipeline.PipelineFilename(pipelineName)
 
 	// Check working directory.

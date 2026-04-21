@@ -8,6 +8,22 @@ import (
 	"strings"
 )
 
+// ValidatePipelineName checks that a pipeline name is a safe identifier.
+// It rejects names containing path separators or directory traversal
+// sequences to prevent loading arbitrary files outside the config directory.
+func ValidatePipelineName(name string) error {
+	if name == "" || name == "default" {
+		return nil
+	}
+	if strings.ContainsAny(name, `/\`) {
+		return fmt.Errorf("pipeline name %q must not contain path separators", name)
+	}
+	if strings.Contains(name, "..") {
+		return fmt.Errorf("pipeline name %q must not contain '..'", name)
+	}
+	return nil
+}
+
 // PipelineInfo describes a discovered pipeline configuration file.
 type PipelineInfo struct {
 	Name   string // pipeline name; "default" for phases.yaml
