@@ -393,6 +393,14 @@ func TestValidateTemplate(t *testing.T) {
 			t.Fatalf("ValidateTemplate should accept Extras index: %v", err)
 		}
 	})
+
+	t.Run("valid_template_with_sibling_context", func(t *testing.T) {
+		tmpl := `{{- if .SiblingContext}}## Sibling Functions
+{{.SiblingContext}}{{- end}}`
+		if err := ValidateTemplate(tmpl); err != nil {
+			t.Fatalf("ValidateTemplate should accept SiblingContext: %v", err)
+		}
+	})
 }
 
 func TestRenderPrompt(t *testing.T) {
@@ -1337,6 +1345,63 @@ Context: {{.}}
 		}
 		if strings.Contains(result, "Extras present") {
 			t.Errorf("result should not contain extras when empty map, got: %s", result)
+		}
+	})
+
+	t.Run("renders_sibling_context_when_present", func(t *testing.T) {
+		tmplBytes, err := os.ReadFile(filepath.Join("..", "..", "cmd", "soda", "embeds", "prompts", "implement.md"))
+		if err != nil {
+			t.Skipf("skipping: cannot read embedded implement.md: %v", err)
+		}
+		tmpl := string(tmplBytes)
+
+		data := PromptData{
+			Ticket:         TicketData{Key: "TEST-314", Summary: "sibling context test"},
+			WorktreePath:   "/tmp/wt",
+			Branch:         "soda/TEST-314",
+			BaseBranch:     "main",
+			Config:         PromptConfigData{Formatter: "gofmt -w .", TestCommand: "go test ./..."},
+			Artifacts:      ArtifactData{Plan: "Task 1: add handler"},
+			SiblingContext: "### internal/handler.go\n- `func HandleRequest(w Writer, r *Request) error`\n- `func validateInput(input string) bool`\n",
+		}
+
+		result, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+		if !strings.Contains(result, "Sibling Function Context") {
+			t.Errorf("implement prompt should contain 'Sibling Function Context' header;\ngot: %s", result)
+		}
+		if !strings.Contains(result, "HandleRequest") {
+			t.Errorf("implement prompt should contain function name;\ngot: %s", result)
+		}
+		if !strings.Contains(result, "internal/handler.go") {
+			t.Errorf("implement prompt should contain file path;\ngot: %s", result)
+		}
+	})
+
+	t.Run("omits_sibling_context_when_empty", func(t *testing.T) {
+		tmplBytes, err := os.ReadFile(filepath.Join("..", "..", "cmd", "soda", "embeds", "prompts", "implement.md"))
+		if err != nil {
+			t.Skipf("skipping: cannot read embedded implement.md: %v", err)
+		}
+		tmpl := string(tmplBytes)
+
+		data := PromptData{
+			Ticket:       TicketData{Key: "TEST-314", Summary: "no sibling context"},
+			WorktreePath: "/tmp/wt",
+			Branch:       "soda/TEST-314",
+			BaseBranch:   "main",
+			Config:       PromptConfigData{Formatter: "gofmt -w .", TestCommand: "go test ./..."},
+			Artifacts:    ArtifactData{Plan: "Task 1: add handler"},
+		}
+
+		result, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+		if strings.Contains(result, "Sibling Function Context") {
+			t.Errorf("implement prompt should NOT contain sibling context when empty;\ngot: %s", result)
 		}
 	})
 }

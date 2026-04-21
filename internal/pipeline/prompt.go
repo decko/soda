@@ -27,6 +27,7 @@ type PromptData struct {
 	ReviewComments string
 	ReworkFeedback *ReworkFeedback
 	DiffContext    string // git diff of current branch vs base, injected for monitor and corrective phases
+	SiblingContext string // function signatures from files referenced in the plan; helps implement see surrounding code
 }
 
 // DetectedStackData holds auto-detected project stack information from the
