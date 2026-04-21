@@ -3,12 +3,19 @@ package pipeline
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/decko/soda/schemas"
 	"gopkg.in/yaml.v3"
 )
+
+// isFilePath returns true if s looks like a file path rather than an inline
+// JSON schema string. It checks for path separators or a .json suffix.
+func isFilePath(s string) bool {
+	return strings.ContainsAny(s, "/\\") || strings.HasSuffix(s, ".json")
+}
 
 // PhasePipeline holds the ordered list of phases loaded from phases.yaml.
 type PhasePipeline struct {
@@ -149,12 +156,24 @@ func LoadPipeline(path string) (*PhasePipeline, error) {
 
 	// Resolve schemas: if a phase has no inline schema, look up the
 	// generated schema by phase name from the schemas package.
+	// If the schema value looks like a file path, read the file contents.
+	pipelineDir := filepath.Dir(path)
 	for idx := range pipeline.Phases {
 		phase := &pipeline.Phases[idx]
 		if strings.TrimSpace(phase.Schema) == "" {
 			if generated := schemas.SchemaFor(phase.Name); generated != "" {
 				phase.Schema = generated
 			}
+		} else if isFilePath(phase.Schema) {
+			schemaPath := phase.Schema
+			if !filepath.IsAbs(schemaPath) {
+				schemaPath = filepath.Join(pipelineDir, schemaPath)
+			}
+			schemaData, err := os.ReadFile(schemaPath)
+			if err != nil {
+				return nil, fmt.Errorf("pipeline: phase %q: read schema file %s: %w", phase.Name, phase.Schema, err)
+			}
+			phase.Schema = string(schemaData)
 		}
 	}
 
