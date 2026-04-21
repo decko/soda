@@ -262,10 +262,14 @@ func BuildSiblingContext(workDir string, planResult json.RawMessage, maxBytes in
 		}
 
 		section := b.String()
-		if totalBytes+len(section) > maxBytes {
+		sepCost := 0
+		if len(sections) > 0 {
+			sepCost = 1 // for the "\n" between previous section and this one
+		}
+		if totalBytes+sepCost+len(section) > maxBytes {
 			break
 		}
-		totalBytes += len(section)
+		totalBytes += sepCost + len(section)
 		sections = append(sections, section)
 	}
 
