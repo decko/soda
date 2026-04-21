@@ -172,3 +172,16 @@ func TestSemaphore_ConcurrencyLimit(t *testing.T) {
 		t.Fatal("max concurrent was 0 — no work was done")
 	}
 }
+
+func TestNewSemaphore_NilAcquireIsNoop(t *testing.T) {
+	var sem *Semaphore
+	if err := sem.Acquire(context.Background()); err != nil {
+		t.Fatalf("nil semaphore Acquire should succeed: %v", err)
+	}
+}
+
+func TestNewSemaphore_NilReleaseIsNoop(t *testing.T) {
+	var sem *Semaphore
+	// Should not panic.
+	sem.Release()
+}

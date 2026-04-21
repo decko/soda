@@ -501,7 +501,12 @@ func (e *Engine) runReviewerWithRetry(ctx context.Context, phase PhaseConfig, re
 
 	attempt := 0
 	for {
+		if err := e.apiSem.Acquire(ctx); err != nil {
+			return nil, fmt.Errorf("reviewer %s semaphore acquire: %w", reviewer.Name, err)
+		}
 		result, err := e.runner.Run(ctx, opts)
+		e.apiSem.Release()
+
 		if err == nil {
 			return result, nil
 		}
