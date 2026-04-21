@@ -51,6 +51,7 @@ func newRootCmd() *cobra.Command {
 		newCostCmd(),
 		newRenderCmd(),
 		newValidateCmd(),
+		newPipelinesCmd(),
 		newPluginCmd(),
 		newVersionCmd(),
 	)
