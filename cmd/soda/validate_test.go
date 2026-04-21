@@ -45,7 +45,7 @@ func TestRunValidate_ValidConfig(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	err := runValidate(&stdout, &stderr, cfg)
+	err := runValidate(&stdout, &stderr, cfg, "")
 	if err != nil {
 		t.Fatalf("runValidate() returned error: %v\nstdout: %s\nstderr: %s", err, stdout.String(), stderr.String())
 	}
@@ -76,7 +76,7 @@ func TestRunValidate_MissingContextFiles(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	err := runValidate(&stdout, &stderr, cfg)
+	err := runValidate(&stdout, &stderr, cfg, "")
 
 	// Missing context files produce warnings, not errors, so validation passes.
 	if err != nil {
@@ -112,7 +112,7 @@ func TestRunValidate_ExistingContextFiles(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	err := runValidate(&stdout, &stderr, cfg)
+	err := runValidate(&stdout, &stderr, cfg, "")
 	if err != nil {
 		t.Fatalf("runValidate() error: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestRunValidate_NoContextFiles(t *testing.T) {
 	cfg := &config.Config{}
 
 	var stdout, stderr bytes.Buffer
-	err := runValidate(&stdout, &stderr, cfg)
+	err := runValidate(&stdout, &stderr, cfg, "")
 	if err != nil {
 		t.Fatalf("runValidate() error: %v", err)
 	}
@@ -309,7 +309,7 @@ func TestRunValidate_ErrorOutput(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	err := runValidate(&stdout, &stderr, cfg)
+	err := runValidate(&stdout, &stderr, cfg, "")
 
 	// Warnings don't cause failure.
 	if err != nil {

@@ -45,6 +45,7 @@ func newRunCmd() *cobra.Command {
 
 	cmd.Flags().String("mode", "", "execution mode: checkpoint or autonomous")
 	cmd.Flags().String("from", "", "resume from phase (or 'last')")
+	cmd.Flags().String("pipeline", "", "pipeline name (default: phases.yaml)")
 	cmd.Flags().Bool("dry-run", false, "render prompts without executing")
 	cmd.Flags().Bool("mock", false, "use mock runner for testing")
 	cmd.Flags().Bool("tui", false, "use interactive TUI display")
@@ -84,7 +85,8 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 	}
 
 	// Load pipeline config
-	phasesPath, phasesCleanup, err := resolvePhasesPath()
+	pipelineName, _ := cmd.Flags().GetString("pipeline")
+	phasesPath, phasesCleanup, err := resolvePhasesPath(pipelineName)
 	if err != nil {
 		return fmt.Errorf("run: %w", err)
 	}

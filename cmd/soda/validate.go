@@ -14,7 +14,7 @@ import (
 )
 
 func newValidateCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "validate",
 		Short: "Check config and phases without running",
 		Long: `Validate configuration, phases, prompts, schemas, and context files
@@ -26,9 +26,14 @@ without executing the pipeline. Exits 0 if everything is valid
 			if err != nil {
 				return err
 			}
-			return runValidate(cmd.OutOrStdout(), cmd.ErrOrStderr(), cfg)
+			pipelineName, _ := cmd.Flags().GetString("pipeline")
+			return runValidate(cmd.OutOrStdout(), cmd.ErrOrStderr(), cfg, pipelineName)
 		},
 	}
+
+	cmd.Flags().String("pipeline", "", "pipeline name (default: phases.yaml)")
+
+	return cmd
 }
 
 // validationResult accumulates errors and warnings across validation stages.
@@ -51,14 +56,14 @@ func (v *validationResult) hasErrors() bool {
 
 // runValidate runs all validation stages in order and prints results.
 // Returns nil on success (exit 0), non-nil error on validation failure (exit 1).
-func runValidate(w io.Writer, errW io.Writer, cfg *config.Config) error {
+func runValidate(w io.Writer, errW io.Writer, cfg *config.Config, pipelineName string) error {
 	result := &validationResult{}
 
 	// Stage 1: Config is already loaded (loadConfig succeeded).
 	fmt.Fprintln(w, "✓ config: valid")
 
 	// Stage 2: Phases
-	pl := validatePhases(w, result)
+	pl := validatePhases(w, result, pipelineName)
 
 	// Stage 3: Prompts (only if phases loaded)
 	if pl != nil {
@@ -91,9 +96,9 @@ func runValidate(w io.Writer, errW io.Writer, cfg *config.Config) error {
 	return nil
 }
 
-// validatePhases loads and validates phases.yaml (cross-references, structure).
-func validatePhases(w io.Writer, result *validationResult) *pipeline.PhasePipeline {
-	phasesPath, cleanup, err := resolvePhasesPath()
+// validatePhases loads and validates the pipeline config (cross-references, structure).
+func validatePhases(w io.Writer, result *validationResult, pipelineName string) *pipeline.PhasePipeline {
+	phasesPath, cleanup, err := resolvePhasesPath(pipelineName)
 	if err != nil {
 		result.addError("phases: %v", err)
 		return nil

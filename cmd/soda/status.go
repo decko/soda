@@ -61,7 +61,7 @@ func runStatus(stateDir string) error {
 	}
 
 	// Load pipeline config for deterministic phase ordering.
-	phasesPath, cleanup, phasesErr := resolvePhasesPath()
+	phasesPath, cleanup, phasesErr := resolvePhasesPath("")
 	if phasesErr != nil {
 		return fmt.Errorf("status: %w", phasesErr)
 	}
