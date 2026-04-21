@@ -37,6 +37,7 @@ type EngineConfig struct {
 	PromptContext        ContextData
 	DetectedStack        DetectedStackData // auto-detected project stack info; zero value if detection was skipped
 	Model                string
+	PipelineName         string // pipeline config name (e.g. "fast"); empty means "default"
 	BinaryVersion        string // binary build identifier; recorded in meta on first run, checked for staleness on resume
 	WorkDir              string
 	WorktreeBase         string
@@ -262,6 +263,11 @@ func (e *Engine) Run(ctx context.Context) error {
 	// Cache ticket summary in meta for soda sessions/history display.
 	if e.state.Meta().Summary == "" && e.config.Ticket.Summary != "" {
 		e.state.Meta().Summary = e.config.Ticket.Summary
+	}
+
+	// Record pipeline name in meta for identification.
+	if e.state.Meta().Pipeline == "" && e.config.PipelineName != "" {
+		e.state.Meta().Pipeline = e.config.PipelineName
 	}
 
 	if err := e.ensureWorktree(ctx); err != nil {

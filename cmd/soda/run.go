@@ -97,6 +97,9 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 	if err != nil {
 		return fmt.Errorf("run: %w", err)
 	}
+	if pipelineName != "" {
+		pl.Name = pipelineName
+	}
 
 	// Set up prompt loader
 	promptDir, err := extractEmbeddedPrompts()
@@ -273,6 +276,7 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 		PromptContext:        promptContext,
 		DetectedStack:        detectedStack,
 		Model:                cfg.Model,
+		PipelineName:         pipelineName,
 		BinaryVersion:        binaryVersionID(),
 		WorkDir:              workDir,
 		WorktreeBase:         filepath.Join(workDir, cfg.WorktreeDir),

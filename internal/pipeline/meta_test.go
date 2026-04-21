@@ -406,6 +406,55 @@ func TestMetaTokenCountsOmitEmpty(t *testing.T) {
 	}
 }
 
+func TestMetaPipelineNameRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "meta.json")
+
+	original := &PipelineMeta{
+		Ticket:    "PROJ-300",
+		Pipeline:  "fast",
+		StartedAt: time.Now().Truncate(time.Second),
+		Phases:    map[string]*PhaseState{},
+	}
+
+	if err := writeMeta(path, original); err != nil {
+		t.Fatalf("writeMeta: %v", err)
+	}
+
+	loaded, err := ReadMeta(path)
+	if err != nil {
+		t.Fatalf("ReadMeta: %v", err)
+	}
+
+	if loaded.Pipeline != "fast" {
+		t.Errorf("Pipeline = %q, want %q", loaded.Pipeline, "fast")
+	}
+}
+
+func TestMetaPipelineNameOmitEmpty(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "meta.json")
+
+	original := &PipelineMeta{
+		Ticket:    "PROJ-300",
+		StartedAt: time.Now().Truncate(time.Second),
+		Phases:    map[string]*PhaseState{},
+	}
+
+	if err := writeMeta(path, original); err != nil {
+		t.Fatalf("writeMeta: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+
+	if strings.Contains(string(data), "pipeline") {
+		t.Errorf("meta.json should omit pipeline when empty, got:\n%s", data)
+	}
+}
+
 func TestPhaseStatusConstants(t *testing.T) {
 	// Verify JSON serialization matches expected strings
 	tests := []struct {
