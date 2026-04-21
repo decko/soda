@@ -1,8 +1,8 @@
 ---
-description: Clean completed/failed pipeline state and worktrees
+description: Clean completed/failed pipeline worktrees and branches
 ---
 
-Clean completed or failed SODA pipeline state and worktrees:
+Clean completed or failed SODA pipeline worktrees and branches:
 
 ```bash
 soda clean $ARGUMENTS
@@ -10,4 +10,4 @@ soda clean $ARGUMENTS
 
 If no ticket key is provided, ask the user for one or suggest using `--all` to clean all terminal pipelines.
 
-This removes worktrees, branches, and state directories for pipelines that have completed or failed.
+By default, this removes worktrees and branches but **preserves session data** (`.soda/<ticket>/`) for raki metrics. Use `--purge` to remove everything including session data.

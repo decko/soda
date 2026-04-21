@@ -254,7 +254,7 @@ grep '"reviewer_completed"' .soda/<ticket>/events.jsonl
 
 **Fix:**
 1. List worktrees: `git worktree list`
-2. Clean stale worktrees: `soda clean <ticket>` (removes worktree + state)
+2. Clean stale worktrees: `soda clean <ticket>` (removes worktree, preserves session data)
 3. Clean all: `soda clean --all`
 4. Manual cleanup if soda clean fails:
    ```bash
@@ -323,16 +323,20 @@ grep '"phase_retrying"' .soda/<ticket>/events.jsonl
 ## Cleaning up
 
 ```bash
-soda clean <ticket>              # remove state + worktree for one ticket
-soda clean --all                 # clean all completed/failed sessions
+soda clean <ticket>              # remove worktree + branches, preserve session data
+soda clean <ticket> --purge      # remove everything including .soda/<ticket>/
+soda clean --all                 # clean all worktrees, preserve session data
+soda clean --all --purge         # clean everything including all session data
 soda clean --all --dry-run       # preview what would be cleaned
 ```
 
 Cleanup removes:
-- `.soda/<ticket>/` state directory
 - `.worktrees/soda/<ticket>/` worktree
 - Local `soda/<ticket>` branch
+- Remote `origin/soda/<ticket>` branch (with `--force`)
+
+Cleanup preserves (unless `--purge`):
+- `.soda/<ticket>/` session data (meta, events, artifacts — used by raki metrics)
 
 Cleanup does **not** remove:
-- Remote branches (push cleanup is manual)
-- Cost ledger entries (`.soda/cost.json` is preserved)
+- Cost ledger entries (`.soda/cost.json` is always preserved)
