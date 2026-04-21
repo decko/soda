@@ -46,6 +46,7 @@ type EngineConfig struct {
 	MaxCostPerGeneration float64       // per-generation cost cap (ps.Cost); 0 means no per-generation limit
 	MaxPipelineDuration  time.Duration // max wall-clock time for the entire pipeline; 0 means no limit
 	MaxReworkCycles      int           // max review→implement rework loops; 0 means use default (2)
+	MaxDiffBytes         int           // max bytes of git diff injected into rework prompts; 0 means use default (50000)
 	Mode                 Mode
 	OnEvent              func(Event)
 	PauseSignal          <-chan bool // receives true=pause, false=resume from TUI; nil disables
@@ -890,6 +891,10 @@ func (e *Engine) buildPromptData(phase PhaseConfig) (PromptData, error) {
 	return data, nil
 }
 
+// defaultMaxDiffBytes is the default byte limit for git diffs injected into
+// rework prompts when MaxDiffBytes is not set in EngineConfig.
+const defaultMaxDiffBytes = 50000
+
 // computeDiffContext returns the git diff of the current branch against the
 // base branch. Used by corrective phases to see what was implemented.
 // Returns an empty string on error (non-fatal).
@@ -900,7 +905,12 @@ func (e *Engine) computeDiffContext(ctx context.Context) string {
 		baseBranch = "main"
 	}
 
-	diffCtx, err := git.Diff(ctx, workDir, e.remoteName()+"/"+baseBranch, 50000)
+	maxBytes := e.config.MaxDiffBytes
+	if maxBytes == 0 {
+		maxBytes = defaultMaxDiffBytes
+	}
+
+	diffCtx, err := git.Diff(ctx, workDir, e.remoteName()+"/"+baseBranch, maxBytes)
 	if err != nil {
 		return ""
 	}

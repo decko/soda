@@ -92,6 +92,7 @@ type LimitsConfig struct {
 	MaxCostPerPhase      float64 `yaml:"max_cost_per_phase"`
 	MaxCostPerGeneration float64 `yaml:"max_cost_per_generation,omitempty"` // per-attempt cost cap; 0 means disabled
 	MaxPipelineDuration  string  `yaml:"max_pipeline_duration,omitempty"`   // Go duration string (e.g., "2h", "90m"); 0 or empty means no limit
+	MaxDiffBytes         int     `yaml:"max_diff_bytes,omitempty"`          // max bytes of git diff injected into rework prompts; 0 means use default (50000)
 }
 
 // RepoConfig holds per-repo configuration.
