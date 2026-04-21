@@ -650,6 +650,28 @@ func TestLoadPipeline(t *testing.T) {
 		}
 	})
 
+	t.Run("errors_on_schema_path_traversal", func(t *testing.T) {
+		dir := t.TempDir()
+		phasesPath := filepath.Join(dir, "phases.yaml")
+		content := `phases:
+  - name: custom-phase
+    prompt: prompts/custom.md
+    schema: ../../etc/passwd
+    timeout: 1m
+`
+		if err := os.WriteFile(phasesPath, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		_, err := LoadPipeline(phasesPath)
+		if err == nil {
+			t.Fatal("expected error for path traversal in schema")
+		}
+		if !strings.Contains(err.Error(), "path traversal rejected") {
+			t.Errorf("error = %q, want mention of path traversal rejected", err)
+		}
+	})
+
 	t.Run("inline_json_schema_not_treated_as_file", func(t *testing.T) {
 		dir := t.TempDir()
 		phasesPath := filepath.Join(dir, "phases.yaml")

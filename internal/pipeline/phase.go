@@ -169,7 +169,10 @@ func LoadPipeline(path string) (*PhasePipeline, error) {
 				phase.Schema = generated
 			}
 		} else if isFilePath(phase.Schema) {
-			schemaPath := phase.Schema
+			schemaPath := filepath.Clean(phase.Schema)
+			if strings.Contains(schemaPath, "..") {
+				return nil, fmt.Errorf("pipeline: phase %q: schema path traversal rejected: %s", phase.Name, phase.Schema)
+			}
 			if !filepath.IsAbs(schemaPath) {
 				schemaPath = filepath.Join(pipelineDir, schemaPath)
 			}
