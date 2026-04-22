@@ -37,12 +37,14 @@ type PickerResult struct {
 
 // PickerModel is a bubbletea model for browsing and selecting tickets.
 type PickerModel struct {
-	tickets  []TicketInfo
-	cursor   int
-	width    int
-	height   int
-	result   *PickerResult
-	quitting bool
+	tickets   []TicketInfo
+	cursor    int
+	width     int
+	height    int
+	result    *PickerResult
+	quitting  bool
+	filter    string
+	filtering bool
 }
 
 // NewPickerModel creates a new ticket picker model.
@@ -77,7 +79,53 @@ func (m PickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// filteredTickets returns the subset of tickets whose Key or Summary
+// contains the current filter string (case-insensitive substring match).
+// When filter is empty all tickets are returned.
+func (m PickerModel) filteredTickets() []TicketInfo {
+	if m.filter == "" {
+		return m.tickets
+	}
+	lower := strings.ToLower(m.filter)
+	var result []TicketInfo
+	for _, t := range m.tickets {
+		if strings.Contains(strings.ToLower(t.Key), lower) ||
+			strings.Contains(strings.ToLower(t.Summary), lower) {
+			result = append(result, t)
+		}
+	}
+	return result
+}
+
 func (m PickerModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Filter input mode: capture runes for the filter string.
+	if m.filtering {
+		switch msg.String() {
+		case "esc":
+			m.filtering = false
+			m.filter = ""
+			m.cursor = 0
+		case "enter":
+			m.filtering = false
+		case "backspace":
+			if len(m.filter) > 0 {
+				runes := []rune(m.filter)
+				m.filter = string(runes[:len(runes)-1])
+			}
+			if filtered := m.filteredTickets(); m.cursor >= len(filtered) && len(filtered) > 0 {
+				m.cursor = len(filtered) - 1
+			}
+		default:
+			if msg.Type == tea.KeyRunes {
+				m.filter += string(msg.Runes)
+				if filtered := m.filteredTickets(); m.cursor >= len(filtered) && len(filtered) > 0 {
+					m.cursor = len(filtered) - 1
+				}
+			}
+		}
+		return m, nil
+	}
+
 	if len(m.tickets) == 0 {
 		switch msg.String() {
 		case "q", "ctrl+c", "esc":
@@ -87,10 +135,16 @@ func (m PickerModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	filtered := m.filteredTickets()
+
 	switch msg.String() {
 	case "q", "ctrl+c", "esc":
 		m.quitting = true
 		return m, tea.Quit
+
+	case "/":
+		m.filtering = true
+		return m, nil
 
 	case "up", "k":
 		if m.cursor > 0 {
@@ -99,7 +153,7 @@ func (m PickerModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "down", "j":
-		if m.cursor < len(m.tickets)-1 {
+		if m.cursor < len(filtered)-1 {
 			m.cursor++
 		}
 		return m, nil
@@ -115,7 +169,10 @@ func (m PickerModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "pgdown":
 		pageSize := m.pageSize()
-		last := len(m.tickets) - 1
+		last := len(filtered) - 1
+		if last < 0 {
+			last = 0
+		}
 		if m.cursor+pageSize < last {
 			m.cursor += pageSize
 		} else {
@@ -124,7 +181,10 @@ func (m PickerModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "enter":
-		ticket := m.tickets[m.cursor]
+		if len(filtered) == 0 {
+			return m, nil
+		}
+		ticket := filtered[m.cursor]
 		m.result = &PickerResult{
 			Ticket: ticket,
 			Action: PickerActionRun,
@@ -145,12 +205,24 @@ func (m PickerModel) View() string {
 		return renderPickerFrame("No tickets found.\n\n"+m.pickerHelpBar(), m.width)
 	}
 
-	var lines []string
-	for idx, ticket := range m.tickets {
-		lines = append(lines, renderTicketRow(ticket, idx == m.cursor))
+	filtered := m.filteredTickets()
+
+	var filterLine string
+	if m.filtering {
+		filterLine = styleKey.Render("/") + " " + m.filter + "▋\n\n"
+	} else if m.filter != "" {
+		filterLine = stylePending.Render("filter: ") + m.filter + "\n\n"
 	}
 
-	content := strings.Join(lines, "\n")
+	var lines []string
+	for idx, ticket := range filtered {
+		lines = append(lines, renderTicketRow(ticket, idx == m.cursor))
+	}
+	if len(filtered) == 0 {
+		lines = []string{stylePending.Render("No matches.")}
+	}
+
+	content := filterLine + strings.Join(lines, "\n")
 	content += "\n\n" + m.pickerHelpBar()
 
 	return renderPickerFrame(content, m.width)
@@ -217,6 +289,7 @@ func (m PickerModel) pageSize() int {
 func (m PickerModel) pickerHelpBar() string {
 	bindings := []struct{ key, label string }{
 		{"↑/↓", "navigate"},
+		{"/", "filter"},
 		{"Enter", "select"},
 		{"q", "quit"},
 	}
