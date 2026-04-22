@@ -520,3 +520,143 @@ func TestReadSnippet(t *testing.T) {
 		}
 	})
 }
+
+func TestReadFileForFinding(t *testing.T) {
+	writeFile := func(t *testing.T, dir, name, content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("full_file_within_budget", func(t *testing.T) {
+		dir := t.TempDir()
+		content := "line1\nline2\nline3\nline4\nline5\n"
+		writeFile(t, dir, "small.go", content)
+
+		budget := 1000
+		cache := make(map[string]string)
+		got := readFileForFinding(dir, "small.go", 3, &budget, cache)
+
+		if got != content {
+			t.Errorf("got %q, want full file content", got)
+		}
+		if budget != 1000-len(content) {
+			t.Errorf("budget = %d, want %d", budget, 1000-len(content))
+		}
+	})
+
+	t.Run("falls_back_to_snippet_when_over_budget", func(t *testing.T) {
+		dir := t.TempDir()
+		// 20-line file — snippet at line 10 with ±5 context = 11 lines, not all 20.
+		var longLines []string
+		for i := 1; i <= 20; i++ {
+			longLines = append(longLines, strings.Repeat("x", 10))
+		}
+		content := strings.Join(longLines, "\n")
+		writeFile(t, dir, "big.go", content)
+
+		budget := 50 // too small for full file (~220 bytes)
+		cache := make(map[string]string)
+		got := readFileForFinding(dir, "big.go", 10, &budget, cache)
+
+		if got == content {
+			t.Error("should NOT return full file when over budget")
+		}
+		if got == "" {
+			t.Error("should return snippet fallback, not empty")
+		}
+		// Snippet should be a subset of lines.
+		snippetLines := strings.Split(got, "\n")
+		if len(snippetLines) >= 20 {
+			t.Errorf("snippet has %d lines, should be fewer than 20", len(snippetLines))
+		}
+	})
+
+	t.Run("deduplicates_same_file", func(t *testing.T) {
+		dir := t.TempDir()
+		content := "func A() {}\nfunc B() {}\n"
+		writeFile(t, dir, "shared.go", content)
+
+		budget := 1000
+		cache := make(map[string]string)
+
+		got1 := readFileForFinding(dir, "shared.go", 1, &budget, cache)
+		budgetAfterFirst := budget
+		got2 := readFileForFinding(dir, "shared.go", 2, &budget, cache)
+
+		if got1 != got2 {
+			t.Errorf("same file should return same content: %q vs %q", got1, got2)
+		}
+		if budget != budgetAfterFirst {
+			t.Errorf("second read should not consume budget: %d vs %d", budget, budgetAfterFirst)
+		}
+	})
+
+	t.Run("budget_exhaustion_across_files", func(t *testing.T) {
+		dir := t.TempDir()
+		file1Content := strings.Repeat("a", 100) + "\n"
+		// 20-line file so snippet (±5 around line 15) is shorter than full file.
+		var file2Lines []string
+		for i := 1; i <= 20; i++ {
+			file2Lines = append(file2Lines, strings.Repeat("b", 10))
+		}
+		file2Content := strings.Join(file2Lines, "\n")
+		writeFile(t, dir, "first.go", file1Content)
+		writeFile(t, dir, "second.go", file2Content)
+
+		budget := 120 // enough for first file (101 bytes) but not second (~220 bytes)
+		cache := make(map[string]string)
+
+		got1 := readFileForFinding(dir, "first.go", 1, &budget, cache)
+		if got1 != file1Content {
+			t.Error("first file should get full content")
+		}
+
+		got2 := readFileForFinding(dir, "second.go", 15, &budget, cache)
+		if got2 == file2Content {
+			t.Error("second file should NOT get full content (over budget)")
+		}
+		if got2 == "" {
+			t.Error("second file should get snippet fallback")
+		}
+	})
+
+	t.Run("nonexistent_file_returns_empty", func(t *testing.T) {
+		dir := t.TempDir()
+		budget := 1000
+		cache := make(map[string]string)
+		got := readFileForFinding(dir, "nope.go", 1, &budget, cache)
+		if got != "" {
+			t.Errorf("expected empty for nonexistent file, got: %q", got)
+		}
+	})
+
+	t.Run("path_traversal_blocked", func(t *testing.T) {
+		dir := t.TempDir()
+		parentFile := filepath.Join(filepath.Dir(dir), "secret.txt")
+		os.WriteFile(parentFile, []byte("secret"), 0644)
+		defer os.Remove(parentFile)
+
+		budget := 1000
+		cache := make(map[string]string)
+		got := readFileForFinding(dir, "../secret.txt", 1, &budget, cache)
+		if got != "" {
+			t.Errorf("expected empty for path traversal, got: %q", got)
+		}
+	})
+}
+
+func TestExtractSnippet(t *testing.T) {
+	content := "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n"
+
+	got := extractSnippet(content, 5, 2)
+	if !strings.Contains(got, "line3") || !strings.Contains(got, "line7") {
+		t.Errorf("snippet should contain lines 3-7, got: %q", got)
+	}
+
+	got2 := extractSnippet(content, 1, 2)
+	if !strings.Contains(got2, "line1") {
+		t.Errorf("snippet near start should contain line1, got: %q", got2)
+	}
+}

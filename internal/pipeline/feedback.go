@@ -133,6 +133,10 @@ func (e *Engine) extractVerifyFeedback() *ReworkFeedback {
 	return fb
 }
 
+// maxFeedbackContextBytes is the total byte budget for file content injected
+// into rework feedback across all findings. Prevents context bloat.
+const maxFeedbackContextBytes = 30 * 1024 // 30KB
+
 // extractReviewFeedback reads the review result and returns structured
 // feedback when the verdict is "rework". Returns nil if no review result
 // exists or the verdict is not "rework".
@@ -142,6 +146,10 @@ func (e *Engine) extractVerifyFeedback() *ReworkFeedback {
 // (review.json.1, review.json.2, ...) so the LLM has context about
 // what was previously reported. Only critical/major findings are
 // included to keep prompt context focused.
+//
+// Each finding is enriched with file content: full-file when budget allows,
+// falling back to ±5 lines when budget is exhausted. Same-file findings
+// share the cached content to avoid duplicate reads.
 func (e *Engine) extractReviewFeedback() *ReworkFeedback {
 	raw, err := e.state.ReadResult("review")
 	if err != nil {
@@ -161,22 +169,84 @@ func (e *Engine) extractReviewFeedback() *ReworkFeedback {
 		Source:  "review",
 	}
 
-	// Only include critical and major findings, enriched with code snippets.
+	workDir := e.workDir(PhaseConfig{})
+	budgetRemaining := maxFeedbackContextBytes
+	fileCache := make(map[string]string) // file path → cached content
+
+	// Only include critical and major findings, enriched with code context.
 	for _, finding := range result.Findings {
 		sev := strings.ToLower(finding.Severity)
-		if sev == "critical" || sev == "major" {
-			ef := EnrichedFinding{ReviewFinding: finding}
-			if finding.File != "" && finding.Line > 0 {
-				ef.CodeSnippet = readSnippet(e.workDir(PhaseConfig{}), finding.File, finding.Line, 5)
-			}
-			fb.ReviewFindings = append(fb.ReviewFindings, ef)
+		if sev != "critical" && sev != "major" {
+			continue
 		}
+
+		ef := EnrichedFinding{ReviewFinding: finding}
+		if finding.File != "" {
+			ef.CodeSnippet = readFileForFinding(workDir, finding.File, finding.Line, &budgetRemaining, fileCache)
+		}
+		fb.ReviewFindings = append(fb.ReviewFindings, ef)
 	}
 
 	// Collect prior cycle context from archived review results.
 	fb.PriorCycles = e.collectPriorReviewCycles()
 
 	return fb
+}
+
+// readFileForFinding returns file content for a review finding. It tries
+// full-file injection first (if budget allows), falling back to ±5 lines.
+// Same-file findings reuse cached content without consuming extra budget.
+func readFileForFinding(workDir, file string, line int, budgetRemaining *int, cache map[string]string) string {
+	// Check cache first — same file referenced by multiple findings.
+	if cached, ok := cache[file]; ok {
+		return cached
+	}
+
+	resolved := filepath.Clean(filepath.Join(workDir, file))
+	if !strings.HasPrefix(resolved, filepath.Clean(workDir)+string(filepath.Separator)) {
+		return ""
+	}
+
+	data, err := os.ReadFile(resolved)
+	if err != nil {
+		return ""
+	}
+
+	content := string(data)
+
+	// If the full file fits within budget, use it.
+	if len(data) <= *budgetRemaining {
+		*budgetRemaining -= len(data)
+		cache[file] = content
+		return content
+	}
+
+	// Budget exhausted for full file — fall back to ±5 lines snippet.
+	if line > 0 {
+		snippet := extractSnippet(content, line, 5)
+		cache[file] = snippet
+		return snippet
+	}
+
+	return ""
+}
+
+// extractSnippet returns ±context lines around the given 1-based line number
+// from the provided content string.
+func extractSnippet(content string, line, context int) string {
+	lines := strings.Split(content, "\n")
+	start := line - context - 1
+	if start < 0 {
+		start = 0
+	}
+	end := line + context
+	if end > len(lines) {
+		end = len(lines)
+	}
+	if start >= end {
+		return ""
+	}
+	return strings.Join(lines[start:end], "\n")
 }
 
 // readSnippet reads ±context lines around the given 1-based line number
@@ -192,19 +262,7 @@ func readSnippet(workDir, file string, line, context int) string {
 	if err != nil {
 		return ""
 	}
-	lines := strings.Split(string(data), "\n")
-	start := line - context - 1
-	if start < 0 {
-		start = 0
-	}
-	end := line + context
-	if end > len(lines) {
-		end = len(lines)
-	}
-	if start >= end {
-		return ""
-	}
-	return strings.Join(lines[start:end], "\n")
+	return extractSnippet(string(data), line, context)
 }
 
 // collectPriorReviewCycles reads archived review results (review.json.1,
