@@ -85,7 +85,12 @@ func neededReviewersFromPrior(prev *schemas.ReviewOutput) map[string]bool {
 	for _, finding := range prev.Findings {
 		sev := strings.ToLower(finding.Severity)
 		if sev == "critical" || sev == "major" {
-			needed[finding.Source] = true
+			// Source may be a comma-joined string from dedup merging
+			// (e.g. "go-specialist, ai-harness"). Split to mark each
+			// individual reviewer as needed.
+			for _, src := range strings.Split(finding.Source, ", ") {
+				needed[src] = true
+			}
 		}
 	}
 	return needed
@@ -101,8 +106,13 @@ func priorFindingsForReviewer(prev *schemas.ReviewOutput, reviewerName string) [
 	}
 	var findings []schemas.ReviewFinding
 	for _, f := range prev.Findings {
-		if f.Source == reviewerName {
-			findings = append(findings, f)
+		// Source may be a comma-joined string from dedup merging
+		// (e.g. "go-specialist, ai-harness"). Check each component.
+		for _, src := range strings.Split(f.Source, ", ") {
+			if src == reviewerName {
+				findings = append(findings, f)
+				break
+			}
 		}
 	}
 	return findings
@@ -551,6 +561,93 @@ func (e *Engine) runReviewerWithRetry(ctx context.Context, phase PhaseConfig, re
 	}
 }
 
+// sourceContains checks whether the comma-separated combined source string
+// contains an exact match for name. This avoids false positives when reviewer
+// names are substrings of each other (e.g. "go" vs "go-specialist").
+func sourceContains(combined, name string) bool {
+	for _, s := range strings.Split(combined, ", ") {
+		if s == name {
+			return true
+		}
+	}
+	return false
+}
+
+// deduplicateFindings removes duplicate findings from the merged list.
+// Two findings are considered duplicates when they share the same File and
+// Severity and either (a) they have the same positive Line number, or
+// (b) both have Line == 0 and one's Issue text is a substring of the other's.
+// When duplicates are found the longer Issue text is kept and Source names
+// are combined with ", ".
+func deduplicateFindings(findings []schemas.ReviewFinding) ([]schemas.ReviewFinding, int) {
+	type lineKey struct {
+		File     string
+		Line     int
+		Severity string
+	}
+
+	// Index for findings with Line > 0 — O(1) lookup.
+	lineIndex := make(map[lineKey]int) // key → index in result slice
+
+	// Separate list for findings with Line == 0, grouped by file+severity.
+	type zeroKey struct {
+		File     string
+		Severity string
+	}
+	zeroIndex := make(map[zeroKey][]int) // key → indices in result slice
+
+	var result []schemas.ReviewFinding
+	removed := 0
+
+	for _, f := range findings {
+		sevLower := strings.ToLower(f.Severity)
+
+		if f.Line > 0 {
+			key := lineKey{File: f.File, Line: f.Line, Severity: sevLower}
+			if idx, exists := lineIndex[key]; exists {
+				// Duplicate: merge into existing entry.
+				existing := &result[idx]
+				if len(f.Issue) > len(existing.Issue) {
+					existing.Issue = f.Issue
+				}
+				if f.Source != "" && !sourceContains(existing.Source, f.Source) {
+					existing.Source = existing.Source + ", " + f.Source
+				}
+				removed++
+			} else {
+				lineIndex[key] = len(result)
+				result = append(result, f)
+			}
+		} else {
+			// Line == 0: check for substring match among existing zero-line
+			// findings with the same file + severity.
+			zk := zeroKey{File: f.File, Severity: sevLower}
+			merged := false
+			for _, idx := range zeroIndex[zk] {
+				existing := &result[idx]
+				if f.Issue != "" && existing.Issue != "" && (strings.Contains(existing.Issue, f.Issue) || strings.Contains(f.Issue, existing.Issue)) {
+					// Keep the longer issue text.
+					if len(f.Issue) > len(existing.Issue) {
+						existing.Issue = f.Issue
+					}
+					if f.Source != "" && !sourceContains(existing.Source, f.Source) {
+						existing.Source = existing.Source + ", " + f.Source
+					}
+					removed++
+					merged = true
+					break
+				}
+			}
+			if !merged {
+				zeroIndex[zk] = append(zeroIndex[zk], len(result))
+				result = append(result, f)
+			}
+		}
+	}
+
+	return result, removed
+}
+
 // mergeReviewFindings combines findings from all reviewers and computes a verdict.
 func (e *Engine) mergeReviewFindings(phase PhaseConfig, results []reviewerResult) schemas.ReviewOutput {
 	var allFindings []schemas.ReviewFinding
@@ -562,14 +659,17 @@ func (e *Engine) mergeReviewFindings(phase PhaseConfig, results []reviewerResult
 		}
 	}
 
+	allFindings, duplicatesRemoved := deduplicateFindings(allFindings)
+
 	verdict := computeReviewVerdict(allFindings)
 
 	e.emit(Event{
 		Phase: phase.Name,
 		Kind:  EventReviewMerged,
 		Data: map[string]any{
-			"findings_count": len(allFindings),
-			"verdict":        verdict,
+			"findings_count":     len(allFindings),
+			"verdict":            verdict,
+			"duplicates_removed": duplicatesRemoved,
 		},
 	})
 

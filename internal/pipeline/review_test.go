@@ -845,6 +845,26 @@ func TestNeededReviewersFromPrior(t *testing.T) {
 			t.Errorf("expected empty map, got %v", got)
 		}
 	})
+
+	t.Run("merged_source_splits_into_individual_reviewers", func(t *testing.T) {
+		// After dedup, a finding may have Source = "go-specialist, ai-harness".
+		// neededReviewersFromPrior must mark both reviewers as needed.
+		prev := &schemas.ReviewOutput{
+			Findings: []schemas.ReviewFinding{
+				{Source: "go-specialist, ai-harness", Severity: "critical", File: "x.go", Issue: "nil deref"},
+			},
+		}
+		got := neededReviewersFromPrior(prev)
+		if got == nil {
+			t.Fatal("expected non-nil set")
+		}
+		if !got["go-specialist"] {
+			t.Error("expected go-specialist in needed set")
+		}
+		if !got["ai-harness"] {
+			t.Error("expected ai-harness in needed set")
+		}
+	})
 }
 
 func TestEngine_ParallelReview_SkipsRedundantReviewerOnRework(t *testing.T) {
@@ -1296,6 +1316,32 @@ func TestPriorFindingsForReviewer(t *testing.T) {
 		got := priorFindingsForReviewer(prev, "nonexistent")
 		if len(got) != 0 {
 			t.Errorf("expected no findings for unknown reviewer, got %d", len(got))
+		}
+	})
+
+	t.Run("merged_source_matches_individual_reviewer", func(t *testing.T) {
+		// After dedup, a finding may have Source = "go-specialist, ai-harness".
+		// priorFindingsForReviewer must return the finding for either reviewer.
+		prev := &schemas.ReviewOutput{
+			TicketKey: "TEST-1",
+			Verdict:   "rework",
+			Findings: []schemas.ReviewFinding{
+				{Source: "go-specialist, ai-harness", Severity: "critical", File: "x.go", Issue: "nil deref"},
+				{Source: "ai-harness", Severity: "minor", File: "p.md", Issue: "style"},
+			},
+		}
+
+		goFindings := priorFindingsForReviewer(prev, "go-specialist")
+		if len(goFindings) != 1 {
+			t.Fatalf("expected 1 finding for go-specialist, got %d", len(goFindings))
+		}
+		if goFindings[0].Issue != "nil deref" {
+			t.Errorf("finding issue = %q, want %q", goFindings[0].Issue, "nil deref")
+		}
+
+		aiFindings := priorFindingsForReviewer(prev, "ai-harness")
+		if len(aiFindings) != 2 {
+			t.Fatalf("expected 2 findings for ai-harness, got %d", len(aiFindings))
 		}
 	})
 }
@@ -2892,5 +2938,212 @@ func TestEngine_ParallelReview_NoConcurrencyLimit(t *testing.T) {
 		// With 3 reviewers and no limit, we expect at least 2 concurrent.
 		// Exact concurrency depends on scheduling, so we use a soft check.
 		t.Logf("warning: max concurrent API calls = %d (expected >= 2 with 3 reviewers)", observed)
+	}
+}
+
+func TestDeduplicateFindings(t *testing.T) {
+	tests := []struct {
+		name         string
+		findings     []schemas.ReviewFinding
+		wantCount    int
+		wantRemoved  int
+		wantFindings []schemas.ReviewFinding // optional: assert specific output
+	}{
+		{
+			name:        "no_findings",
+			findings:    nil,
+			wantCount:   0,
+			wantRemoved: 0,
+		},
+		{
+			name: "no_duplicates",
+			findings: []schemas.ReviewFinding{
+				{Source: "go-specialist", File: "handler.go", Line: 10, Severity: "critical", Issue: "nil deref"},
+				{Source: "ai-harness", File: "handler.go", Line: 20, Severity: "major", Issue: "missing guard"},
+			},
+			wantCount:   2,
+			wantRemoved: 0,
+		},
+		{
+			name: "exact_line_match_same_file_line_severity",
+			findings: []schemas.ReviewFinding{
+				{Source: "go-specialist", File: "handler.go", Line: 42, Severity: "critical", Issue: "nil pointer dereference"},
+				{Source: "ai-harness", File: "handler.go", Line: 42, Severity: "critical", Issue: "nil deref"},
+			},
+			wantCount:   1,
+			wantRemoved: 1,
+			wantFindings: []schemas.ReviewFinding{
+				{Source: "go-specialist, ai-harness", File: "handler.go", Line: 42, Severity: "critical", Issue: "nil pointer dereference"},
+			},
+		},
+		{
+			name: "same_file_line_different_severity_not_deduped",
+			findings: []schemas.ReviewFinding{
+				{Source: "go-specialist", File: "handler.go", Line: 42, Severity: "critical", Issue: "nil deref"},
+				{Source: "ai-harness", File: "handler.go", Line: 42, Severity: "minor", Issue: "style issue"},
+			},
+			wantCount:   2,
+			wantRemoved: 0,
+		},
+		{
+			name: "zero_line_substring_match",
+			findings: []schemas.ReviewFinding{
+				{Source: "go-specialist", File: "prompts/plan.md", Line: 0, Severity: "major", Issue: "missing template guard for edge cases"},
+				{Source: "ai-harness", File: "prompts/plan.md", Line: 0, Severity: "major", Issue: "missing template guard"},
+			},
+			wantCount:   1,
+			wantRemoved: 1,
+			wantFindings: []schemas.ReviewFinding{
+				{Source: "go-specialist, ai-harness", File: "prompts/plan.md", Line: 0, Severity: "major", Issue: "missing template guard for edge cases"},
+			},
+		},
+		{
+			name: "zero_line_no_substring_not_deduped",
+			findings: []schemas.ReviewFinding{
+				{Source: "go-specialist", File: "prompts/plan.md", Line: 0, Severity: "major", Issue: "missing template guard"},
+				{Source: "ai-harness", File: "prompts/plan.md", Line: 0, Severity: "major", Issue: "unused variable in template"},
+			},
+			wantCount:   2,
+			wantRemoved: 0,
+		},
+		{
+			name: "keeps_longer_issue_text",
+			findings: []schemas.ReviewFinding{
+				{Source: "ai-harness", File: "handler.go", Line: 10, Severity: "critical", Issue: "nil deref"},
+				{Source: "go-specialist", File: "handler.go", Line: 10, Severity: "critical", Issue: "nil deref — add a nil check before calling method"},
+			},
+			wantCount:   1,
+			wantRemoved: 1,
+			wantFindings: []schemas.ReviewFinding{
+				{Source: "ai-harness, go-specialist", File: "handler.go", Line: 10, Severity: "critical", Issue: "nil deref — add a nil check before calling method"},
+			},
+		},
+		{
+			name: "severity_case_insensitive",
+			findings: []schemas.ReviewFinding{
+				{Source: "go-specialist", File: "handler.go", Line: 5, Severity: "Critical", Issue: "issue A"},
+				{Source: "ai-harness", File: "handler.go", Line: 5, Severity: "critical", Issue: "issue A extended"},
+			},
+			wantCount:   1,
+			wantRemoved: 1,
+			wantFindings: []schemas.ReviewFinding{
+				// The first finding's original Severity casing is preserved.
+				{Source: "go-specialist, ai-harness", File: "handler.go", Line: 5, Severity: "Critical", Issue: "issue A extended"},
+			},
+		},
+		{
+			name: "empty_issue_zero_line_not_deduped",
+			findings: []schemas.ReviewFinding{
+				{Source: "go-specialist", File: "handler.go", Line: 0, Severity: "major", Issue: ""},
+				{Source: "ai-harness", File: "handler.go", Line: 0, Severity: "major", Issue: "missing guard"},
+			},
+			wantCount:   2,
+			wantRemoved: 0,
+		},
+		{
+			name: "substring_source_names_not_collapsed",
+			findings: []schemas.ReviewFinding{
+				{Source: "go-specialist", File: "handler.go", Line: 10, Severity: "critical", Issue: "nil deref"},
+				{Source: "go", File: "handler.go", Line: 10, Severity: "critical", Issue: "nil deref short"},
+			},
+			wantCount:   1,
+			wantRemoved: 1,
+			wantFindings: []schemas.ReviewFinding{
+				// "go" source is NOT collapsed into "go-specialist" — both appear.
+				// Longer issue text ("nil deref short") is kept.
+				{Source: "go-specialist, go", File: "handler.go", Line: 10, Severity: "critical", Issue: "nil deref short"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, removed := deduplicateFindings(tt.findings)
+			if len(got) != tt.wantCount {
+				t.Errorf("deduplicateFindings() returned %d findings, want %d", len(got), tt.wantCount)
+			}
+			if removed != tt.wantRemoved {
+				t.Errorf("deduplicateFindings() removed = %d, want %d", removed, tt.wantRemoved)
+			}
+			if tt.wantFindings != nil {
+				for i, want := range tt.wantFindings {
+					if i >= len(got) {
+						t.Errorf("missing finding at index %d", i)
+						continue
+					}
+					g := got[i]
+					if g.Source != want.Source {
+						t.Errorf("finding[%d].Source = %q, want %q", i, g.Source, want.Source)
+					}
+					if g.Issue != want.Issue {
+						t.Errorf("finding[%d].Issue = %q, want %q", i, g.Issue, want.Issue)
+					}
+					if g.File != want.File {
+						t.Errorf("finding[%d].File = %q, want %q", i, g.File, want.File)
+					}
+					if g.Line != want.Line {
+						t.Errorf("finding[%d].Line = %d, want %d", i, g.Line, want.Line)
+					}
+					if g.Severity != want.Severity {
+						t.Errorf("finding[%d].Severity = %q, want %q", i, g.Severity, want.Severity)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestDeduplicateFindings_ReworkCycleRoundTrip(t *testing.T) {
+	// Simulate the round-trip: two reviewers produce duplicate critical
+	// findings → dedup merges them → the merged output is persisted →
+	// neededReviewersFromPrior correctly identifies both contributing
+	// reviewers as needing to re-run.
+	input := []schemas.ReviewFinding{
+		{Source: "go-specialist", File: "handler.go", Line: 42, Severity: "critical", Issue: "nil pointer dereference"},
+		{Source: "ai-harness", File: "handler.go", Line: 42, Severity: "critical", Issue: "nil deref"},
+		{Source: "ai-harness", File: "utils.go", Line: 10, Severity: "minor", Issue: "naming convention"},
+	}
+
+	deduped, removed := deduplicateFindings(input)
+	if removed != 1 {
+		t.Fatalf("expected 1 duplicate removed, got %d", removed)
+	}
+	if len(deduped) != 2 {
+		t.Fatalf("expected 2 findings after dedup, got %d", len(deduped))
+	}
+
+	// Build a ReviewOutput as if it were persisted and loaded back.
+	review := &schemas.ReviewOutput{
+		TicketKey: "TEST-319",
+		Findings:  deduped,
+		Verdict:   computeReviewVerdict(deduped),
+	}
+
+	// neededReviewersFromPrior must split the merged Source and mark both
+	// reviewers as needed for re-run.
+	needed := neededReviewersFromPrior(review)
+	if needed == nil {
+		t.Fatal("expected non-nil needed map")
+	}
+	if !needed["go-specialist"] {
+		t.Error("go-specialist should be needed (contributed to merged critical finding)")
+	}
+	if !needed["ai-harness"] {
+		t.Error("ai-harness should be needed (contributed to merged critical finding)")
+	}
+
+	// priorFindingsForReviewer must return the merged finding for both
+	// individual reviewer names.
+	goFindings := priorFindingsForReviewer(review, "go-specialist")
+	if len(goFindings) != 1 {
+		t.Fatalf("expected 1 finding for go-specialist, got %d", len(goFindings))
+	}
+	if goFindings[0].Source != "go-specialist, ai-harness" {
+		t.Errorf("finding source = %q, want %q", goFindings[0].Source, "go-specialist, ai-harness")
+	}
+
+	aiFindings := priorFindingsForReviewer(review, "ai-harness")
+	if len(aiFindings) != 2 {
+		t.Fatalf("expected 2 findings for ai-harness (merged critical + minor), got %d", len(aiFindings))
 	}
 }
