@@ -77,7 +77,7 @@ func runStatus(stateDir string) error {
 		if cached, ok := plCache[name]; ok {
 			return cached.pl, nil
 		}
-		phasesPath, cleanup, err := resolvePhasesPath(name)
+		phasesPath, cleanup, err := resolvePhasesPath(name, "")
 		if err != nil {
 			return nil, err
 		}

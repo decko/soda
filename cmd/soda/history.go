@@ -184,7 +184,7 @@ func prettyJSON(data json.RawMessage) string {
 // renderMetaHistory renders a simple history table from meta.json only.
 // Used as a fallback when events.jsonl does not exist.
 func renderMetaHistory(meta *pipeline.PipelineMeta) error {
-	phasesPath, cleanup, err := resolvePhasesPath(meta.Pipeline)
+	phasesPath, cleanup, err := resolvePhasesPath(meta.Pipeline, "")
 	if err != nil {
 		return fmt.Errorf("history: %w", err)
 	}
