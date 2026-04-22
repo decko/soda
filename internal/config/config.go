@@ -18,7 +18,8 @@ type Config struct {
 	Model        string              `yaml:"model"`
 	Sandbox      SandboxConfig       `yaml:"sandbox"`
 	Limits       LimitsConfig        `yaml:"limits"`
-	PhasesPath   string              `yaml:"phases_path"` // explicit path to pipeline YAML; overrides CWD discovery
+	PhasesPath   string              `yaml:"phases_path"`  // explicit path to pipeline YAML; overrides CWD discovery
+	PromptsPath  string              `yaml:"prompts_path"` // base directory for prompt templates; overrides CWD discovery
 	WorktreeDir  string              `yaml:"worktree_dir"`
 	StateDir     string              `yaml:"state_dir"`
 	Context      []string            `yaml:"context"`

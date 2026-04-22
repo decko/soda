@@ -150,11 +150,14 @@ func runPipeline(cfg *config.Config, opts pipelineOpts) error {
 	}
 	defer os.RemoveAll(promptDir)
 
-	// Search order: user config dir > working dir > embedded.
+	// Search order: user config dir > prompts_path from config > working dir > embedded.
 	// phases.yaml references prompts with the "prompts/" prefix
 	// (e.g. "prompts/triage.md"), so the base dirs should NOT
 	// include "prompts/" — the loader joins base + name.
 	loaderDirs := []string{"."}
+	if cfg.PromptsPath != "" {
+		loaderDirs = append([]string{cfg.PromptsPath}, loaderDirs...)
+	}
 	configDir, _ := os.UserConfigDir()
 	if configDir != "" {
 		loaderDirs = append([]string{filepath.Join(configDir, "soda")}, loaderDirs...)
