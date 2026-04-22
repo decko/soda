@@ -85,7 +85,12 @@ func neededReviewersFromPrior(prev *schemas.ReviewOutput) map[string]bool {
 	for _, finding := range prev.Findings {
 		sev := strings.ToLower(finding.Severity)
 		if sev == "critical" || sev == "major" {
-			needed[finding.Source] = true
+			// Source may be a comma-joined string from dedup merging
+			// (e.g. "go-specialist, ai-harness"). Split to mark each
+			// individual reviewer as needed.
+			for _, src := range strings.Split(finding.Source, ", ") {
+				needed[src] = true
+			}
 		}
 	}
 	return needed
@@ -101,8 +106,13 @@ func priorFindingsForReviewer(prev *schemas.ReviewOutput, reviewerName string) [
 	}
 	var findings []schemas.ReviewFinding
 	for _, f := range prev.Findings {
-		if f.Source == reviewerName {
-			findings = append(findings, f)
+		// Source may be a comma-joined string from dedup merging
+		// (e.g. "go-specialist, ai-harness"). Check each component.
+		for _, src := range strings.Split(f.Source, ", ") {
+			if src == reviewerName {
+				findings = append(findings, f)
+				break
+			}
 		}
 	}
 	return findings
@@ -551,6 +561,18 @@ func (e *Engine) runReviewerWithRetry(ctx context.Context, phase PhaseConfig, re
 	}
 }
 
+// sourceContains checks whether the comma-separated combined source string
+// contains an exact match for name. This avoids false positives when reviewer
+// names are substrings of each other (e.g. "go" vs "go-specialist").
+func sourceContains(combined, name string) bool {
+	for _, s := range strings.Split(combined, ", ") {
+		if s == name {
+			return true
+		}
+	}
+	return false
+}
+
 // deduplicateFindings removes duplicate findings from the merged list.
 // Two findings are considered duplicates when they share the same File and
 // Severity and either (a) they have the same positive Line number, or
@@ -588,7 +610,7 @@ func deduplicateFindings(findings []schemas.ReviewFinding) ([]schemas.ReviewFind
 				if len(f.Issue) > len(existing.Issue) {
 					existing.Issue = f.Issue
 				}
-				if f.Source != "" && !strings.Contains(existing.Source, f.Source) {
+				if f.Source != "" && !sourceContains(existing.Source, f.Source) {
 					existing.Source = existing.Source + ", " + f.Source
 				}
 				removed++
@@ -603,12 +625,12 @@ func deduplicateFindings(findings []schemas.ReviewFinding) ([]schemas.ReviewFind
 			merged := false
 			for _, idx := range zeroIndex[zk] {
 				existing := &result[idx]
-				if strings.Contains(existing.Issue, f.Issue) || strings.Contains(f.Issue, existing.Issue) {
+				if f.Issue != "" && existing.Issue != "" && (strings.Contains(existing.Issue, f.Issue) || strings.Contains(f.Issue, existing.Issue)) {
 					// Keep the longer issue text.
 					if len(f.Issue) > len(existing.Issue) {
 						existing.Issue = f.Issue
 					}
-					if f.Source != "" && !strings.Contains(existing.Source, f.Source) {
+					if f.Source != "" && !sourceContains(existing.Source, f.Source) {
 						existing.Source = existing.Source + ", " + f.Source
 					}
 					removed++
