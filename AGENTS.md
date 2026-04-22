@@ -160,9 +160,12 @@ soda/
 │   │   ├── history.go             # soda history
 │   │   ├── clean.go               # soda clean
 │   │   ├── render.go              # soda render-prompt
+│   │   ├── spec.go                # soda spec (guided ticket creation)
+│   │   ├── pipelines.go           # soda pipelines (list available)
 │   │   ├── version.go             # soda version
 │   │   └── embeds/                # go:embed content
 │   │       ├── phases.yaml        # Default pipeline config
+│   │       ├── pipelines/          # Named pipeline definitions (quick-fix, docs-only)
 │   │       ├── prompts/           # Phase prompt templates
 │   │       └── plugin/            # Claude Code plugin files
 │   ├── schemagen/main.go          # JSON schema generator
@@ -180,6 +183,12 @@ soda/
 │   ├── pipeline/
 │   │   ├── engine.go              # Phase loop, rework routing, corrective routing
 │   │   ├── errors.go              # reworkSignal, PhaseGateError, BudgetExceededError
+│   │   ├── feedback.go             # Rework feedback construction
+│   │   ├── gate.go                # Phase gating and rework routing
+│   │   ├── guardrails.go          # Retry logic and budget enforcement
+│   │   ├── review.go              # Parallel review orchestration
+│   │   ├── siblings.go            # Sibling-function context injection
+│   │   ├── discovery.go           # Named pipeline discovery
 │   │   ├── events.go              # Structured event log
 │   │   ├── phase.go               # PhaseConfig, CorrectiveConfig, ReviewerConfig
 │   │   ├── prompt.go              # PromptData, ReworkFeedback, template rendering
@@ -601,6 +610,7 @@ If yes, include a "Docs to update" section in the issue body listing the files t
 |---------|---------|
 | `soda init [--yes] [--force] [--dry-run] [--phases] [--no-gitignore]` | Auto-detect project stack and generate `soda.yaml` |
 | `soda run <ticket>` | Run the pipeline for a ticket |
+| `soda run <ticket> --pipeline <name>` | Run with a named pipeline (quick-fix, docs-only, or custom) |
 | `soda run <ticket> --from <phase>` | Resume from a specific phase (`last` auto-resolves to last running/failed) |
 | `soda run <ticket> --dry-run` | Render prompts without executing |
 | `soda run <ticket> --mode checkpoint` | Pause after each phase for confirmation |
@@ -620,6 +630,9 @@ If yes, include a "Docs to update" section in the issue body listing the files t
 | `soda cost` | Show cumulative cost breakdown across all sessions |
 | `soda plugin install [--global] [--force]` | Install the SODA Claude Code plugin |
 | `soda plugin uninstall [--global]` | Remove the SODA Claude Code plugin |
+| `soda spec <description>` | Generate a ticket specification from a short description |
+| `soda spec --from-file <path>` | Generate a spec from a longer description file |
+| `soda pipelines` | List available named pipelines |
 | `soda render-prompt --phase <phase> --ticket <key>` | Render a phase prompt template for debugging |
 | `soda version` | Show version |
 
