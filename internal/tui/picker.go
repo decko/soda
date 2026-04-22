@@ -160,6 +160,15 @@ func (m PickerModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "q", "ctrl+c", "esc":
 			m.quitting = true
 			return m, tea.Quit
+		case "r":
+			if m.refreshFunc != nil && !m.loading {
+				m.loading = true
+				fn := m.refreshFunc
+				return m, func() tea.Msg {
+					tickets, err := fn()
+					return ticketsRefreshedMsg{tickets: tickets, err: err}
+				}
+			}
 		}
 		return m, nil
 	}
