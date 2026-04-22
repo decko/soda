@@ -21,4 +21,5 @@ var phaseSchemas = map[string]string{
 	"follow-up": FollowUpSchema,
 	"patch":     PatchSchema,
 	"monitor":   MonitorSchema,
+	"spec":      SpecSchema,
 }

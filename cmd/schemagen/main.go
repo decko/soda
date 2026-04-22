@@ -35,6 +35,7 @@ var registry = []struct {
 	{"follow-up", reflect.TypeOf(schemas.FollowUpOutput{})},
 	{"patch", reflect.TypeOf(schemas.PatchOutput{})},
 	{"monitor", reflect.TypeOf(schemas.MonitorOutput{})},
+	{"spec", reflect.TypeOf(schemas.SpecOutput{})},
 }
 
 func main() {
