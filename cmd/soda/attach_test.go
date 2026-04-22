@@ -17,7 +17,7 @@ import (
 func TestAttach_NonExistentTicket(t *testing.T) {
 	stateDir := t.TempDir()
 	var stdout, stderr bytes.Buffer
-	err := runAttach(&stdout, &stderr, stateDir, "GHOST-999", false, false)
+	err := runAttach(&stdout, &stderr, stateDir, "GHOST-999", false, false, false)
 	if err == nil {
 		t.Fatal("expected error for non-existent ticket")
 	}
@@ -49,7 +49,7 @@ func TestAttach_CompletedPipeline(t *testing.T) {
 	os.WriteFile(filepath.Join(ticketDir, "lock"), lockData, 0644)
 
 	var stdout, stderr bytes.Buffer
-	err := runAttach(&stdout, &stderr, stateDir, "TEST-1", false, false)
+	err := runAttach(&stdout, &stderr, stateDir, "TEST-1", false, false, false)
 	if err == nil {
 		t.Fatal("expected error for completed pipeline")
 	}

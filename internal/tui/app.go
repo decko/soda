@@ -31,6 +31,7 @@ type Model struct {
 	buffered    []pipeline.Event
 	detailMode  bool
 	paused      bool
+	readOnly    bool // attached mode: no engine control
 	engineDone  bool
 	width       int
 	height      int
@@ -51,6 +52,24 @@ func New(t ticket.Ticket, phases []string, events <-chan pipeline.Event, pauseSi
 		events:      events,
 		pauseSignal: pauseSignal,
 		pauseG:      &pauseGuard{},
+	}
+}
+
+// NewAttach creates a TUI model in read-only attached mode. The TUI
+// displays live output from an external pipeline but cannot control it
+// (pause/resume/confirm are disabled).
+func NewAttach(ticketKey string, phases []string, events <-chan pipeline.Event) Model {
+	t := ticket.Ticket{Key: ticketKey}
+	return Model{
+		ticket:   newTicketView(t),
+		pipeline: newPipelineView(phases),
+		output:   newOutputView(),
+		stats:    newStatsView(),
+		keys:     newKeysView(),
+		phases:   phases,
+		events:   events,
+		readOnly: true,
+		pauseG:   &pauseGuard{},
 	}
 }
 
@@ -187,6 +206,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "p":
+		if m.readOnly {
+			m.keys.flash = "read-only: cannot pause"
+			return m, clearFlashAfter()
+		}
 		m.paused = !m.paused
 		m.keys.paused = m.paused
 		m.sendPauseSignal(m.paused)
@@ -217,6 +240,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, clearFlashAfter()
 
 	case "enter":
+		if m.readOnly {
+			return m, nil
+		}
 		if m.paused {
 			m.paused = false
 			m.keys.paused = false
@@ -275,6 +301,7 @@ func (m *Model) layout() {
 	m.pipeline.width = w
 	m.stats.width = w
 	m.keys.width = w
+	m.keys.readOnly = m.readOnly
 
 	// Calculate output viewport height: total height minus other components
 	// ticket ~5 lines + border, pipeline ~8 lines + border, stats 3 lines, keys 1 line, gaps
