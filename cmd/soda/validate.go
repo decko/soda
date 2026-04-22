@@ -98,7 +98,7 @@ func runValidate(w io.Writer, errW io.Writer, cfg *config.Config, pipelineName s
 
 // validatePhases loads and validates the pipeline config (cross-references, structure).
 func validatePhases(w io.Writer, result *validationResult, pipelineName string) *pipeline.PhasePipeline {
-	phasesPath, cleanup, err := resolvePhasesPath(pipelineName)
+	phasesPath, cleanup, err := resolvePhasesPath(pipelineName, "")
 	if err != nil {
 		result.addError("phases: %v", err)
 		return nil
