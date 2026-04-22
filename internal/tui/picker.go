@@ -11,12 +11,13 @@ import (
 // TicketInfo holds the data needed to render a single ticket row
 // in the TUI ticket picker.
 type TicketInfo struct {
-	Key      string
-	Summary  string
-	Type     string
-	Priority string
-	Status   string
-	Labels   []string
+	Key         string
+	Summary     string
+	Type        string
+	Priority    string
+	Status      string
+	Labels      []string
+	Description string
 }
 
 // PickerAction represents an action the user selected on a ticket.
@@ -214,17 +215,25 @@ func (m PickerModel) View() string {
 		filterLine = stylePending.Render("filter: ") + m.filter + "\n\n"
 	}
 
-	var lines []string
+	var listLines []string
 	for idx, ticket := range filtered {
-		lines = append(lines, renderTicketRow(ticket, idx == m.cursor))
+		listLines = append(listLines, renderTicketRow(ticket, idx == m.cursor))
 	}
 	if len(filtered) == 0 {
-		lines = []string{stylePending.Render("No matches.")}
+		listLines = []string{stylePending.Render("No matches.")}
+	}
+	listBody := strings.Join(listLines, "\n")
+
+	// Preview panel for the highlighted ticket.
+	var body string
+	if len(filtered) > 0 {
+		preview := renderPreviewPanel(filtered[m.cursor])
+		body = lipgloss.JoinHorizontal(lipgloss.Top, listBody, "  ", preview)
+	} else {
+		body = listBody
 	}
 
-	content := filterLine + strings.Join(lines, "\n")
-	content += "\n\n" + m.pickerHelpBar()
-
+	content := filterLine + body + "\n\n" + m.pickerHelpBar()
 	return renderPickerFrame(content, m.width)
 }
 
@@ -276,6 +285,29 @@ func ticketPriorityStyle(priority string) lipgloss.Style {
 	default:
 		return stylePending
 	}
+}
+
+// renderPreviewPanel returns a compact detail view for the given ticket,
+// shown to the right of the ticket list.
+func renderPreviewPanel(t TicketInfo) string {
+	lines := []string{
+		styleHeader.Render(t.Key),
+		"",
+		stylePending.Render("Type:     ") + t.Type,
+		stylePending.Render("Status:   ") + t.Status,
+		stylePending.Render("Priority: ") + t.Priority,
+	}
+	if len(t.Labels) > 0 {
+		lines = append(lines, stylePending.Render("Labels:   ")+strings.Join(t.Labels, ", "))
+	}
+	if t.Description != "" {
+		desc := t.Description
+		if runes := []rune(desc); len(runes) > 80 {
+			desc = string(runes[:77]) + "..."
+		}
+		lines = append(lines, "", stylePending.Render("Desc:"), desc)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // pageSize returns the number of rows to skip on pg up/pg down.
