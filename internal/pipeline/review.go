@@ -551,6 +551,81 @@ func (e *Engine) runReviewerWithRetry(ctx context.Context, phase PhaseConfig, re
 	}
 }
 
+// deduplicateFindings removes duplicate findings from the merged list.
+// Two findings are considered duplicates when they share the same File and
+// Severity and either (a) they have the same positive Line number, or
+// (b) both have Line == 0 and one's Issue text is a substring of the other's.
+// When duplicates are found the longer Issue text is kept and Source names
+// are combined with ", ".
+func deduplicateFindings(findings []schemas.ReviewFinding) ([]schemas.ReviewFinding, int) {
+	type lineKey struct {
+		File     string
+		Line     int
+		Severity string
+	}
+
+	// Index for findings with Line > 0 — O(1) lookup.
+	lineIndex := make(map[lineKey]int) // key → index in result slice
+
+	// Separate list for findings with Line == 0, grouped by file+severity.
+	type zeroKey struct {
+		File     string
+		Severity string
+	}
+	zeroIndex := make(map[zeroKey][]int) // key → indices in result slice
+
+	var result []schemas.ReviewFinding
+	removed := 0
+
+	for _, f := range findings {
+		sevLower := strings.ToLower(f.Severity)
+
+		if f.Line > 0 {
+			key := lineKey{File: f.File, Line: f.Line, Severity: sevLower}
+			if idx, exists := lineIndex[key]; exists {
+				// Duplicate: merge into existing entry.
+				existing := &result[idx]
+				if len(f.Issue) > len(existing.Issue) {
+					existing.Issue = f.Issue
+				}
+				if f.Source != "" && !strings.Contains(existing.Source, f.Source) {
+					existing.Source = existing.Source + ", " + f.Source
+				}
+				removed++
+			} else {
+				lineIndex[key] = len(result)
+				result = append(result, f)
+			}
+		} else {
+			// Line == 0: check for substring match among existing zero-line
+			// findings with the same file + severity.
+			zk := zeroKey{File: f.File, Severity: sevLower}
+			merged := false
+			for _, idx := range zeroIndex[zk] {
+				existing := &result[idx]
+				if strings.Contains(existing.Issue, f.Issue) || strings.Contains(f.Issue, existing.Issue) {
+					// Keep the longer issue text.
+					if len(f.Issue) > len(existing.Issue) {
+						existing.Issue = f.Issue
+					}
+					if f.Source != "" && !strings.Contains(existing.Source, f.Source) {
+						existing.Source = existing.Source + ", " + f.Source
+					}
+					removed++
+					merged = true
+					break
+				}
+			}
+			if !merged {
+				zeroIndex[zk] = append(zeroIndex[zk], len(result))
+				result = append(result, f)
+			}
+		}
+	}
+
+	return result, removed
+}
+
 // mergeReviewFindings combines findings from all reviewers and computes a verdict.
 func (e *Engine) mergeReviewFindings(phase PhaseConfig, results []reviewerResult) schemas.ReviewOutput {
 	var allFindings []schemas.ReviewFinding
@@ -562,14 +637,17 @@ func (e *Engine) mergeReviewFindings(phase PhaseConfig, results []reviewerResult
 		}
 	}
 
+	allFindings, duplicatesRemoved := deduplicateFindings(allFindings)
+
 	verdict := computeReviewVerdict(allFindings)
 
 	e.emit(Event{
 		Phase: phase.Name,
 		Kind:  EventReviewMerged,
 		Data: map[string]any{
-			"findings_count": len(allFindings),
-			"verdict":        verdict,
+			"findings_count":     len(allFindings),
+			"verdict":            verdict,
+			"duplicates_removed": duplicatesRemoved,
 		},
 	})
 
