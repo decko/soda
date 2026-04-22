@@ -68,13 +68,16 @@ func pipelineOptsFromCmd(cmd *cobra.Command, ticketKey string) pipelineOpts {
 
 func newRunCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "run <ticket>",
-		Short: "Run the pipeline for a ticket",
-		Args:  cobra.ExactArgs(1),
+		Use:   "run [ticket]",
+		Short: "Run the pipeline for a ticket (or pick one interactively)",
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig(cmd)
 			if err != nil {
 				return err
+			}
+			if len(args) == 0 {
+				return runPick(cmd, cfg)
 			}
 			return runPipeline(cfg, pipelineOptsFromCmd(cmd, args[0]))
 		},
@@ -86,6 +89,7 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().Bool("dry-run", false, "render prompts without executing")
 	cmd.Flags().Bool("mock", false, "use mock runner for testing")
 	cmd.Flags().Bool("tui", false, "use interactive TUI display")
+	cmd.Flags().String("query", "", "search filter for listing tickets (picker mode)")
 
 	return cmd
 }
