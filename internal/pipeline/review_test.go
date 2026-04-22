@@ -2894,3 +2894,132 @@ func TestEngine_ParallelReview_NoConcurrencyLimit(t *testing.T) {
 		t.Logf("warning: max concurrent API calls = %d (expected >= 2 with 3 reviewers)", observed)
 	}
 }
+
+func TestDeduplicateFindings(t *testing.T) {
+	tests := []struct {
+		name         string
+		findings     []schemas.ReviewFinding
+		wantCount    int
+		wantRemoved  int
+		wantFindings []schemas.ReviewFinding // optional: assert specific output
+	}{
+		{
+			name:        "no_findings",
+			findings:    nil,
+			wantCount:   0,
+			wantRemoved: 0,
+		},
+		{
+			name: "no_duplicates",
+			findings: []schemas.ReviewFinding{
+				{Source: "go-specialist", File: "handler.go", Line: 10, Severity: "critical", Issue: "nil deref"},
+				{Source: "ai-harness", File: "handler.go", Line: 20, Severity: "major", Issue: "missing guard"},
+			},
+			wantCount:   2,
+			wantRemoved: 0,
+		},
+		{
+			name: "exact_line_match_same_file_line_severity",
+			findings: []schemas.ReviewFinding{
+				{Source: "go-specialist", File: "handler.go", Line: 42, Severity: "critical", Issue: "nil pointer dereference"},
+				{Source: "ai-harness", File: "handler.go", Line: 42, Severity: "critical", Issue: "nil deref"},
+			},
+			wantCount:   1,
+			wantRemoved: 1,
+			wantFindings: []schemas.ReviewFinding{
+				{Source: "go-specialist, ai-harness", File: "handler.go", Line: 42, Severity: "critical", Issue: "nil pointer dereference"},
+			},
+		},
+		{
+			name: "same_file_line_different_severity_not_deduped",
+			findings: []schemas.ReviewFinding{
+				{Source: "go-specialist", File: "handler.go", Line: 42, Severity: "critical", Issue: "nil deref"},
+				{Source: "ai-harness", File: "handler.go", Line: 42, Severity: "minor", Issue: "style issue"},
+			},
+			wantCount:   2,
+			wantRemoved: 0,
+		},
+		{
+			name: "zero_line_substring_match",
+			findings: []schemas.ReviewFinding{
+				{Source: "go-specialist", File: "prompts/plan.md", Line: 0, Severity: "major", Issue: "missing template guard for edge cases"},
+				{Source: "ai-harness", File: "prompts/plan.md", Line: 0, Severity: "major", Issue: "missing template guard"},
+			},
+			wantCount:   1,
+			wantRemoved: 1,
+			wantFindings: []schemas.ReviewFinding{
+				{Source: "go-specialist, ai-harness", File: "prompts/plan.md", Line: 0, Severity: "major", Issue: "missing template guard for edge cases"},
+			},
+		},
+		{
+			name: "zero_line_no_substring_not_deduped",
+			findings: []schemas.ReviewFinding{
+				{Source: "go-specialist", File: "prompts/plan.md", Line: 0, Severity: "major", Issue: "missing template guard"},
+				{Source: "ai-harness", File: "prompts/plan.md", Line: 0, Severity: "major", Issue: "unused variable in template"},
+			},
+			wantCount:   2,
+			wantRemoved: 0,
+		},
+		{
+			name: "keeps_longer_issue_text",
+			findings: []schemas.ReviewFinding{
+				{Source: "ai-harness", File: "handler.go", Line: 10, Severity: "critical", Issue: "nil deref"},
+				{Source: "go-specialist", File: "handler.go", Line: 10, Severity: "critical", Issue: "nil deref — add a nil check before calling method"},
+			},
+			wantCount:   1,
+			wantRemoved: 1,
+			wantFindings: []schemas.ReviewFinding{
+				{Source: "ai-harness, go-specialist", File: "handler.go", Line: 10, Severity: "critical", Issue: "nil deref — add a nil check before calling method"},
+			},
+		},
+		{
+			name: "severity_case_insensitive",
+			findings: []schemas.ReviewFinding{
+				{Source: "go-specialist", File: "handler.go", Line: 5, Severity: "Critical", Issue: "issue A"},
+				{Source: "ai-harness", File: "handler.go", Line: 5, Severity: "critical", Issue: "issue A extended"},
+			},
+			wantCount:   1,
+			wantRemoved: 1,
+			wantFindings: []schemas.ReviewFinding{
+				// The first finding's original Severity casing is preserved.
+				{Source: "go-specialist, ai-harness", File: "handler.go", Line: 5, Severity: "Critical", Issue: "issue A extended"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, removed := deduplicateFindings(tt.findings)
+			if len(got) != tt.wantCount {
+				t.Errorf("deduplicateFindings() returned %d findings, want %d", len(got), tt.wantCount)
+			}
+			if removed != tt.wantRemoved {
+				t.Errorf("deduplicateFindings() removed = %d, want %d", removed, tt.wantRemoved)
+			}
+			if tt.wantFindings != nil {
+				for i, want := range tt.wantFindings {
+					if i >= len(got) {
+						t.Errorf("missing finding at index %d", i)
+						continue
+					}
+					g := got[i]
+					if g.Source != want.Source {
+						t.Errorf("finding[%d].Source = %q, want %q", i, g.Source, want.Source)
+					}
+					if g.Issue != want.Issue {
+						t.Errorf("finding[%d].Issue = %q, want %q", i, g.Issue, want.Issue)
+					}
+					if g.File != want.File {
+						t.Errorf("finding[%d].File = %q, want %q", i, g.File, want.File)
+					}
+					if g.Line != want.Line {
+						t.Errorf("finding[%d].Line = %d, want %d", i, g.Line, want.Line)
+					}
+					if g.Severity != want.Severity {
+						t.Errorf("finding[%d].Severity = %q, want %q", i, g.Severity, want.Severity)
+					}
+				}
+			}
+		})
+	}
+}
