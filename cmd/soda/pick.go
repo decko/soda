@@ -79,6 +79,7 @@ func runPick(cmd *cobra.Command, cfg *config.Config) error {
 
 	// Trigger the pipeline for the selected ticket.
 	fmt.Printf("Selected: %s — %s\n", result.Ticket.Key, result.Ticket.Summary)
+	cancel() // release signal handler before runPipeline creates its own
 	return runPipeline(cmd, cfg, result.Ticket.Key)
 }
 
