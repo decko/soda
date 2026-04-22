@@ -38,7 +38,7 @@ func TestClaudeEnv(t *testing.T) {
 	t.Setenv("LANG", "en_US.UTF-8")
 
 	opts := runner.RunOpts{Phase: "triage", WorkDir: "/work"}
-	env := claudeEnv("/tmp/sandbox", opts, "/usr/local/bin/claude")
+	env := claudeEnv("/tmp/sandbox", opts, "/usr/local/bin/claude", false)
 
 	envMap := make(map[string]string)
 	for _, entry := range env {
@@ -69,7 +69,7 @@ func TestClaudeEnvVertexPassthrough(t *testing.T) {
 	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", "/path/to/creds.json")
 
 	opts := runner.RunOpts{Phase: "plan", WorkDir: "/work"}
-	env := claudeEnv("/tmp/sb", opts, "/usr/bin/claude")
+	env := claudeEnv("/tmp/sb", opts, "/usr/bin/claude", false)
 
 	envMap := make(map[string]string)
 	for _, entry := range env {
@@ -97,7 +97,7 @@ func TestClaudeEnvNoKeyMeansNoEntry(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_USE_VERTEX", "")
 
 	opts := runner.RunOpts{Phase: "plan", WorkDir: "/work"}
-	env := claudeEnv("/tmp/sb", opts, "/usr/bin/claude")
+	env := claudeEnv("/tmp/sb", opts, "/usr/bin/claude", false)
 
 	for _, entry := range env {
 		if strings.HasPrefix(entry, "ANTHROPIC_API_KEY=") {
@@ -106,6 +106,32 @@ func TestClaudeEnvNoKeyMeansNoEntry(t *testing.T) {
 		if strings.HasPrefix(entry, "CLAUDE_CODE_USE_VERTEX=") {
 			t.Error("CLAUDE_CODE_USE_VERTEX should not be present when empty")
 		}
+	}
+}
+
+func TestClaudeEnvProxyMode(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-real-key")
+
+	opts := runner.RunOpts{Phase: "implement", WorkDir: "/work"}
+	env := claudeEnv("/tmp/sb", opts, "/usr/bin/claude", true)
+
+	envMap := make(map[string]string)
+	for _, entry := range env {
+		parts := strings.SplitN(entry, "=", 2)
+		if len(parts) == 2 {
+			envMap[parts[0]] = parts[1]
+		}
+	}
+
+	if envMap["ANTHROPIC_API_KEY"] != "sk-proxy-nonce" {
+		t.Errorf("ANTHROPIC_API_KEY = %q, want 'sk-proxy-nonce'", envMap["ANTHROPIC_API_KEY"])
+	}
+	if envMap["ANTHROPIC_BASE_URL"] != "http://127.0.0.1:8080" {
+		t.Errorf("ANTHROPIC_BASE_URL = %q, want 'http://127.0.0.1:8080'", envMap["ANTHROPIC_BASE_URL"])
+	}
+	// Real credentials should NOT be present.
+	if _, ok := envMap["GOOGLE_APPLICATION_CREDENTIALS"]; ok {
+		t.Error("GOOGLE_APPLICATION_CREDENTIALS should not be present in proxy mode")
 	}
 }
 

@@ -76,9 +76,21 @@ type ExtractionStrategy struct {
 
 // SandboxConfig holds sandbox execution settings.
 type SandboxConfig struct {
-	Enabled bool          `yaml:"enabled"`
-	Binary  string        `yaml:"binary"`
-	Limits  SandboxLimits `yaml:"limits"`
+	Enabled bool               `yaml:"enabled"`
+	Binary  string             `yaml:"binary"`
+	Limits  SandboxLimits      `yaml:"limits"`
+	Proxy   SandboxProxyConfig `yaml:"proxy"`
+}
+
+// SandboxProxyConfig holds LLM proxy settings for sandboxed execution.
+// When enabled, API calls are routed through a host-side proxy for
+// credential isolation, token metering, and budget enforcement.
+type SandboxProxyConfig struct {
+	Enabled         bool   `yaml:"enabled"`
+	UpstreamURL     string `yaml:"upstream_url,omitempty"`      // defaults to ANTHROPIC_BASE_URL or https://api.anthropic.com
+	MaxInputTokens  int64  `yaml:"max_input_tokens,omitempty"`  // per-session budget; 0 = unlimited
+	MaxOutputTokens int64  `yaml:"max_output_tokens,omitempty"` // per-session budget; 0 = unlimited
+	LogDir          string `yaml:"log_dir,omitempty"`           // request/response log directory; empty = no logging
 }
 
 // SandboxLimits holds resource limits for sandboxed execution.
