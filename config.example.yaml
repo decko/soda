@@ -38,6 +38,17 @@ sandbox:
     cpu_percent: 200
     max_pids: 256
 
+  # LLM proxy — route API calls through a host-side proxy for
+  # credential isolation, token metering, and budget enforcement.
+  # When enabled, the sandbox uses full network isolation (UseNetNS: true)
+  # and API calls are bridged through a Unix socket.
+  proxy:
+    enabled: false
+    # upstream_url: https://api.anthropic.com  # default; or set ANTHROPIC_BASE_URL
+    # max_input_tokens: 500000   # per-session input token budget; 0 = unlimited
+    # max_output_tokens: 200000  # per-session output token budget; 0 = unlimited
+    # log_dir: .soda/proxy-logs  # request/response audit log directory
+
 # Budget and duration limits
 limits:
   max_cost_per_ticket: 30.00

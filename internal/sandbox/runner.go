@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/decko/soda/internal/claude"
+	"github.com/decko/soda/internal/proxy"
 	"github.com/decko/soda/internal/runner"
 	arapuca "github.com/sergio-correia/go-arapuca"
 )
@@ -125,6 +126,54 @@ func (r *Runner) Run(ctx context.Context, opts runner.RunOpts) (*runner.RunResul
 	readPaths = append(readPaths, tmpDir)
 	writePaths = append(writePaths, tmpDir)
 
+	useNetNS := r.config.UseNetNS
+	var networkProxySocket string
+	var llmProxy *proxy.Proxy
+
+	// Start LLM proxy if configured. This enables full network isolation:
+	// Claude Code API calls are routed through the proxy Unix socket,
+	// and arapuca bridges it into the sandbox via NetworkProxySocket.
+	if r.config.Proxy.Enabled {
+		useNetNS = true // force network isolation when proxy is active
+
+		socketDir, socketErr := arapuca.MakeSocketDir()
+		if socketErr != nil {
+			return nil, fmt.Errorf("sandbox: create socket dir for proxy: %w", socketErr)
+		}
+		defer os.RemoveAll(socketDir)
+
+		sockPath := filepath.Join(socketDir, "llm.sock")
+		readPaths = append(readPaths, socketDir)
+
+		apiKey := r.config.Proxy.APIKey
+		if apiKey == "" {
+			apiKey = os.Getenv("ANTHROPIC_API_KEY")
+		}
+		upstreamURL := r.config.Proxy.UpstreamURL
+		if upstreamURL == "" {
+			upstreamURL = os.Getenv("ANTHROPIC_BASE_URL")
+		}
+		if upstreamURL == "" {
+			upstreamURL = "https://api.anthropic.com"
+		}
+
+		var proxyErr error
+		llmProxy, proxyErr = proxy.New(proxy.Config{
+			SocketPath:      sockPath,
+			UpstreamURL:     upstreamURL,
+			APIKey:          apiKey,
+			MaxInputTokens:  r.config.Proxy.MaxInputTokens,
+			MaxOutputTokens: r.config.Proxy.MaxOutputTokens,
+			LogDir:          r.config.Proxy.LogDir,
+		})
+		if proxyErr != nil {
+			return nil, fmt.Errorf("sandbox: start LLM proxy: %w", proxyErr)
+		}
+		defer llmProxy.Close()
+
+		networkProxySocket = sockPath
+	}
+
 	profile := arapuca.Profile{
 		ReadPaths:     readPaths,
 		WritePaths:    writePaths,
@@ -132,7 +181,7 @@ func (r *Runner) Run(ctx context.Context, opts runner.RunOpts) (*runner.RunResul
 		MaxCPUPct:     r.config.CPUPercent,
 		MaxPIDs:       r.config.MaxPIDs,
 		MaxFileSizeMB: r.config.MaxFileSizeMB,
-		UseNetNS:      r.config.UseNetNS,
+		UseNetNS:      useNetNS,
 	}
 
 	// Set up stdout/stderr pipes. Defer closing both ends as safety net
@@ -152,18 +201,19 @@ func (r *Runner) Run(ctx context.Context, opts runner.RunOpts) (*runner.RunResul
 	defer stderrW.Close()
 
 	cfg := arapuca.Config{
-		Profile: profile,
-		TaskID:  opts.Phase,
-		Phase:   opts.Phase,
-		WorkDir: opts.WorkDir,
-		Stdout:  stdoutW,
-		Stderr:  stderrW,
+		Profile:            profile,
+		TaskID:             opts.Phase,
+		Phase:              opts.Phase,
+		WorkDir:            opts.WorkDir,
+		Stdout:             stdoutW,
+		Stderr:             stderrW,
+		NetworkProxySocket: networkProxySocket,
 	}
 
 	// Serialize env mutation + Launch to prevent races if multiple Runners
 	// are used concurrently. Restore env immediately after Launch returns —
 	// no need to keep sandbox env vars set during subprocess execution.
-	env := claudeEnv(tmpDir, opts, r.claudeBin)
+	env := claudeEnv(tmpDir, opts, r.claudeBin, r.config.Proxy.Enabled)
 	launchMu.Lock()
 	restore := setEnvForLaunch(env)
 	proc, launchErr := r.sandbox.Launch(ctx, cfg, r.claudeBin, args, nil)

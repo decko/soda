@@ -98,7 +98,11 @@ func systemReadPaths() []string {
 }
 
 // claudeEnv builds the environment for a sandboxed Claude Code process.
-func claudeEnv(tmpDir string, opts runner.RunOpts, claudeBin string) []string {
+// When useProxy is true, real credentials are NOT passed to the sandbox.
+// Instead, a fake API key is set and ANTHROPIC_BASE_URL points to the
+// proxy's in-sandbox bridge (http://127.0.0.1:8080). The proxy injects
+// real credentials on the host side.
+func claudeEnv(tmpDir string, opts runner.RunOpts, claudeBin string, useProxy bool) []string {
 	env := []string{
 		"HOME=" + tmpDir,
 		"TMPDIR=" + tmpDir,
@@ -120,20 +124,28 @@ func claudeEnv(tmpDir string, opts runner.RunOpts, claudeBin string) []string {
 		env = append(env, "NODE_PATH="+nodePath)
 	}
 
-	// Credentials: pass through real API key or Vertex vars for v1.
-	// v2 (#29) will use a fake nonce with LLM proxy.
-	credentialVars := []string{
-		"ANTHROPIC_API_KEY",
-		"CLAUDE_CODE_USE_VERTEX",
-		"VERTEXAI_PROJECT",
-		"VERTEXAI_LOCATION",
-		"CLOUD_ML_REGION",
-		"GOOGLE_APPLICATION_CREDENTIALS",
-		"GOOGLE_CLOUD_PROJECT",
-	}
-	for _, key := range credentialVars {
-		if val := os.Getenv(key); val != "" {
-			env = append(env, key+"="+val)
+	if useProxy {
+		// Proxy mode: fake API key + base URL pointing to the in-sandbox
+		// bridge that arapuca sets up from NetworkProxySocket.
+		env = append(env,
+			"ANTHROPIC_API_KEY=sk-proxy-nonce",
+			"ANTHROPIC_BASE_URL=http://127.0.0.1:8080",
+		)
+	} else {
+		// Direct mode: pass through real credentials.
+		credentialVars := []string{
+			"ANTHROPIC_API_KEY",
+			"CLAUDE_CODE_USE_VERTEX",
+			"VERTEXAI_PROJECT",
+			"VERTEXAI_LOCATION",
+			"CLOUD_ML_REGION",
+			"GOOGLE_APPLICATION_CREDENTIALS",
+			"GOOGLE_CLOUD_PROJECT",
+		}
+		for _, key := range credentialVars {
+			if val := os.Getenv(key); val != "" {
+				env = append(env, key+"="+val)
+			}
 		}
 	}
 
