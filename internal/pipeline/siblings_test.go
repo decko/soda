@@ -448,3 +448,167 @@ func TestFoo(t *testing.T) {}
 		}
 	})
 }
+
+func TestExtractGoFunctionBodies(t *testing.T) {
+	t.Run("extracts_function_bodies", func(t *testing.T) {
+		dir := t.TempDir()
+		src := `package main
+
+func Add(a, b int) int {
+	return a + b
+}
+
+func Multiply(a, b int) int {
+	result := a * b
+	return result
+}
+`
+		path := filepath.Join(dir, "math.go")
+		os.WriteFile(path, []byte(src), 0644)
+
+		bodies, err := ExtractGoFunctionBodies(path)
+		if err != nil {
+			t.Fatalf("ExtractGoFunctionBodies: %v", err)
+		}
+		if len(bodies) != 2 {
+			t.Fatalf("got %d bodies, want 2", len(bodies))
+		}
+		if !strings.Contains(bodies[0].Body, "return a + b") {
+			t.Errorf("first body missing 'return a + b': %q", bodies[0].Body)
+		}
+		if !strings.Contains(bodies[1].Body, "result := a * b") {
+			t.Errorf("second body missing 'result := a * b': %q", bodies[1].Body)
+		}
+	})
+
+	t.Run("extracts_method_bodies", func(t *testing.T) {
+		dir := t.TempDir()
+		src := `package main
+
+type Server struct{}
+
+func (s *Server) Start() error {
+	return nil
+}
+`
+		path := filepath.Join(dir, "server.go")
+		os.WriteFile(path, []byte(src), 0644)
+
+		bodies, err := ExtractGoFunctionBodies(path)
+		if err != nil {
+			t.Fatalf("ExtractGoFunctionBodies: %v", err)
+		}
+		if len(bodies) != 1 {
+			t.Fatalf("got %d bodies, want 1", len(bodies))
+		}
+		if !strings.Contains(bodies[0].Name, "Server") {
+			t.Errorf("name should contain receiver: %q", bodies[0].Name)
+		}
+		if !strings.Contains(bodies[0].Body, "return nil") {
+			t.Errorf("body missing 'return nil': %q", bodies[0].Body)
+		}
+	})
+
+	t.Run("skips_test_files", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "math_test.go")
+		os.WriteFile(path, []byte("package main\nfunc TestAdd(t *testing.T) {}\n"), 0644)
+
+		bodies, err := ExtractGoFunctionBodies(path)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if bodies != nil {
+			t.Error("expected nil for test files")
+		}
+	})
+
+	t.Run("skips_non_go_files", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "readme.md")
+		os.WriteFile(path, []byte("# Readme"), 0644)
+
+		bodies, err := ExtractGoFunctionBodies(path)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if bodies != nil {
+			t.Error("expected nil for non-Go files")
+		}
+	})
+}
+
+func TestBuildSiblingContext_BodiesInjected(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "pkg"), 0755)
+
+	src := `package pkg
+
+func Process(data string) error {
+	if data == "" {
+		return fmt.Errorf("empty")
+	}
+	return nil
+}
+
+func helper() string {
+	return "ok"
+}
+`
+	os.WriteFile(filepath.Join(dir, "pkg", "process.go"), []byte(src), 0644)
+
+	plan := `{
+		"ticket_key": "TEST-1",
+		"approach": "fix",
+		"tasks": [{"id":"T1","description":"fix process","files":["pkg/process.go"],"done_when":"ok"}],
+		"verification": {"commands":["go test"]}
+	}`
+
+	ctx := BuildSiblingContext(dir, json.RawMessage(plan), 0)
+	if ctx == "" {
+		t.Fatal("expected non-empty context")
+	}
+	// Should contain full function bodies, not just signatures.
+	if !strings.Contains(ctx, "return fmt.Errorf") {
+		t.Errorf("context should contain function body, got:\n%s", ctx)
+	}
+	if !strings.Contains(ctx, "return \"ok\"") {
+		t.Errorf("context should contain helper body, got:\n%s", ctx)
+	}
+	// Should be wrapped in code fence.
+	if !strings.Contains(ctx, "```go") {
+		t.Errorf("context should contain code fence, got:\n%s", ctx)
+	}
+}
+
+func TestBuildSiblingContext_FallsBackToSignatures(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create a file with enough functions that bodies exceed a small budget.
+	var src strings.Builder
+	src.WriteString("package main\n\n")
+	for i := 0; i < 20; i++ {
+		src.WriteString(fmt.Sprintf("func Func%d() {\n\t// body line %d\n}\n\n", i, i))
+	}
+	os.WriteFile(filepath.Join(dir, "big.go"), []byte(src.String()), 0644)
+
+	plan := `{
+		"ticket_key": "TEST-1",
+		"approach": "x",
+		"tasks": [{"id":"T1","description":"x","files":["big.go"],"done_when":"x"}],
+		"verification": {"commands":[]}
+	}`
+
+	// Budget that fits signatures but not full bodies.
+	ctx := BuildSiblingContext(dir, json.RawMessage(plan), 500)
+	if ctx == "" {
+		t.Fatal("expected non-empty context (signatures fallback)")
+	}
+	// Should have signatures (backtick-quoted), not code fences.
+	if strings.Contains(ctx, "```go") {
+		t.Error("should have fallen back to signatures, but got code fence (bodies)")
+	}
+	if !strings.Contains(ctx, "Func0") {
+		t.Errorf("context should contain function names: %s", ctx)
+	}
+}

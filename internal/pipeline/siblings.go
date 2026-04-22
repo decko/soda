@@ -215,10 +215,68 @@ func exprString(expr ast.Expr) string {
 	}
 }
 
+// FunctionBody holds a Go function/method name and its full source text.
+type FunctionBody struct {
+	Name string // e.g. "Run" or "(e *Engine) Run"
+	Body string // full source text including signature line
+}
+
+// ExtractGoFunctionBodies parses a Go source file and returns full
+// function/method bodies. Returns nil for non-Go files, test files,
+// or parse errors (best-effort).
+func ExtractGoFunctionBodies(filePath string) ([]FunctionBody, error) {
+	if !strings.HasSuffix(filePath, ".go") {
+		return nil, nil
+	}
+	if strings.HasSuffix(filePath, "_test.go") {
+		return nil, nil
+	}
+
+	src, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("siblings: read %s: %w", filePath, err)
+	}
+
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, filePath, src, 0)
+	if err != nil {
+		return nil, fmt.Errorf("siblings: parse %s: %w", filePath, err)
+	}
+
+	lines := strings.Split(string(src), "\n")
+	var bodies []FunctionBody
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok {
+			continue
+		}
+
+		startLine := fset.Position(fn.Pos()).Line - 1 // 0-based
+		endLine := fset.Position(fn.End()).Line       // 1-based, inclusive
+
+		if startLine < 0 {
+			startLine = 0
+		}
+		if endLine > len(lines) {
+			endLine = len(lines)
+		}
+
+		body := strings.Join(lines[startLine:endLine], "\n")
+		bodies = append(bodies, FunctionBody{
+			Name: formatFuncSignature(fn),
+			Body: body,
+		})
+	}
+	return bodies, nil
+}
+
 // BuildSiblingContext reads the plan result from state, extracts the
-// referenced files, and returns a formatted string of function
-// signatures grouped by file. Returns an empty string if the plan
-// result is unavailable or contains no Go files.
+// referenced files, and returns a formatted context string grouped by file.
+//
+// For Go source files, full function bodies are injected so the implement
+// phase sees the actual code it needs to modify. When a file's bodies would
+// exceed the remaining budget, the function falls back to signatures only.
+// Test files always get signatures (bodies are less useful for context).
 //
 // maxBytes limits the total size of the returned string. When maxBytes
 // is 0, the default limit (maxSiblingContextBytes) is used.
@@ -236,8 +294,6 @@ func BuildSiblingContext(workDir string, planResult json.RawMessage, maxBytes in
 	totalBytes := 0
 	for _, relPath := range files {
 		absPath := filepath.Join(workDir, relPath)
-		// Validate resolved path stays within workDir to prevent path traversal
-		// from LLM-generated plan file paths.
 		absResolved, err := filepath.Abs(absPath)
 		if err != nil {
 			continue
@@ -253,30 +309,14 @@ func BuildSiblingContext(workDir string, planResult json.RawMessage, maxBytes in
 			continue
 		}
 
-		var sigs []string
-		if strings.HasSuffix(relPath, "_test.go") {
-			sigs, err = ExtractGoTestPatterns(absPath)
-		} else {
-			sigs, err = ExtractGoSignatures(absPath)
-		}
-		if err != nil || len(sigs) == 0 {
+		section := buildFileSection(absPath, relPath, maxBytes-totalBytes)
+		if section == "" {
 			continue
 		}
 
-		var b strings.Builder
-		b.WriteString("### ")
-		b.WriteString(relPath)
-		b.WriteByte('\n')
-		for _, sig := range sigs {
-			b.WriteString("- `")
-			b.WriteString(sig)
-			b.WriteString("`\n")
-		}
-
-		section := b.String()
 		sepCost := 0
 		if len(sections) > 0 {
-			sepCost = 1 // for the "\n" between previous section and this one
+			sepCost = 1
 		}
 		if totalBytes+sepCost+len(section) > maxBytes {
 			break
@@ -289,4 +329,68 @@ func BuildSiblingContext(workDir string, planResult json.RawMessage, maxBytes in
 		return ""
 	}
 	return strings.Join(sections, "\n")
+}
+
+// buildFileSection returns a formatted context section for a single file.
+// For non-test Go files, it tries full function bodies first and falls
+// back to signatures if bodies exceed remainingBudget. Test files and
+// non-Go files always use signatures.
+func buildFileSection(absPath, relPath string, remainingBudget int) string {
+	isTest := strings.HasSuffix(relPath, "_test.go")
+
+	// Try full bodies for non-test Go files.
+	if !isTest && strings.HasSuffix(relPath, ".go") {
+		bodies, err := ExtractGoFunctionBodies(absPath)
+		if err == nil && len(bodies) > 0 {
+			section := formatBodiesSection(relPath, bodies)
+			if len(section) <= remainingBudget {
+				return section
+			}
+			// Bodies too large — fall through to signatures.
+		}
+	}
+
+	// Signatures as fallback (or primary for test files).
+	var sigs []string
+	var err error
+	if isTest {
+		sigs, err = ExtractGoTestPatterns(absPath)
+	} else {
+		sigs, err = ExtractGoSignatures(absPath)
+	}
+	if err != nil || len(sigs) == 0 {
+		return ""
+	}
+	return formatSignaturesSection(relPath, sigs)
+}
+
+// formatBodiesSection renders a file section with full function bodies.
+func formatBodiesSection(relPath string, bodies []FunctionBody) string {
+	var b strings.Builder
+	b.WriteString("### ")
+	b.WriteString(relPath)
+	b.WriteString("\n```go\n")
+	for i, body := range bodies {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(body.Body)
+		b.WriteByte('\n')
+	}
+	b.WriteString("```\n")
+	return b.String()
+}
+
+// formatSignaturesSection renders a file section with function signatures.
+func formatSignaturesSection(relPath string, sigs []string) string {
+	var b strings.Builder
+	b.WriteString("### ")
+	b.WriteString(relPath)
+	b.WriteByte('\n')
+	for _, sig := range sigs {
+		b.WriteString("- `")
+		b.WriteString(sig)
+		b.WriteString("`\n")
+	}
+	return b.String()
 }
