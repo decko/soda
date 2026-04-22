@@ -80,7 +80,18 @@ func runPick(cmd *cobra.Command, cfg *config.Config) error {
 	// Trigger the pipeline for the selected ticket.
 	fmt.Printf("Selected: %s — %s\n", result.Ticket.Key, result.Ticket.Summary)
 	cancel() // release signal handler before runPipeline creates its own
-	return runPipeline(cmd, cfg, result.Ticket.Key)
+
+	pipelineName, _ := cmd.Flags().GetString("pipeline")
+	mode, _ := cmd.Flags().GetString("mode")
+	useMock, _ := cmd.Flags().GetBool("mock")
+	return runPipeline(cfg, pipelineOpts{
+		ticketKey:       result.Ticket.Key,
+		pipelineName:    pipelineName,
+		pipelineChanged: cmd.Flags().Changed("pipeline"),
+		mode:            mode,
+		modeChanged:     cmd.Flags().Changed("mode"),
+		useMock:         useMock,
+	})
 }
 
 // ticketsToPickerInfo converts ticket.Ticket slices to tui.TicketInfo slices.

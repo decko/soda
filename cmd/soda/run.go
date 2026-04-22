@@ -29,6 +29,43 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// pipelineOpts holds all flag-driven parameters for runPipeline so callers
+// don't need to register or pass a *cobra.Command with the right flags.
+type pipelineOpts struct {
+	ticketKey       string
+	pipelineName    string
+	pipelineChanged bool // true when --pipeline was explicitly passed
+	mode            string
+	modeChanged     bool // true when --mode was explicitly passed
+	fromPhase       string
+	dryRun          bool
+	useMock         bool
+	useTUI          bool
+}
+
+// pipelineOptsFromCmd extracts pipelineOpts from Cobra flags registered on the
+// run command.
+func pipelineOptsFromCmd(cmd *cobra.Command, ticketKey string) pipelineOpts {
+	pipelineName, _ := cmd.Flags().GetString("pipeline")
+	mode, _ := cmd.Flags().GetString("mode")
+	fromPhase, _ := cmd.Flags().GetString("from")
+	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	useMock, _ := cmd.Flags().GetBool("mock")
+	useTUI, _ := cmd.Flags().GetBool("tui")
+
+	return pipelineOpts{
+		ticketKey:       ticketKey,
+		pipelineName:    pipelineName,
+		pipelineChanged: cmd.Flags().Changed("pipeline"),
+		mode:            mode,
+		modeChanged:     cmd.Flags().Changed("mode"),
+		fromPhase:       fromPhase,
+		dryRun:          dryRun,
+		useMock:         useMock,
+		useTUI:          useTUI,
+	}
+}
+
 func newRunCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "run <ticket>",
@@ -39,7 +76,7 @@ func newRunCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return runPipeline(cmd, cfg, args[0])
+			return runPipeline(cfg, pipelineOptsFromCmd(cmd, args[0]))
 		},
 	}
 
@@ -53,11 +90,12 @@ func newRunCmd() *cobra.Command {
 	return cmd
 }
 
-func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error {
+func runPipeline(cfg *config.Config, opts pipelineOpts) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	ticketKey := opts.ticketKey
+	dryRun := opts.dryRun
 
 	// Fetch ticket
 	source, err := createTicketSource(cfg)
@@ -85,7 +123,7 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 	}
 
 	// Load pipeline config
-	pipelineName, _ := cmd.Flags().GetString("pipeline")
+	pipelineName := opts.pipelineName
 	phasesPath, phasesCleanup, err := resolvePhasesPath(pipelineName)
 	if err != nil {
 		return fmt.Errorf("run: %w", err)
@@ -163,10 +201,10 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 	}
 
 	// When resuming, check if the stored pipeline differs from the current flag.
-	fromPhaseFlag, _ := cmd.Flags().GetString("from")
+	fromPhaseFlag := opts.fromPhase
 	if fromPhaseFlag != "" {
 		storedPipeline := state.Meta().Pipeline
-		if !cmd.Flags().Changed("pipeline") && storedPipeline != "" && storedPipeline != pipelineName {
+		if !opts.pipelineChanged && storedPipeline != "" && storedPipeline != pipelineName {
 			// Auto-adopt the stored pipeline name so the resume uses the correct config.
 			fmt.Fprintf(os.Stderr, "Warning: original run used pipeline %q; adopting for resume\n", storedPipeline)
 			pipelineName = storedPipeline
@@ -182,7 +220,7 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 				return fmt.Errorf("run: %w", err)
 			}
 			pl.Name = pipelineName
-		} else if cmd.Flags().Changed("pipeline") && storedPipeline != pipelineName {
+		} else if opts.pipelineChanged && storedPipeline != pipelineName {
 			fmt.Fprintf(os.Stderr, "Warning: original run used pipeline %q, but resuming with %q\n", storedPipeline, pipelineName)
 		}
 	}
@@ -190,8 +228,8 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 	// Resolve mode
 	mode := pipeline.Autonomous
 	modeStr := cfg.Mode
-	if cmd.Flags().Changed("mode") {
-		modeStr, _ = cmd.Flags().GetString("mode")
+	if opts.modeChanged {
+		modeStr = opts.mode
 	}
 	switch modeStr {
 	case "checkpoint":
@@ -204,7 +242,7 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 
 	// Build runner
 	var r runner.Runner
-	useMock, _ := cmd.Flags().GetBool("mock")
+	useMock := opts.useMock
 	if useMock {
 		r = buildMockRunner()
 	} else {
@@ -231,7 +269,7 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 	promptContext := buildPromptContext(cfg)
 
 	// Check if TUI mode is requested.
-	useTUI, _ := cmd.Flags().GetBool("tui")
+	useTUI := opts.useTUI
 
 	// Set up progress display (used in non-TUI mode).
 	isTTY := isatty.IsTerminal(os.Stdout.Fd()) || isatty.IsCygwinTerminal(os.Stdout.Fd())
@@ -346,7 +384,7 @@ func runPipeline(cmd *cobra.Command, cfg *config.Config, ticketKey string) error
 	costBefore := state.Meta().TotalCost
 
 	// Run or resume
-	fromPhase, _ := cmd.Flags().GetString("from")
+	fromPhase := opts.fromPhase
 	startTime := time.Now()
 
 	var runErr error
