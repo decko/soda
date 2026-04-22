@@ -55,8 +55,17 @@ func runPick(cmd *cobra.Command, cfg *config.Config) error {
 	// Convert to TUI model data.
 	infos := ticketsToPickerInfo(tickets)
 
+	// Build refresh function so the user can press 'r' to reload the list.
+	refreshFn := func() ([]tui.TicketInfo, error) {
+		ts, listErr := source.List(ctx, query)
+		if listErr != nil {
+			return nil, listErr
+		}
+		return ticketsToPickerInfo(ts), nil
+	}
+
 	// Launch the picker TUI.
-	model := tui.NewPickerModel(infos)
+	model := tui.NewPickerModelWithRefresh(infos, refreshFn)
 	program := tea.NewProgram(model, tea.WithAltScreen())
 	finalModel, err := program.Run()
 	if err != nil {

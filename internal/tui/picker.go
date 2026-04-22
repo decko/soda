@@ -36,16 +36,25 @@ type PickerResult struct {
 	Action PickerAction
 }
 
+// ticketsRefreshedMsg carries the result of a background ticket refresh.
+type ticketsRefreshedMsg struct {
+	tickets []TicketInfo
+	err     error
+}
+
 // PickerModel is a bubbletea model for browsing and selecting tickets.
 type PickerModel struct {
-	tickets   []TicketInfo
-	cursor    int
-	width     int
-	height    int
-	result    *PickerResult
-	quitting  bool
-	filter    string
-	filtering bool
+	tickets     []TicketInfo
+	cursor      int
+	width       int
+	height      int
+	result      *PickerResult
+	quitting    bool
+	filter      string
+	filtering   bool
+	refreshFunc func() ([]TicketInfo, error)
+	refreshErr  string
+	loading     bool
 }
 
 // NewPickerModel creates a new ticket picker model.
@@ -53,6 +62,14 @@ func NewPickerModel(tickets []TicketInfo) PickerModel {
 	return PickerModel{
 		tickets: tickets,
 	}
+}
+
+// NewPickerModelWithRefresh creates a picker model that supports refreshing
+// the ticket list by pressing 'r'. refreshFn is called in the background.
+func NewPickerModelWithRefresh(tickets []TicketInfo, refreshFn func() ([]TicketInfo, error)) PickerModel {
+	m := NewPickerModel(tickets)
+	m.refreshFunc = refreshFn
+	return m
 }
 
 // Result returns the selected ticket action, or nil if the user quit.
@@ -75,6 +92,17 @@ func (m PickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
+
+	case ticketsRefreshedMsg:
+		m.loading = false
+		if msg.err != nil {
+			m.refreshErr = msg.err.Error()
+		} else {
+			m.refreshErr = ""
+			m.tickets = msg.tickets
+			m.cursor = 0
+		}
+		return m, nil
 	}
 
 	return m, nil
@@ -147,6 +175,17 @@ func (m PickerModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.filtering = true
 		return m, nil
 
+	case "r":
+		if m.refreshFunc != nil && !m.loading {
+			m.loading = true
+			fn := m.refreshFunc
+			return m, func() tea.Msg {
+				tickets, err := fn()
+				return ticketsRefreshedMsg{tickets: tickets, err: err}
+			}
+		}
+		return m, nil
+
 	case "up", "k":
 		if m.cursor > 0 {
 			m.cursor--
@@ -200,6 +239,14 @@ func (m PickerModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m PickerModel) View() string {
 	if m.quitting {
 		return ""
+	}
+
+	if m.loading {
+		return renderPickerFrame(stylePending.Render("Refreshing…")+"\n\n"+m.pickerHelpBar(), m.width)
+	}
+
+	if m.refreshErr != "" {
+		return renderPickerFrame(styleFailed.Render("Error: "+m.refreshErr)+"\n\n"+m.pickerHelpBar(), m.width)
 	}
 
 	if len(m.tickets) == 0 {
@@ -322,6 +369,7 @@ func (m PickerModel) pickerHelpBar() string {
 	bindings := []struct{ key, label string }{
 		{"↑/↓", "navigate"},
 		{"/", "filter"},
+		{"r", "refresh"},
 		{"Enter", "select"},
 		{"q", "quit"},
 	}
