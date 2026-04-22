@@ -104,6 +104,25 @@ func (m PickerModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case "pgup":
+		pageSize := m.pageSize()
+		if m.cursor > pageSize {
+			m.cursor -= pageSize
+		} else {
+			m.cursor = 0
+		}
+		return m, nil
+
+	case "pgdown":
+		pageSize := m.pageSize()
+		last := len(m.tickets) - 1
+		if m.cursor+pageSize < last {
+			m.cursor += pageSize
+		} else {
+			m.cursor = last
+		}
+		return m, nil
+
 	case "enter":
 		ticket := m.tickets[m.cursor]
 		m.result = &PickerResult{
@@ -185,6 +204,14 @@ func ticketPriorityStyle(priority string) lipgloss.Style {
 	default:
 		return stylePending
 	}
+}
+
+// pageSize returns the number of rows to skip on pg up/pg down.
+func (m PickerModel) pageSize() int {
+	if m.height > 6 {
+		return m.height - 6
+	}
+	return 10
 }
 
 func (m PickerModel) pickerHelpBar() string {
