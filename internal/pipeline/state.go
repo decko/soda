@@ -75,6 +75,11 @@ func (s *State) Dir() string {
 	return s.dir
 }
 
+// SocketPath returns the path to the broadcast Unix socket.
+func (s *State) SocketPath() string {
+	return filepath.Join(s.dir, "stream.sock")
+}
+
 // Meta returns the in-memory pipeline metadata. Callers should treat as read-only.
 func (s *State) Meta() *PipelineMeta {
 	return s.meta

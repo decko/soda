@@ -86,6 +86,7 @@ type Engine struct {
 	runner           runner.Runner
 	config           EngineConfig
 	state            *State
+	broadcaster      *Broadcaster
 	apiSem           *Semaphore // limits concurrent runner.Run calls; nil means unlimited
 	confirmCh        chan struct{}
 	reranPhases      map[string]bool // phases that ran (not skipped) in this execution
@@ -254,6 +255,10 @@ func (e *Engine) Run(ctx context.Context) error {
 	}
 	defer e.state.ReleaseLock()
 
+	// Start broadcast socket for live streaming to attach clients.
+	e.startBroadcaster()
+	defer e.stopBroadcaster()
+
 	// Apply pipeline-level timeout if configured.
 	ctx, cancel := e.applyPipelineTimeout(ctx)
 	defer cancel()
@@ -327,6 +332,10 @@ func (e *Engine) Resume(ctx context.Context, fromPhase string) error {
 		return fmt.Errorf("engine: %w", err)
 	}
 	defer e.state.ReleaseLock()
+
+	// Start broadcast socket for live streaming to attach clients.
+	e.startBroadcaster()
+	defer e.stopBroadcaster()
 
 	// Apply pipeline-level timeout if configured.
 	ctx, cancel := e.applyPipelineTimeout(ctx)
@@ -1046,19 +1055,46 @@ func (e *Engine) makeOnChunk(ctx context.Context, phase string) func(string) {
 }
 
 // emit logs an event to state and calls the OnEvent callback if set.
+// Also broadcasts to any attached clients via the Unix socket.
 func (e *Engine) emit(event Event) {
 	_ = e.state.LogEvent(event)
 	if e.config.OnEvent != nil {
 		e.config.OnEvent(event)
+	}
+	if e.broadcaster != nil {
+		e.broadcaster.Broadcast(event)
+	}
+}
+
+// startBroadcaster creates the broadcast Unix socket for live streaming.
+// Errors are silently ignored — broadcast is best-effort and must not
+// prevent the pipeline from running.
+func (e *Engine) startBroadcaster() {
+	b, err := NewBroadcaster(e.state.SocketPath())
+	if err != nil {
+		return
+	}
+	e.broadcaster = b
+}
+
+// stopBroadcaster closes the broadcast socket and cleans up.
+func (e *Engine) stopBroadcaster() {
+	if e.broadcaster != nil {
+		e.broadcaster.Close()
+		e.broadcaster = nil
 	}
 }
 
 // emitChunk forwards an event to the OnEvent callback without writing it
 // to events.jsonl. Output chunks are high-frequency, transient streaming
 // data that would inflate the durable log with no diagnostic value.
+// Also broadcasts to any attached clients via the Unix socket.
 func (e *Engine) emitChunk(event Event) {
 	if e.config.OnEvent != nil {
 		e.config.OnEvent(event)
+	}
+	if e.broadcaster != nil {
+		e.broadcaster.Broadcast(event)
 	}
 }
 
