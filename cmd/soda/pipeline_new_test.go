@@ -231,11 +231,11 @@ func TestRunPipelineNew_CustomDir(t *testing.T) {
 	}
 }
 
-func TestNewPipelineCmd_Structure(t *testing.T) {
-	cmd := newPipelineCmd()
+func TestNewPipelinesCmd_HasNewSubcommand(t *testing.T) {
+	cmd := newPipelinesCmd()
 
-	if cmd.Use != "pipeline" {
-		t.Errorf("Use = %q, want %q", cmd.Use, "pipeline")
+	if cmd.Use != "pipelines" {
+		t.Errorf("Use = %q, want %q", cmd.Use, "pipelines")
 	}
 
 	// Should have a "new" subcommand.
@@ -248,7 +248,7 @@ func TestNewPipelineCmd_Structure(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Error("expected 'new' subcommand")
+		t.Error("expected 'new' subcommand under pipelines")
 	}
 }
 

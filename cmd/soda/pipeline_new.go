@@ -15,18 +15,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func newPipelineCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "pipeline",
-		Short: "Manage pipeline configurations",
-		Long:  `Create and manage custom pipeline configuration files.`,
-	}
-
-	cmd.AddCommand(newPipelineNewCmd())
-
-	return cmd
-}
-
 func newPipelineNewCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "new <name>",
@@ -36,9 +24,9 @@ current directory. The file contains a commented starter template
 with implement, verify, and submit phases that you can customise.
 
 Examples:
-  soda pipeline new hotfix
-  soda pipeline new ci-lite --force
-  soda pipeline new experiment --dry-run`,
+  soda pipelines new hotfix
+  soda pipelines new ci-lite --force
+  soda pipelines new experiment --dry-run`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			force, _ := cmd.Flags().GetBool("force")
