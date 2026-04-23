@@ -251,6 +251,157 @@ func TestRenderPipelineScaffold_ContainsPhases(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Tests for --from flag
+// ---------------------------------------------------------------------------
+
+func TestRunPipelineNew_FromFilePath(t *testing.T) {
+	// Write a minimal source pipeline to a temp file.
+	srcDir := t.TempDir()
+	srcFile := filepath.Join(srcDir, "phases-src.yaml")
+	srcContent := `phases:
+  - name: build
+    prompt: prompts/build.md
+    tools:
+      - Bash
+    timeout: 5m
+    retry:
+      transient: 1
+      parse: 0
+      semantic: 0
+    depends_on: []
+`
+	if err := os.WriteFile(srcFile, []byte(srcContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	outDir := t.TempDir()
+	var buf bytes.Buffer
+	err := runPipelineNew(&buf, "mybuild", pipelineNewOptions{
+		OutputDir: outDir,
+		From:      srcFile,
+	})
+	if err != nil {
+		t.Fatalf("runPipelineNew(from=file) error: %v", err)
+	}
+
+	dest := filepath.Join(outDir, "phases-mybuild.yaml")
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read generated file: %v", err)
+	}
+	content := string(data)
+
+	// Header should use the new pipeline name.
+	if !strings.Contains(content, "# SODA Pipeline: mybuild") {
+		t.Errorf("header missing new name, got:\n%s", content)
+	}
+	// Should reference the from source.
+	if !strings.Contains(content, srcFile) {
+		t.Errorf("header should reference source file, got:\n%s", content)
+	}
+	// The build phase from the source should appear.
+	if !strings.Contains(content, "build") {
+		t.Errorf("generated content should include 'build' phase, got:\n%s", content)
+	}
+}
+
+func TestRunPipelineNew_FromEmbeddedName(t *testing.T) {
+	outDir := t.TempDir()
+	var buf bytes.Buffer
+	err := runPipelineNew(&buf, "myquick", pipelineNewOptions{
+		OutputDir: outDir,
+		From:      "quick-fix",
+	})
+	if err != nil {
+		t.Fatalf("runPipelineNew(from=quick-fix) error: %v", err)
+	}
+
+	dest := filepath.Join(outDir, "phases-myquick.yaml")
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read generated file: %v", err)
+	}
+	content := string(data)
+
+	if !strings.Contains(content, "# SODA Pipeline: myquick") {
+		t.Errorf("header missing new name, got:\n%s", content)
+	}
+	// quick-fix has implement, verify, submit phases.
+	for _, phase := range []string{"implement", "verify", "submit"} {
+		if !strings.Contains(content, phase) {
+			t.Errorf("expected phase %q in output, got:\n%s", phase, content)
+		}
+	}
+}
+
+func TestRunPipelineNew_FromDefaultEmbedded(t *testing.T) {
+	outDir := t.TempDir()
+	var buf bytes.Buffer
+	err := runPipelineNew(&buf, "custom-default", pipelineNewOptions{
+		OutputDir: outDir,
+		From:      "default",
+	})
+	if err != nil {
+		t.Fatalf("runPipelineNew(from=default) error: %v", err)
+	}
+
+	dest := filepath.Join(outDir, "phases-custom-default.yaml")
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read generated file: %v", err)
+	}
+	if !strings.Contains(string(data), "# SODA Pipeline: custom-default") {
+		t.Errorf("header missing new name")
+	}
+}
+
+func TestRunPipelineNew_FromInvalidSource(t *testing.T) {
+	var buf bytes.Buffer
+	// Non-existent file path.
+	err := runPipelineNew(&buf, "test", pipelineNewOptions{
+		From: "/nonexistent/path/phases-missing.yaml",
+	})
+	if err == nil {
+		t.Fatal("expected error for missing source file, got nil")
+	}
+}
+
+func TestRunPipelineNew_FromUnknownEmbeddedName(t *testing.T) {
+	var buf bytes.Buffer
+	err := runPipelineNew(&buf, "test", pipelineNewOptions{
+		From: "no-such-pipeline",
+	})
+	if err == nil {
+		t.Fatal("expected error for unknown embedded name, got nil")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("error should mention 'not found', got: %v", err)
+	}
+}
+
+func TestRunPipelineNew_FromDryRun(t *testing.T) {
+	outDir := t.TempDir()
+	var buf bytes.Buffer
+	err := runPipelineNew(&buf, "drytest", pipelineNewOptions{
+		OutputDir: outDir,
+		From:      "quick-fix",
+		DryRun:    true,
+	})
+	if err != nil {
+		t.Fatalf("runPipelineNew(from=quick-fix,dry-run) error: %v", err)
+	}
+
+	// No file should be written.
+	if _, err := os.Stat(filepath.Join(outDir, "phases-drytest.yaml")); err == nil {
+		t.Fatal("dry-run should not write a file")
+	}
+	// Output should contain pipeline content.
+	if !strings.Contains(buf.String(), "phases:") {
+		t.Errorf("dry-run output missing 'phases:', got: %s", buf.String())
+	}
+}
+
 func TestRunPipelineNew_StatErrorNotErrNotExist(t *testing.T) {
 	dir := t.TempDir()
 	// Create a parent dir with no read/execute permission so Stat fails
