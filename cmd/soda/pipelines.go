@@ -12,17 +12,23 @@ import (
 )
 
 func newPipelinesCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "pipelines",
-		Short: "List available pipeline configurations",
+		Short: "List and manage pipeline configurations",
 		Long: `Discover and list pipeline configuration files (phases.yaml and
 phases-<name>.yaml) from the working directory, user config directory,
-and embedded defaults.`,
+and embedded defaults.
+
+Use "soda pipelines new" to scaffold a new custom pipeline.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runPipelines(cmd)
 		},
 	}
+
+	cmd.AddCommand(newPipelineNewCmd())
+
+	return cmd
 }
 
 func runPipelines(cmd *cobra.Command) error {
