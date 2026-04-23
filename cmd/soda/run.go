@@ -22,6 +22,7 @@ import (
 	"github.com/decko/soda/internal/pipeline"
 	"github.com/decko/soda/internal/progress"
 	"github.com/decko/soda/internal/runner"
+	"github.com/decko/soda/internal/sandbox"
 	"github.com/decko/soda/internal/ticket"
 	"github.com/decko/soda/internal/tui"
 	"github.com/decko/soda/schemas"
@@ -252,6 +253,26 @@ func runPipeline(cfg *config.Config, opts pipelineOpts) error {
 	useMock := opts.useMock
 	if useMock {
 		r = buildMockRunner()
+	} else if cfg.Sandbox.Enabled {
+		sbCfg := sandbox.Config{
+			MemoryMB:     uint64(cfg.Sandbox.Limits.MemoryMB),
+			CPUPercent:   uint32(cfg.Sandbox.Limits.CPUPercent),
+			MaxPIDs:      uint32(cfg.Sandbox.Limits.MaxPIDs),
+			ClaudeBinary: cfg.Sandbox.Binary,
+			Proxy: sandbox.ProxyConfig{
+				Enabled:         cfg.Sandbox.Proxy.Enabled,
+				UpstreamURL:     cfg.Sandbox.Proxy.UpstreamURL,
+				MaxInputTokens:  cfg.Sandbox.Proxy.MaxInputTokens,
+				MaxOutputTokens: cfg.Sandbox.Proxy.MaxOutputTokens,
+				LogDir:          cfg.Sandbox.Proxy.LogDir,
+			},
+		}
+		sbRunner, err := sandbox.New(sbCfg)
+		if err != nil {
+			return fmt.Errorf("run: create sandbox runner: %w", err)
+		}
+		defer sbRunner.Close()
+		r = sbRunner
 	} else {
 		claudeRunner, err := runner.NewClaudeRunner("claude", cfg.Model, workDir)
 		if err != nil {

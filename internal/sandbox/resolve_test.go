@@ -38,7 +38,7 @@ func TestClaudeEnv(t *testing.T) {
 	t.Setenv("LANG", "en_US.UTF-8")
 
 	opts := runner.RunOpts{Phase: "triage", WorkDir: "/work"}
-	env := claudeEnv("/tmp/sandbox", opts, "/usr/local/bin/claude", false)
+	env := claudeEnv("/tmp/sandbox", opts, "/usr/local/bin/claude", "")
 
 	envMap := make(map[string]string)
 	for _, entry := range env {
@@ -69,7 +69,7 @@ func TestClaudeEnvVertexPassthrough(t *testing.T) {
 	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", "/path/to/creds.json")
 
 	opts := runner.RunOpts{Phase: "plan", WorkDir: "/work"}
-	env := claudeEnv("/tmp/sb", opts, "/usr/bin/claude", false)
+	env := claudeEnv("/tmp/sb", opts, "/usr/bin/claude", "")
 
 	envMap := make(map[string]string)
 	for _, entry := range env {
@@ -97,7 +97,7 @@ func TestClaudeEnvNoKeyMeansNoEntry(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_USE_VERTEX", "")
 
 	opts := runner.RunOpts{Phase: "plan", WorkDir: "/work"}
-	env := claudeEnv("/tmp/sb", opts, "/usr/bin/claude", false)
+	env := claudeEnv("/tmp/sb", opts, "/usr/bin/claude", "")
 
 	for _, entry := range env {
 		if strings.HasPrefix(entry, "ANTHROPIC_API_KEY=") {
@@ -111,9 +111,10 @@ func TestClaudeEnvNoKeyMeansNoEntry(t *testing.T) {
 
 func TestClaudeEnvProxyMode(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-real-key")
+	t.Setenv("CLAUDE_CODE_USE_VERTEX", "") // ensure non-Vertex for this test
 
 	opts := runner.RunOpts{Phase: "implement", WorkDir: "/work"}
-	env := claudeEnv("/tmp/sb", opts, "/usr/bin/claude", true)
+	env := claudeEnv("/tmp/sb", opts, "/usr/bin/claude", "http://127.0.0.1:8080")
 
 	envMap := make(map[string]string)
 	for _, entry := range env {
@@ -129,9 +130,42 @@ func TestClaudeEnvProxyMode(t *testing.T) {
 	if envMap["ANTHROPIC_BASE_URL"] != "http://127.0.0.1:8080" {
 		t.Errorf("ANTHROPIC_BASE_URL = %q, want 'http://127.0.0.1:8080'", envMap["ANTHROPIC_BASE_URL"])
 	}
-	// Real credentials should NOT be present.
 	if _, ok := envMap["GOOGLE_APPLICATION_CREDENTIALS"]; ok {
 		t.Error("GOOGLE_APPLICATION_CREDENTIALS should not be present in proxy mode")
+	}
+}
+
+func TestClaudeEnvProxyModeVertex(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_USE_VERTEX", "1")
+	t.Setenv("VERTEXAI_PROJECT", "my-project")
+	t.Setenv("VERTEXAI_LOCATION", "us-east5")
+
+	opts := runner.RunOpts{Phase: "implement", WorkDir: "/work"}
+	env := claudeEnv("/tmp/sb", opts, "/usr/bin/claude", "http://127.0.0.1:8080")
+
+	envMap := make(map[string]string)
+	for _, entry := range env {
+		parts := strings.SplitN(entry, "=", 2)
+		if len(parts) == 2 {
+			envMap[parts[0]] = parts[1]
+		}
+	}
+
+	if envMap["CLAUDE_CODE_USE_VERTEX"] != "1" {
+		t.Errorf("CLAUDE_CODE_USE_VERTEX = %q, want '1'", envMap["CLAUDE_CODE_USE_VERTEX"])
+	}
+	if envMap["ANTHROPIC_VERTEX_BASE_URL"] != "http://127.0.0.1:8080" {
+		t.Errorf("ANTHROPIC_VERTEX_BASE_URL = %q, want 'http://127.0.0.1:8080'", envMap["ANTHROPIC_VERTEX_BASE_URL"])
+	}
+	if envMap["CLAUDE_CODE_SKIP_VERTEX_AUTH"] != "1" {
+		t.Errorf("CLAUDE_CODE_SKIP_VERTEX_AUTH = %q, want '1'", envMap["CLAUDE_CODE_SKIP_VERTEX_AUTH"])
+	}
+	if envMap["VERTEXAI_PROJECT"] != "my-project" {
+		t.Errorf("VERTEXAI_PROJECT = %q, want 'my-project'", envMap["VERTEXAI_PROJECT"])
+	}
+	// Should NOT have ANTHROPIC_API_KEY in Vertex proxy mode.
+	if _, ok := envMap["ANTHROPIC_API_KEY"]; ok {
+		t.Error("ANTHROPIC_API_KEY should not be present in Vertex proxy mode")
 	}
 }
 
