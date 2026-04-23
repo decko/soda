@@ -200,7 +200,12 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 			return nil
 		}
 
-		// 2. Check for new comments and respond (only when enabled).
+		// 2. Check for new comments.
+		// In passive mode (respondToComments=false), we still detect and log
+		// new comments so the user knows human feedback arrived.
+		if !respondToComments {
+			e.checkNewCommentsPassive(ctx, phase.Name, monState)
+		}
 		if respondToComments {
 			classified := e.checkNewComments(ctx, phase.Name, monState)
 
@@ -461,6 +466,71 @@ func (e *Engine) checkNewComments(ctx context.Context, phaseName string, monStat
 	})
 
 	return classified
+}
+
+// checkNewCommentsPassive detects new comments without classifying or responding.
+// Used in passive mode (no self_user / respondToComments=false) to log that
+// human feedback arrived so the user knows action is needed.
+func (e *Engine) checkNewCommentsPassive(ctx context.Context, phaseName string, monState *MonitorState) {
+	if e.config.PRPoller == nil {
+		return
+	}
+
+	comments, err := e.config.PRPoller.GetNewComments(ctx, monState.PRURL, monState.LastCommentID)
+	if err != nil {
+		e.emit(Event{
+			Phase: phaseName,
+			Kind:  EventMonitorWarning,
+			Data:  map[string]any{"warning": fmt.Sprintf("get new comments: %v", err)},
+		})
+		return
+	}
+
+	if len(comments) == 0 {
+		return
+	}
+
+	// Advance LastCommentID so we don't re-report the same comments.
+	monState.LastCommentID = comments[len(comments)-1].ID
+
+	// Build comment summaries for the event.
+	commentSummaries := make([]map[string]any, 0, len(comments))
+	for _, comment := range comments {
+		commentSummaries = append(commentSummaries, map[string]any{
+			"id":     comment.ID,
+			"author": comment.Author,
+			"path":   comment.Path,
+		})
+	}
+
+	e.emit(Event{
+		Phase: phaseName,
+		Kind:  EventMonitorNewComments,
+		Data: map[string]any{
+			"count":    len(comments),
+			"passive":  true,
+			"comments": commentSummaries,
+		},
+	})
+
+	// Notify the user that comments need attention.
+	authors := make([]string, 0, len(comments))
+	seen := map[string]bool{}
+	for _, comment := range comments {
+		if !seen[comment.Author] {
+			authors = append(authors, comment.Author)
+			seen[comment.Author] = true
+		}
+	}
+	e.emit(Event{
+		Phase: phaseName,
+		Kind:  EventMonitorNotifyUser,
+		Data: map[string]any{
+			"reason":  fmt.Sprintf("%d new comment(s) detected — manual review needed (comment response not enabled)", len(comments)),
+			"count":   len(comments),
+			"authors": authors,
+		},
+	})
 }
 
 // checkCIStatus polls CI status and emits events on status changes.
