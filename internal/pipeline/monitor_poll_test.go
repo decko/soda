@@ -143,6 +143,7 @@ func setupMonitorEngineWithRunner(t *testing.T, r runner.Runner, poller PRPoller
 			EscalateAfter:     Duration{Duration: 10 * time.Millisecond},
 			MaxDuration:       Duration{Duration: 100 * time.Millisecond},
 			MaxResponseRounds: 3,
+			RespondToComments: true,
 		}
 	}
 
@@ -348,6 +349,7 @@ func TestMonitor_MaxRoundsReached(t *testing.T) {
 		EscalateAfter:     Duration{Duration: 10 * time.Millisecond},
 		MaxDuration:       Duration{Duration: 1 * time.Second},
 		MaxResponseRounds: 3,
+		RespondToComments: true,
 	}
 
 	engine, state, events := setupMonitorEngine(t, poller, pollingCfg)
@@ -443,6 +445,7 @@ func TestMonitor_MaxDurationTimeout(t *testing.T) {
 		EscalateAfter:     Duration{Duration: 10 * time.Minute},
 		MaxDuration:       Duration{Duration: 1 * time.Hour},
 		MaxResponseRounds: 3,
+		RespondToComments: true,
 	}
 
 	engine, state, events := setupMonitorEngine(t, poller, pollingCfg, func(cfg *EngineConfig) {
@@ -533,8 +536,9 @@ func TestMonitor_PollCountIncremented(t *testing.T) {
 	}
 }
 
-func TestMonitor_FallbackToStubWithoutSelfUser(t *testing.T) {
-	// When SelfUser is empty, should emit a warning and fall back to stub.
+func TestMonitor_NoSelfUserDisablesCommentResponse(t *testing.T) {
+	// When SelfUser is empty and respond_to_comments is true, comment response
+	// should be disabled but the monitor should still poll and complete normally.
 	poller := &mockPRPoller{
 		statusResponses: []mockPRStatusResponse{
 			{status: &PRStatus{State: "open", Approved: true}},
@@ -550,39 +554,33 @@ func TestMonitor_FallbackToStubWithoutSelfUser(t *testing.T) {
 	}
 
 	if !state.IsCompleted("monitor") {
-		t.Error("monitor should be completed via stub fallback")
+		t.Error("monitor should be completed (passive polling)")
 	}
 
 	hasWarning := false
-	hasMonitorSkipped := false
 	for _, e := range *events {
 		if e.Kind == EventMonitorWarning {
-			if w, _ := e.Data["warning"].(string); strings.Contains(w, "self_user not configured") {
+			if w, _ := e.Data["warning"].(string); strings.Contains(w, "respond_to_comments") {
 				hasWarning = true
 			}
 		}
-		if e.Kind == EventMonitorSkipped {
-			hasMonitorSkipped = true
-		}
 	}
 	if !hasWarning {
-		t.Error("monitor_warning event about self_user not emitted")
-	}
-	if !hasMonitorSkipped {
-		t.Error("monitor_skipped event not emitted for stub fallback")
+		t.Error("should emit warning about respond_to_comments + missing self_user")
 	}
 
-	// Should NOT have entered the polling loop.
-	_, err := state.ReadMonitorState()
-	if err == nil {
-		t.Error("monitor state should not exist (stub does not write it)")
+	// Should have entered the polling loop (monitor state exists).
+	monState, err := state.ReadMonitorState()
+	if err != nil {
+		t.Fatalf("expected monitor state to exist: %v", err)
+	}
+	if monState.PollCount == 0 {
+		t.Error("expected at least one poll cycle")
 	}
 }
 
-func TestMonitor_FallbackToStubWithWhitespaceSelfUser(t *testing.T) {
-	// Whitespace-only SelfUser should be treated the same as empty —
-	// fall back to stub rather than entering the polling loop where
-	// every classifier construction would fail.
+func TestMonitor_WhitespaceSelfUserDisablesCommentResponse(t *testing.T) {
+	// Whitespace-only SelfUser should be treated the same as empty.
 	poller := &mockPRPoller{
 		statusResponses: []mockPRStatusResponse{
 			{status: &PRStatus{State: "open", Approved: true}},
@@ -598,32 +596,19 @@ func TestMonitor_FallbackToStubWithWhitespaceSelfUser(t *testing.T) {
 	}
 
 	if !state.IsCompleted("monitor") {
-		t.Error("monitor should be completed via stub fallback")
+		t.Error("monitor should be completed (passive polling)")
 	}
 
 	hasWarning := false
-	hasMonitorSkipped := false
 	for _, e := range *events {
 		if e.Kind == EventMonitorWarning {
-			if w, _ := e.Data["warning"].(string); strings.Contains(w, "self_user not configured") {
+			if w, _ := e.Data["warning"].(string); strings.Contains(w, "respond_to_comments") {
 				hasWarning = true
 			}
 		}
-		if e.Kind == EventMonitorSkipped {
-			hasMonitorSkipped = true
-		}
 	}
 	if !hasWarning {
-		t.Error("monitor_warning event about self_user not emitted")
-	}
-	if !hasMonitorSkipped {
-		t.Error("monitor_skipped event not emitted for stub fallback")
-	}
-
-	// Should NOT have entered the polling loop.
-	_, err := state.ReadMonitorState()
-	if err == nil {
-		t.Error("monitor state should not exist (stub does not write it)")
+		t.Error("should emit warning about respond_to_comments + missing self_user")
 	}
 }
 

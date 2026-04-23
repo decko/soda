@@ -86,7 +86,9 @@ type PollingConfig struct {
 	EscalateAfter     Duration           `yaml:"escalate_after"`
 	MaxDuration       Duration           `yaml:"max_duration"`
 	MaxResponseRounds int                `yaml:"max_response_rounds"`
-	Profile           MonitorProfileName `yaml:"profile,omitempty"` // preset profile name (conservative, smart, aggressive)
+	Profile           MonitorProfileName `yaml:"profile,omitempty"`             // preset profile name (conservative, smart, aggressive)
+	RespondToComments bool               `yaml:"respond_to_comments,omitempty"` // enable comment classification + response (requires self_user)
+	AutoMerge         bool               `yaml:"auto_merge,omitempty"`          // merge PR when checks green + approved (see #338 for safeguards)
 }
 
 // Duration wraps time.Duration for YAML unmarshaling.

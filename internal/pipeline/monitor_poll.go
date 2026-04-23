@@ -28,20 +28,18 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 		return e.runMonitorStub(phase)
 	}
 
-	// Require SelfUser so the classifier can filter out the bot's own comments.
-	// Use TrimSpace to be consistent with NewCommentClassifier, which also
-	// rejects whitespace-only values. Without this, a whitespace-only SelfUser
-	// would pass this guard but fail classifier construction on every poll,
-	// causing comments to be silently dropped.
-	if strings.TrimSpace(e.config.SelfUser) == "" {
+	// Determine whether comment response is enabled.
+	// Requires both the config flag and self_user to be set.
+	respondToComments := phase.Polling != nil && phase.Polling.RespondToComments
+	if respondToComments && strings.TrimSpace(e.config.SelfUser) == "" {
 		e.emit(Event{
 			Phase: phase.Name,
 			Kind:  EventMonitorWarning,
 			Data: map[string]any{
-				"warning": "self_user not configured; falling back to stub (required for comment classification)",
+				"warning": "respond_to_comments enabled but self_user not configured; comment response disabled",
 			},
 		})
-		return e.runMonitorStub(phase)
+		respondToComments = false
 	}
 
 	polling := phase.Polling
@@ -202,73 +200,75 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 			return nil
 		}
 
-		// 2. Check for new comments.
-		classified := e.checkNewComments(ctx, phase.Name, monState)
+		// 2. Check for new comments and respond (only when enabled).
+		if respondToComments {
+			classified := e.checkNewComments(ctx, phase.Name, monState)
 
-		// Apply profile behavior filters to classified comments.
-		classified = applyProfileFilters(classified, profile)
+			// Apply profile behavior filters to classified comments.
+			classified = applyProfileFilters(classified, profile)
 
-		// 2a. Post canned acknowledgment for non-authoritative comments.
-		e.postAcknowledgments(ctx, phase.Name, classified, monState)
+			// 2a. Post canned acknowledgment for non-authoritative comments.
+			e.postAcknowledgments(ctx, phase.Name, classified, monState)
 
-		// 2b. Response execution: run a Claude session for actionable comments.
-		if HasActionable(classified) {
-			if e.runner == nil {
-				// No runner configured; count the round to avoid infinite loops,
-				// but only for fix attempts, not reply-only sessions.
-				if !isReplyOnly(classified) {
-					monState.ResponseRounds++
-				}
-			} else if e.config.MaxCostUSD > 0 && e.state.Meta().TotalCost >= e.config.MaxCostUSD {
-				// Budget exceeded — do not consume a response round since no
-				// work is performed. This prevents premature MaxRounds
-				// termination when all rounds are budget-skipped.
-				e.emit(Event{
-					Phase: phase.Name,
-					Kind:  EventBudgetWarning,
-					Data: map[string]any{
-						"total_cost": e.state.Meta().TotalCost,
-						"limit":      e.config.MaxCostUSD,
-						"skipping":   "monitor_response",
-					},
-				})
-			} else if e.config.MaxCostPerPhase > 0 && e.state.Meta().Phases[phase.Name] != nil && e.state.Meta().Phases[phase.Name].CumulativeCost >= e.config.MaxCostPerPhase {
-				// Per-phase budget exceeded — skip response, same as global budget.
-				e.emit(Event{
-					Phase: phase.Name,
-					Kind:  EventPhaseBudgetExceeded,
-					Data: map[string]any{
-						"phase_cost": e.state.Meta().Phases[phase.Name].CumulativeCost,
-						"limit":      e.config.MaxCostPerPhase,
-						"skipping":   "monitor_response",
-					},
-				})
-			} else {
-				output, err := e.respondToComments(ctx, phase, classified, monState)
-				if err != nil {
-					// Non-fatal: log and continue polling. Do not increment
-					// ResponseRounds so transient failures don't consume the budget.
-					e.emit(Event{
-						Phase: phase.Name,
-						Kind:  EventMonitorResponseFailed,
-						Data: map[string]any{
-							"response_round": monState.ResponseRounds,
-							"error":          err.Error(),
-						},
-					})
-				} else if output != nil {
-					// Increment the appropriate counter after a successful response.
-					if isReplyOnly(classified) {
-						monState.ReplyRounds++
-					} else {
+			// 2b. Response execution: run a Claude session for actionable comments.
+			if HasActionable(classified) {
+				if e.runner == nil {
+					// No runner configured; count the round to avoid infinite loops,
+					// but only for fix attempts, not reply-only sessions.
+					if !isReplyOnly(classified) {
 						monState.ResponseRounds++
 					}
-					// Programmatic verify gate: when files were changed,
-					// check tests_passed to decide whether to allow push.
-					e.gateMonitorResponse(ctx, phase, output, monState)
+				} else if e.config.MaxCostUSD > 0 && e.state.Meta().TotalCost >= e.config.MaxCostUSD {
+					// Budget exceeded — do not consume a response round since no
+					// work is performed. This prevents premature MaxRounds
+					// termination when all rounds are budget-skipped.
+					e.emit(Event{
+						Phase: phase.Name,
+						Kind:  EventBudgetWarning,
+						Data: map[string]any{
+							"total_cost": e.state.Meta().TotalCost,
+							"limit":      e.config.MaxCostUSD,
+							"skipping":   "monitor_response",
+						},
+					})
+				} else if e.config.MaxCostPerPhase > 0 && e.state.Meta().Phases[phase.Name] != nil && e.state.Meta().Phases[phase.Name].CumulativeCost >= e.config.MaxCostPerPhase {
+					// Per-phase budget exceeded — skip response, same as global budget.
+					e.emit(Event{
+						Phase: phase.Name,
+						Kind:  EventPhaseBudgetExceeded,
+						Data: map[string]any{
+							"phase_cost": e.state.Meta().Phases[phase.Name].CumulativeCost,
+							"limit":      e.config.MaxCostPerPhase,
+							"skipping":   "monitor_response",
+						},
+					})
+				} else {
+					output, err := e.respondToComments(ctx, phase, classified, monState)
+					if err != nil {
+						// Non-fatal: log and continue polling. Do not increment
+						// ResponseRounds so transient failures don't consume the budget.
+						e.emit(Event{
+							Phase: phase.Name,
+							Kind:  EventMonitorResponseFailed,
+							Data: map[string]any{
+								"response_round": monState.ResponseRounds,
+								"error":          err.Error(),
+							},
+						})
+					} else if output != nil {
+						// Increment the appropriate counter after a successful response.
+						if isReplyOnly(classified) {
+							monState.ReplyRounds++
+						} else {
+							monState.ResponseRounds++
+						}
+						// Programmatic verify gate: when files were changed,
+						// check tests_passed to decide whether to allow push.
+						e.gateMonitorResponse(ctx, phase, output, monState)
 
-					// Post a summary reply to the PR.
-					e.postResponseSummary(ctx, phase.Name, output, monState)
+						// Post a summary reply to the PR.
+						e.postResponseSummary(ctx, phase.Name, output, monState)
+					}
 				}
 			}
 		}
@@ -280,31 +280,33 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 		autoRebase := profile == nil || profile.ShouldAutoRebase()
 		e.checkMergeConflicts(ctx, phase.Name, monState, autoRebase)
 
-		// 5. Check max response rounds (fix + reply combined).
-		totalRounds := monState.ResponseRounds + monState.ReplyRounds
-		if totalRounds >= monState.MaxResponseRounds {
-			monState.Status = MonitorMaxRounds
-			_ = e.state.WriteMonitorState(monState)
-			e.emit(Event{
-				Phase: phase.Name,
-				Kind:  EventMonitorMaxRounds,
-				Data: map[string]any{
-					"response_rounds":     monState.ResponseRounds,
-					"max_response_rounds": monState.MaxResponseRounds,
-				},
-			})
-			if err := e.state.MarkCompleted(phase.Name); err != nil {
-				return fmt.Errorf("engine: mark completed %s: %w", phase.Name, err)
+		// 5. Check max response rounds (only relevant when comment response is enabled).
+		if respondToComments {
+			totalRounds := monState.ResponseRounds + monState.ReplyRounds
+			if totalRounds >= monState.MaxResponseRounds {
+				monState.Status = MonitorMaxRounds
+				_ = e.state.WriteMonitorState(monState)
+				e.emit(Event{
+					Phase: phase.Name,
+					Kind:  EventMonitorMaxRounds,
+					Data: map[string]any{
+						"response_rounds":     monState.ResponseRounds,
+						"max_response_rounds": monState.MaxResponseRounds,
+					},
+				})
+				if err := e.state.MarkCompleted(phase.Name); err != nil {
+					return fmt.Errorf("engine: mark completed %s: %w", phase.Name, err)
+				}
+				e.emit(Event{
+					Phase: phase.Name,
+					Kind:  EventPhaseCompleted,
+					Data: map[string]any{
+						"duration_ms": e.state.Meta().Phases[phase.Name].DurationMs,
+						"reason":      "max_rounds_reached",
+					},
+				})
+				return nil
 			}
-			e.emit(Event{
-				Phase: phase.Name,
-				Kind:  EventPhaseCompleted,
-				Data: map[string]any{
-					"duration_ms": e.state.Meta().Phases[phase.Name].DurationMs,
-					"reason":      "max_rounds_reached",
-				},
-			})
-			return nil
 		}
 
 		// Persist state after each poll cycle.
