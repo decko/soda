@@ -45,11 +45,21 @@ Examples:
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
 			outputDir, _ := cmd.Flags().GetString("dir")
 			from, _ := cmd.Flags().GetString("from")
+			phasesRaw, _ := cmd.Flags().GetString("phases")
+			var phases []string
+			if phasesRaw != "" {
+				for _, p := range strings.Split(phasesRaw, ",") {
+					if trimmed := strings.TrimSpace(p); trimmed != "" {
+						phases = append(phases, trimmed)
+					}
+				}
+			}
 			return runPipelineNew(cmd.OutOrStdout(), args[0], pipelineNewOptions{
 				Force:     force,
 				DryRun:    dryRun,
 				OutputDir: outputDir,
 				From:      from,
+				Phases:    phases,
 			})
 		},
 	}
@@ -58,6 +68,7 @@ Examples:
 	cmd.Flags().Bool("dry-run", false, "print generated pipeline to stdout without writing")
 	cmd.Flags().String("dir", "", "output directory (default: current directory)")
 	cmd.Flags().String("from", "", "load an existing pipeline as template (file path or embedded pipeline name)")
+	cmd.Flags().String("phases", "", "comma-separated list of phases to include (filters the template)")
 
 	return cmd
 }
@@ -67,7 +78,8 @@ type pipelineNewOptions struct {
 	Force     bool
 	DryRun    bool
 	OutputDir string
-	From      string // --from: load an existing pipeline as template
+	From      string   // --from: load an existing pipeline as template
+	Phases    []string // --phases: restrict output to these phase names
 }
 
 // runPipelineNew generates a scaffold pipeline definition for the given name.
@@ -83,8 +95,8 @@ func runPipelineNew(w io.Writer, name string, opts pipelineNewOptions) error {
 
 	var content string
 	var err error
-	if opts.From != "" {
-		content, err = renderFromTemplate(name, opts.From)
+	if opts.From != "" || len(opts.Phases) > 0 {
+		content, err = renderFromTemplate(name, opts.From, opts.Phases)
 	} else {
 		content, err = renderPipelineScaffold(name)
 	}
@@ -224,36 +236,87 @@ func loadFromSource(from string) ([]byte, error) {
 	return data, nil
 }
 
-// renderFromTemplate loads a source pipeline and re-serializes it with a
-// new header for the given name. The source may be a file path or an
-// embedded pipeline name (see loadFromSource).
-func renderFromTemplate(name, from string) (string, error) {
-	data, err := loadFromSource(from)
-	if err != nil {
-		return "", err
+// renderFromTemplate builds pipeline content for the given name using either
+// a template source (--from) or the built-in scaffold. An optional phase
+// filter (--phases) retains only the named phases and rewrites depends_on.
+func renderFromTemplate(name, from string, phaseFilter []string) (string, error) {
+	var data []byte
+	if from != "" {
+		var err error
+		data, err = loadFromSource(from)
+		if err != nil {
+			return "", err
+		}
+	} else {
+		// Use the built-in scaffold as the base for phase filtering.
+		scaffoldContent, err := renderPipelineScaffold(name)
+		if err != nil {
+			return "", err
+		}
+		data = []byte(scaffoldContent)
 	}
 
 	var src struct {
 		Phases []map[string]interface{} `yaml:"phases"`
 	}
 	if err := yaml.Unmarshal(data, &src); err != nil {
-		return "", fmt.Errorf("parse source pipeline %q: %w", from, err)
+		return "", fmt.Errorf("parse pipeline YAML: %w", err)
 	}
 	if len(src.Phases) == 0 {
-		return "", fmt.Errorf("source pipeline %q has no phases", from)
+		return "", fmt.Errorf("pipeline has no phases")
 	}
 
-	out, err := yaml.Marshal(map[string]interface{}{"phases": src.Phases})
+	phases := src.Phases
+	if len(phaseFilter) > 0 {
+		phases = filterRawPhases(phases, phaseFilter)
+		if len(phases) == 0 {
+			return "", fmt.Errorf("no phases matched filter: %v", phaseFilter)
+		}
+	}
+
+	out, err := yaml.Marshal(map[string]interface{}{"phases": phases})
 	if err != nil {
 		return "", fmt.Errorf("serialize pipeline: %w", err)
 	}
 
 	var header strings.Builder
-	fmt.Fprintf(&header, "# SODA Pipeline: %s\n#\n# Template: %s\n#\n", name, from)
+	fmt.Fprintf(&header, "# SODA Pipeline: %s\n#\n", name)
+	if from != "" {
+		fmt.Fprintf(&header, "# Template: %s\n#\n", from)
+	}
 	fmt.Fprintf(&header, "# Usage:\n#   soda run <ticket> --pipeline %s\n#\n", name)
 	header.WriteString("# Docs: https://github.com/decko/soda#pipelines\n\n")
 
 	return header.String() + string(out), nil
+}
+
+// filterRawPhases returns the subset of phases whose name is in selected,
+// with depends_on entries pruned to only reference retained phases.
+func filterRawPhases(phases []map[string]interface{}, selected []string) []map[string]interface{} {
+	keep := make(map[string]bool, len(selected))
+	for _, s := range selected {
+		keep[s] = true
+	}
+
+	var result []map[string]interface{}
+	for _, ph := range phases {
+		pname, _ := ph["name"].(string)
+		if !keep[pname] {
+			continue
+		}
+		// Rewrite depends_on to only reference phases still in the set.
+		if deps, ok := ph["depends_on"].([]interface{}); ok {
+			filtered := make([]interface{}, 0, len(deps))
+			for _, dep := range deps {
+				if depStr, ok := dep.(string); ok && keep[depStr] {
+					filtered = append(filtered, dep)
+				}
+			}
+			ph["depends_on"] = filtered
+		}
+		result = append(result, ph)
+	}
+	return result
 }
 
 // renderPipelineScaffold executes the scaffold template with the given
