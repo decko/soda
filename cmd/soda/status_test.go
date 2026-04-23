@@ -26,10 +26,28 @@ func TestPipelineStatus(t *testing.T) {
 			want:     "running",
 		},
 		{
-			name:     "lock dead → stale",
+			name:     "lock dead, no phases → stale",
 			meta:     &pipeline.PipelineMeta{Phases: map[string]*pipeline.PhaseState{}},
 			lockInfo: &pipeline.LockInfo{IsAlive: false},
 			want:     "stale",
+		},
+		{
+			name: "lock dead, all completed → completed (not stale)",
+			meta: &pipeline.PipelineMeta{Phases: map[string]*pipeline.PhaseState{
+				"triage":    {Status: pipeline.PhaseCompleted},
+				"implement": {Status: pipeline.PhaseCompleted},
+			}},
+			lockInfo: &pipeline.LockInfo{IsAlive: false},
+			want:     "completed",
+		},
+		{
+			name: "lock dead, any failed → failed (not stale)",
+			meta: &pipeline.PipelineMeta{Phases: map[string]*pipeline.PhaseState{
+				"triage":    {Status: pipeline.PhaseCompleted},
+				"implement": {Status: pipeline.PhaseFailed},
+			}},
+			lockInfo: &pipeline.LockInfo{IsAlive: false},
+			want:     "failed",
 		},
 		{
 			name: "no lock, all completed → completed",
@@ -140,7 +158,7 @@ func TestFormatSubmitted(t *testing.T) {
 			name:      "same day → time only",
 			startedAt: time.Date(2025, 6, 15, 9, 5, 0, 0, time.UTC),
 			now:       now,
-			want:      "       09:05",
+			want:      "09:05       ",
 		},
 		{
 			name:      "yesterday → date + time",
@@ -371,20 +389,20 @@ func TestColorizeStatus(t *testing.T) {
 		isTTY  bool
 		want   string
 	}{
-		// Non-TTY: no colors.
-		{"running", false, "running"},
-		{"completed", false, "completed"},
-		{"failed", false, "failed"},
-		{"stale", false, "stale"},
-		{"pending", false, "pending"},
+		// Non-TTY: padded, no colors.
+		{"running", false, "running   "},
+		{"completed", false, "completed "},
+		{"failed", false, "failed    "},
+		{"stale", false, "stale     "},
+		{"pending", false, "pending   "},
 
-		// TTY: wrapped in ANSI codes.
-		{"running", true, statusColorGreen + "running" + statusColorReset},
-		{"completed", true, statusColorGreen + "completed" + statusColorReset},
-		{"failed", true, statusColorRed + "failed" + statusColorReset},
-		{"stale", true, statusColorYellow + "stale" + statusColorReset},
-		{"retrying", true, statusColorYellow + "retrying" + statusColorReset},
-		{"pending", true, statusColorDim + "pending" + statusColorReset},
+		// TTY: padded and wrapped in ANSI codes.
+		{"running", true, statusColorGreen + "running   " + statusColorReset},
+		{"completed", true, statusColorGreen + "completed " + statusColorReset},
+		{"failed", true, statusColorRed + "failed    " + statusColorReset},
+		{"stale", true, statusColorYellow + "stale     " + statusColorReset},
+		{"retrying", true, statusColorYellow + "retrying  " + statusColorReset},
+		{"pending", true, statusColorDim + "pending   " + statusColorReset},
 	}
 	for _, tc := range tests {
 		got := colorizeStatus(tc.status, tc.isTTY)
