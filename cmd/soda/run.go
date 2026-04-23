@@ -746,6 +746,13 @@ func handleEvent(ctx context.Context, cancel context.CancelFunc, engine *pipelin
 		}
 		prog.Message(fmt.Sprintf("  ⏹  Monitor timeout after %s", duration))
 
+	case pipeline.EventMonitorNotifyUser:
+		var reason string
+		if r, ok := event.Data["reason"].(string); ok {
+			reason = r
+		}
+		prog.Message(fmt.Sprintf("  👤 %s", reason))
+
 	case pipeline.EventCorrectiveSkipped:
 		prog.PhaseSkipped(event.Phase)
 

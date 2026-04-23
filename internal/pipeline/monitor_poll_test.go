@@ -579,6 +579,162 @@ func TestMonitor_NoSelfUserDisablesCommentResponse(t *testing.T) {
 	}
 }
 
+func TestMonitor_PassiveMode_DetectsNewComments(t *testing.T) {
+	// In passive mode (respondToComments=false), the monitor should still
+	// detect new comments and emit EventMonitorNewComments + EventMonitorNotifyUser
+	// so the user knows human feedback arrived, even though it won't respond.
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "open", Approved: false}},
+			{status: &PRStatus{State: "open", Approved: true}},
+		},
+		commentResponses: []mockCommentResponse{
+			{comments: []PRComment{
+				{ID: "c1", Author: "reviewer", Body: "Please add a Go-specific section"},
+			}},
+		},
+	}
+
+	pollingCfg := &PollingConfig{
+		InitialInterval:   Duration{Duration: 1 * time.Millisecond},
+		MaxInterval:       Duration{Duration: 2 * time.Millisecond},
+		EscalateAfter:     Duration{Duration: 10 * time.Millisecond},
+		MaxDuration:       Duration{Duration: 100 * time.Millisecond},
+		MaxResponseRounds: 3,
+		RespondToComments: false, // passive mode
+	}
+
+	engine, state, events := setupMonitorEngine(t, poller, pollingCfg, func(cfg *EngineConfig) {
+		cfg.SelfUser = "" // no self_user
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !state.IsCompleted("monitor") {
+		t.Error("monitor should be completed (passive polling)")
+	}
+
+	hasNewComments := false
+	hasNotifyUser := false
+	var notifyReason string
+	var commentCount int
+	for _, evt := range *events {
+		if evt.Kind == EventMonitorNewComments {
+			hasNewComments = true
+			if c, ok := evt.Data["count"].(int); ok {
+				commentCount = c
+			}
+		}
+		if evt.Kind == EventMonitorNotifyUser {
+			hasNotifyUser = true
+			if r, ok := evt.Data["reason"].(string); ok {
+				notifyReason = r
+			}
+		}
+	}
+	if !hasNewComments {
+		t.Error("passive mode should emit monitor_new_comments event")
+	}
+	if commentCount != 1 {
+		t.Errorf("comment count = %d, want 1", commentCount)
+	}
+	if !hasNotifyUser {
+		t.Error("passive mode should emit monitor_notify_user event")
+	}
+	if !strings.Contains(notifyReason, "comment") {
+		t.Errorf("notify reason = %q, want it to mention comments", notifyReason)
+	}
+
+	// Verify the poller was actually called for comments.
+	poller.mu.Lock()
+	commentCalls := poller.commentCallCount
+	poller.mu.Unlock()
+	if commentCalls == 0 {
+		t.Error("GetNewComments should be called even in passive mode")
+	}
+}
+
+func TestMonitor_PassiveMode_NoCommentsNoNotify(t *testing.T) {
+	// When no new comments exist, passive mode should NOT emit notify_user.
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "open", Approved: true}},
+		},
+		// No comment responses — GetNewComments returns nil
+	}
+
+	pollingCfg := &PollingConfig{
+		InitialInterval:   Duration{Duration: 1 * time.Millisecond},
+		MaxInterval:       Duration{Duration: 2 * time.Millisecond},
+		EscalateAfter:     Duration{Duration: 10 * time.Millisecond},
+		MaxDuration:       Duration{Duration: 100 * time.Millisecond},
+		MaxResponseRounds: 3,
+		RespondToComments: false,
+	}
+
+	engine, _, events := setupMonitorEngine(t, poller, pollingCfg, func(cfg *EngineConfig) {
+		cfg.SelfUser = ""
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	for _, evt := range *events {
+		if evt.Kind == EventMonitorNotifyUser {
+			t.Error("should NOT emit monitor_notify_user when no comments")
+		}
+	}
+}
+
+func TestMonitor_PassiveMode_GetCommentsErrorNonFatal(t *testing.T) {
+	// GetNewComments error in passive mode should emit warning, not crash.
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "open", Approved: false}},
+			{status: &PRStatus{State: "open", Approved: true}},
+		},
+		commentResponses: []mockCommentResponse{
+			{err: fmt.Errorf("API rate limited")},
+		},
+	}
+
+	pollingCfg := &PollingConfig{
+		InitialInterval:   Duration{Duration: 1 * time.Millisecond},
+		MaxInterval:       Duration{Duration: 2 * time.Millisecond},
+		EscalateAfter:     Duration{Duration: 10 * time.Millisecond},
+		MaxDuration:       Duration{Duration: 100 * time.Millisecond},
+		MaxResponseRounds: 3,
+		RespondToComments: false,
+	}
+
+	engine, state, events := setupMonitorEngine(t, poller, pollingCfg, func(cfg *EngineConfig) {
+		cfg.SelfUser = ""
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !state.IsCompleted("monitor") {
+		t.Error("monitor should complete despite comment fetch error")
+	}
+
+	hasWarning := false
+	for _, evt := range *events {
+		if evt.Kind == EventMonitorWarning {
+			if w, _ := evt.Data["warning"].(string); strings.Contains(w, "get new comments") {
+				hasWarning = true
+			}
+		}
+	}
+	if !hasWarning {
+		t.Error("should emit warning when passive comment fetch fails")
+	}
+}
+
 func TestMonitor_WhitespaceSelfUserDisablesCommentResponse(t *testing.T) {
 	// Whitespace-only SelfUser should be treated the same as empty.
 	poller := &mockPRPoller{
