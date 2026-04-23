@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"text/tabwriter"
+	"strings"
 	"time"
 
 	"github.com/decko/soda/internal/pipeline"
@@ -157,15 +157,58 @@ func runStatus(stateDir string) error {
 
 	// Render collected entries.
 	isTTY := isatty.IsTerminal(os.Stdout.Fd()) || isatty.IsCygwinTerminal(os.Stdout.Fd())
-	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', tabwriter.StripEscape)
-	fmt.Fprintln(tw, "TICKET\tPHASE\tSTATUS\tSUBMITTED\tELAPSED\tCOST\tREWORK\tTREND")
+
+	// Compute column widths from data (ANSI-free).
+	headers := []string{"TICKET", "PHASE", "STATUS", "SUBMITTED", "ELAPSED", "COST", "REWORK", "TREND"}
+	widths := make([]int, len(headers))
+	for idx, header := range headers {
+		widths[idx] = len(header)
+	}
 	for _, r := range rows {
-		status := colorizeStatus(r.status, isTTY)
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\n", r.ticket, r.phase, status, r.submitted, r.elapsed, r.cost, r.rework, r.costTrend)
+		reworkStr := fmt.Sprintf("%d", r.rework)
+		vals := []string{r.ticket, r.phase, r.status, r.submitted, r.elapsed, r.cost, reworkStr, r.costTrend}
+		for idx, val := range vals {
+			if len(val) > widths[idx] {
+				widths[idx] = len(val)
+			}
+		}
 	}
 
-	if err := tw.Flush(); err != nil {
-		return fmt.Errorf("status: flush output: %w", err)
+	// Build format string with computed widths: "%-Ws  %-Ws  ..." + newline.
+	fmtParts := make([]string, len(widths))
+	for idx, w := range widths {
+		fmtParts[idx] = fmt.Sprintf("%%-%ds", w)
+	}
+	rowFmt := strings.Join(fmtParts, "  ") + "\n"
+
+	// Print header.
+	headerArgs := make([]any, len(headers))
+	for idx, header := range headers {
+		headerArgs[idx] = header
+	}
+	fmt.Fprintf(os.Stdout, rowFmt, headerArgs...)
+
+	// Print data rows (colorize status AFTER padding).
+	for _, r := range rows {
+		reworkStr := fmt.Sprintf("%d", r.rework)
+		// Pad status to column width before colorizing so ANSI codes don't affect alignment.
+		paddedStatus := fmt.Sprintf("%-*s", widths[2], r.status)
+		if isTTY {
+			paddedStatus = colorizeStatus(paddedStatus, true)
+		}
+
+		// Format all other columns normally.
+		line := fmt.Sprintf("%-*s  %-*s  %s  %-*s  %-*s  %-*s  %-*s  %s\n",
+			widths[0], r.ticket,
+			widths[1], r.phase,
+			paddedStatus,
+			widths[3], r.submitted,
+			widths[4], r.elapsed,
+			widths[5], r.cost,
+			widths[6], reworkStr,
+			r.costTrend,
+		)
+		fmt.Fprint(os.Stdout, line)
 	}
 
 	// Cumulative cost footer.
@@ -276,14 +319,15 @@ func statusGroup(status string) int {
 }
 
 // colorizeStatus wraps the status string in ANSI color codes when isTTY is true.
-// ANSI escape sequences are wrapped in \xff delimiters so that tabwriter
-// (with StripEscape) ignores them for column width calculation.
+// The string should already be padded to the desired width before calling.
 func colorizeStatus(status string, isTTY bool) string {
 	if !isTTY {
 		return status
 	}
+	// Extract the base status word for color selection.
+	base := strings.TrimSpace(status)
 	var color string
-	switch status {
+	switch base {
 	case "running", "completed":
 		color = statusColorGreen
 	case "failed":
@@ -293,7 +337,7 @@ func colorizeStatus(status string, isTTY bool) string {
 	default:
 		color = statusColorDim
 	}
-	return "\xff" + color + "\xff" + status + "\xff" + statusColorReset + "\xff"
+	return color + status + statusColorReset
 }
 
 func phaseRank(status pipeline.PhaseStatus) int {

@@ -389,20 +389,20 @@ func TestColorizeStatus(t *testing.T) {
 		isTTY  bool
 		want   string
 	}{
-		// Non-TTY: no colors, no padding.
+		// Non-TTY: returned as-is.
 		{"running", false, "running"},
 		{"completed", false, "completed"},
 		{"failed", false, "failed"},
 		{"stale", false, "stale"},
 		{"pending", false, "pending"},
 
-		// TTY: wrapped in ANSI codes with \xff escape delimiters.
-		{"running", true, "\xff" + statusColorGreen + "\xff" + "running" + "\xff" + statusColorReset + "\xff"},
-		{"completed", true, "\xff" + statusColorGreen + "\xff" + "completed" + "\xff" + statusColorReset + "\xff"},
-		{"failed", true, "\xff" + statusColorRed + "\xff" + "failed" + "\xff" + statusColorReset + "\xff"},
-		{"stale", true, "\xff" + statusColorYellow + "\xff" + "stale" + "\xff" + statusColorReset + "\xff"},
-		{"retrying", true, "\xff" + statusColorYellow + "\xff" + "retrying" + "\xff" + statusColorReset + "\xff"},
-		{"pending", true, "\xff" + statusColorDim + "\xff" + "pending" + "\xff" + statusColorReset + "\xff"},
+		// TTY: wrapped in ANSI codes.
+		{"running", true, statusColorGreen + "running" + statusColorReset},
+		{"completed", true, statusColorGreen + "completed" + statusColorReset},
+		{"failed", true, statusColorRed + "failed" + statusColorReset},
+		{"stale", true, statusColorYellow + "stale" + statusColorReset},
+		{"retrying", true, statusColorYellow + "retrying" + statusColorReset},
+		{"pending", true, statusColorDim + "pending" + statusColorReset},
 	}
 	for _, tc := range tests {
 		got := colorizeStatus(tc.status, tc.isTTY)
@@ -476,10 +476,9 @@ func TestRunStatus_ColumnAlignment(t *testing.T) {
 	output := buf.String()
 	lines := strings.Split(strings.TrimSpace(output), "\n")
 
-	// Strip ANSI escape codes and tabwriter \xff delimiters for alignment check.
+	// Strip ANSI escape codes for alignment check.
 	ansiRe := regexp.MustCompile(`\x1b\[[0-9;]*m`)
 	stripANSI := func(s string) string {
-		s = strings.ReplaceAll(s, "\xff", "")
 		return ansiRe.ReplaceAllString(s, "")
 	}
 
