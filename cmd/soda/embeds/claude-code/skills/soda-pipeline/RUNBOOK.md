@@ -11,7 +11,12 @@ Troubleshooting and operational procedures for the SODA pipeline.
 | `soda history <ticket> --detail` | Full structured JSON output per phase |
 | `soda history <ticket> --phase <name>` | Drill into a single phase |
 | `soda sessions` | All previous pipeline runs |
+| `soda log <ticket>` | Print formatted pipeline events |
+| `soda log <ticket> -f` | Tail events in real-time |
+| `soda cost` | Cumulative cost breakdown across all sessions |
+| `soda validate` | Check config, phases, and prompts for errors |
 | `soda render-prompt --phase <phase> --ticket <key>` | Render a prompt template without executing |
+| `soda attach <ticket>` | Observe a running pipeline in real-time (read-only) |
 
 ## State on disk
 
@@ -19,21 +24,26 @@ All pipeline state lives under `.soda/<ticket>/`:
 
 ```
 .soda/<ticket>/
-├── meta.json              # ticket metadata, phase status, costs, cycles
+├── meta.json              # ticket metadata, phase status, costs, cycles, tokens
 ├── lock                   # flock file (PID + timestamp)
 ├── events.jsonl           # structured event log (append-only)
 ├── <phase>.json           # structured output per phase
+├── monitor_state.json     # monitor polling state
 └── logs/
     ├── <phase>_prompt.md  # rendered prompt sent to Claude
-    └── <phase>_response.md
+    ├── <phase>_response.md
+    └── review/
+        ├── prompt_<reviewer>.md
+        └── response_<reviewer>.md
 ```
 
 ### Key files for debugging
 
-- **`meta.json`** — check `phases.<name>.status`, `total_cost`, `rework_cycles`, `patch_cycles`, `escalated_from_patch`
+- **`meta.json`** — check `phases.<name>.status`, `total_cost`, `rework_cycles`, `patch_cycles`, `escalated_from_patch`, `tokens_in`, `tokens_out`
 - **`events.jsonl`** — chronological event log; grep for `phase_failed`, `budget_warning`, `patch_regression`, `rework_max_cycles`
 - **`<phase>.json`** — the structured output returned by the LLM for that phase
 - **`logs/<phase>_prompt.md`** — the exact prompt sent; useful for diagnosing bad outputs
+- **`monitor_state.json`** — poll count, response rounds, CI status, last comment ID
 
 ## Common failure scenarios
 
@@ -124,6 +134,16 @@ All pipeline state lives under `.soda/<ticket>/`:
 2. If triage was wrong, improve the ticket description with clearer acceptance criteria
 3. Re-run from triage: `soda run <ticket> --from triage`
 
+### Stale triage blocking re-run
+
+**Symptom:** Re-running a ticket that was previously gated by triage fails again with the same gate.
+
+**Cause:** The previous `triage.json` is still on disk and blocks re-run.
+
+**Fix:**
+1. Purge all session data: `soda clean <ticket> --purge`
+2. Re-run: `soda run <ticket>`
+
 ### Verify fails — corrective patch loop
 
 **Symptom:** Verify fails, patch runs but doesn't fix the issue, loop repeats until `max_attempts`.
@@ -164,89 +184,46 @@ To force re-implementation: `soda run <ticket> --from implement`
 
 ### Parallel-review: one or more reviewers failed
 
-**Symptom:** Phase fails with `engine: reviewer failures in review: go-specialist: <error>; ai-harness: <error>` (or just one reviewer listed).
+**Symptom:** Phase fails with `engine: reviewer failures in review: go-specialist: <error>; ai-harness: <error>`.
 
-**Cause:** The `parallel-review` phase dispatches all configured reviewers concurrently. If any reviewer fails (transient error, parse error, or prompt load failure), the engine collects all errors and fails the phase — even if the other reviewers succeeded.
-
-**Partial-failure behavior:** Results from successful reviewers are **discarded** when any reviewer fails. The phase must be re-run in full; there is no partial-resume within a parallel-review phase.
+**Cause:** The `parallel-review` phase dispatches all configured reviewers concurrently. If any reviewer fails, the engine collects all errors and fails the phase.
 
 **Identify which reviewer failed:**
 ```bash
-# Show all reviewer-level events (started, completed, failed)
-grep '"reviewer_started"\|"reviewer_completed"\|"reviewer_failed"' .soda/<ticket>/events.jsonl
-
-# Narrow to failures only
 grep '"reviewer_failed"' .soda/<ticket>/events.jsonl
 ```
 
-**Inspect the failing reviewer's prompt:**
-```bash
-cat .soda/<ticket>/logs/review_prompt_<reviewer-name>.md
-```
+**Fix:**
+1. For transient errors, wait and resume: `soda run <ticket> --from review`
+2. For parse errors, check whether the reviewer's prompt template is valid
+3. For prompt load errors, verify the reviewer's `prompt:` path in `phases.yaml`
+
+### Monitor phase — comments not detected
+
+**Symptom:** PR comments go unnoticed. Monitor polls but shows no comment activity.
+
+**Cause:** This should not happen after v0.4.0. In passive mode (default), the monitor detects new comments and emits `monitor_new_comments` + `monitor_notify_user` events. Check:
+1. Events: `grep 'monitor_new_comments\|monitor_notify_user' .soda/<ticket>/events.jsonl`
+2. Monitor state: `cat .soda/<ticket>/monitor_state.json` — check `last_comment_id`
+
+### Monitor phase — comments detected but no response
+
+**Symptom:** Monitor logs `monitor_new_comments` but doesn't respond to them.
+
+**Cause:** Active comment response requires `respond_to_comments: true` in `phases.yaml` and `self_user` in config. Without these, monitor runs in passive mode (detect-only).
 
 **Fix:**
-1. Identify the failing reviewer from the error message or `events.jsonl`
-2. Check the raw response: `cat .soda/<ticket>/logs/<reviewer-name>_response.md` (if written before failure)
-3. For transient errors, wait and resume: `soda run <ticket> --from review`
-4. For parse errors, check whether the reviewer's prompt template is valid
-5. For prompt load errors, verify the reviewer's `prompt:` path in `phases.yaml` exists under the prompts directory
-
-### Parallel-review: inspecting merged findings
-
-After a successful `parallel-review` phase, findings from all reviewers are merged into a single `review.json`.
-Each finding includes a `source` field identifying which reviewer raised it.
-
-**Read merged findings:**
-```bash
-soda history <ticket> --phase review
-```
-
-**Inspect raw merged output:**
-```bash
-cat .soda/<ticket>/review.json
-```
-
-**Filter findings by reviewer in the event log:**
-```bash
-# Show the merge summary (total findings count + verdict)
-grep '"review_merged"' .soda/<ticket>/events.jsonl
-
-# Show per-reviewer completion events (includes individual finding counts)
-grep '"reviewer_completed"' .soda/<ticket>/events.jsonl
-```
-
-**Verdict logic:**
-- Any `critical` or `major` finding from any reviewer → verdict `rework` (routes back to implement)
-- Only `minor` findings → verdict `pass-with-follow-ups` (proceeds to submit)
-- No findings → verdict `pass`
-
-### Monitor phase not responding to PR comments
-
-**Symptom:** PR comments go unanswered. Monitor polls but takes no action.
-
-**Cause:** Missing `self_user` config — the monitor cannot distinguish self-authored comments from external ones.
-
-**Fix:**
-1. Add `self_user` to your monitor config in `soda.yaml`:
+1. Add `self_user` to your config:
+   ```yaml
+   self_user: your-github-username
+   ```
+2. Enable response in `phases.yaml`:
    ```yaml
    monitor:
-     self_user: your-github-username
+     polling:
+       respond_to_comments: true
    ```
-2. Clean and re-run: `soda clean <ticket>` then `soda run <ticket>`
-
-### Monitor ignoring comments from non-owners
-
-**Symptom:** Monitor only responds to some reviewers, ignores others.
-
-**Cause:** Authority resolution via CODEOWNERS is filtering out non-owners, or the monitor profile is set to `conservative` / `smart` (which ignore non-authoritative comments).
-
-**Fix:**
-- Switch to `aggressive` profile to respond to all comments:
-  ```yaml
-  monitor:
-    profile: aggressive
-  ```
-- Or disable CODEOWNERS filtering by removing the `codeowners` config key
+3. Re-run: `soda run <ticket> --from monitor`
 
 ### Worktree issues — nested worktrees or stale branches
 
@@ -279,12 +256,33 @@ soda run <ticket> --from <phase>
 
 Phases that already completed and whose dependencies haven't changed are skipped automatically.
 
+## Named pipelines
+
+List available pipelines:
+```bash
+soda pipelines
+```
+
+Run with a specific pipeline:
+```bash
+soda run <ticket> --pipeline quick-fix    # 3-phase: implement→verify→submit
+soda run <ticket> --pipeline docs-only    # 2-phase: implement→submit
+```
+
+Scaffold a new pipeline:
+```bash
+soda pipelines new <name>
+```
+
+Pipeline discovery order: `./pipelines/` → `~/.config/soda/pipelines/` → built-in.
+
 ## Cost management
 
 Check cumulative cost across all sessions:
 ```bash
-soda sessions    # shows cost per session
-soda status      # shows cost for active pipelines
+soda cost          # detailed cost breakdown
+soda sessions      # shows cost per session
+soda status        # shows cost for active pipelines
 ```
 
 The cost ledger persists in `.soda/cost.json` and survives `soda clean`. Per-phase cumulative cost is tracked in `meta.json` under `phases.<name>.cumulative_cost`.
@@ -294,7 +292,8 @@ The cost ledger persists in `.soda/cost.json` and survives `soda clean`. Per-pha
 1. **Use `--mode checkpoint`** to pause between phases and review progress before spending more
 2. **Set per-phase limits** to catch runaway phases early (`max_cost_per_phase` in `soda.yaml`)
 3. **Patch uses a smaller model** (claude-sonnet-4-6 by default) to save cost on targeted fixes
-4. **Review the triage output** before letting the pipeline continue — if triage misclassifies complexity, subsequent phases may over-spend
+4. **Use named pipelines** (`--pipeline quick-fix`) for simple changes that don't need full review
+5. **Review the triage output** before letting the pipeline continue — if triage misclassifies complexity, subsequent phases may over-spend
 
 ## Event log analysis
 
@@ -316,6 +315,9 @@ grep '"patch_exhausted"\|"patch_escalated"\|"patch_regression"' .soda/<ticket>/e
 # Show monitor activity
 grep '"monitor_' .soda/<ticket>/events.jsonl
 
+# Show comment detection (passive mode)
+grep '"monitor_new_comments"\|"monitor_notify_user"' .soda/<ticket>/events.jsonl
+
 # Count retries per phase
 grep '"phase_retrying"' .soda/<ticket>/events.jsonl
 ```
@@ -325,6 +327,7 @@ grep '"phase_retrying"' .soda/<ticket>/events.jsonl
 ```bash
 soda clean <ticket>              # remove worktree + branches, preserve session data
 soda clean <ticket> --purge      # remove everything including .soda/<ticket>/
+soda clean <ticket> --force      # clean dirty worktrees + remote branches
 soda clean --all                 # clean all worktrees, preserve session data
 soda clean --all --purge         # clean everything including all session data
 soda clean --all --dry-run       # preview what would be cleaned

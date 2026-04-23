@@ -1,5 +1,6 @@
 ---
 description: Generate a ticket specification from a description
+argument-hint: "<description>" [--from-file <path>] [--yes] [--dry-run]
 ---
 
 Generate a well-structured ticket specification:
@@ -16,4 +17,7 @@ Claude will scan the codebase (read-only) and generate a complete ticket body wi
 - Token budget estimation
 - Suggested labels
 
-Use `--from-file <path>` for longer descriptions, `--yes` to auto-create the issue, or `--dry-run` to preview the prompt.
+Options:
+- `--from-file <path>` — read description from a file (for longer specs)
+- `--yes` — auto-create the GitHub issue without confirmation
+- `--dry-run` — preview the prompt without executing

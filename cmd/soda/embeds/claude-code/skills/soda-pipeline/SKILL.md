@@ -1,9 +1,11 @@
 ---
-description: SODA pipeline architecture, phase lifecycle, and state management
+name: soda-pipeline
+description: SODA pipeline architecture, phase lifecycle, state management, and operational procedures. Use when working on pipeline code, debugging phase failures, or understanding how SODA orchestrates AI coding sessions.
 globs:
   - "internal/pipeline/**"
   - "cmd/soda/embeds/**"
   - "phases.yaml"
+  - "pipelines/**"
   - "schemas/**"
 ---
 
@@ -39,8 +41,19 @@ All prompts receive `pipeline.PromptData`:
 - `Artifacts` — outputs from prior phases (triage, plan, implement, verify, review)
 - `Context` — project context, repo conventions, gotchas
 - `WorktreePath`, `Branch`, `BaseBranch` — git context
-- `ReworkFeedback` — injected on rework cycles (verify failures or review findings)
+- `ReworkFeedback` — injected on rework cycles (verify failures or review findings with code snippets)
 - `DiffContext` — git diff for monitor and corrective phases
+- `ReviewComments` — PR review comments for monitor response sessions
+- `SiblingContext` — sibling functions near review findings (injected automatically)
+
+## Context injection
+
+The engine injects context to reduce rework (knowledge_miss_rate):
+
+1. **Code snippet injection** — ±5 lines around each review finding's `file:line` as `EnrichedFinding.CodeSnippet`
+2. **Sibling function injection** — full bodies of functions adjacent to findings (`SiblingContext` in PromptData)
+3. **Full-file injection** — when rework feedback references a file, inject its full content (30KB cap, dedup)
+4. **Deep context injection** — full function bodies for files referenced in the plan (budget-controlled)
 
 ## Error categories and retry
 
@@ -53,10 +66,11 @@ All prompts receive `pipeline.PromptData`:
 ## State management
 
 Pipeline state lives in `.soda/<ticket>/`:
-- `meta.json` — ticket, phases status, costs, worktree, branch, rework cycles
+- `meta.json` — ticket, phases status, costs, worktree, branch, rework cycles, token counts
 - `<phase>.json` — structured output per phase
 - `lock` — flock-based concurrency control
 - `events.jsonl` — structured event log
+- `monitor_state.json` — monitor polling state (poll count, rounds, last comment ID)
 - Atomic writes: write to `.tmp` then rename; archive on re-run
 
 ## Rework and corrective routing
@@ -64,7 +78,24 @@ Pipeline state lives in `.soda/<ticket>/`:
 - **Review rework**: critical/major findings route back to implement (max 2 cycles)
 - **Verify corrective**: verify failures trigger the `patch` corrective phase
 - **Patch escalation**: if patch exhausts max attempts, escalates to implement
+- **Regression detection**: prevents patch from introducing new failures
 - Feedback is rebuilt from scratch each cycle (not accumulated)
+
+## Monitor phase
+
+After PR submission, the monitor polls for activity:
+
+- **Passive mode** (default): polls CI status, PR state (merged/closed/approved), detects new comments and notifies user. No self_user required.
+- **Active mode** (`respond_to_comments: true` + `self_user`): classifies comments, responds with Claude sessions (fix or reply), posts acknowledgments, auto-rebases.
+- **Profiles**: `conservative`, `smart`, `aggressive` control auto-rebase, nit handling, and response to non-authoritative comments.
+
+## Named pipelines
+
+Custom pipeline definitions in `./pipelines/` or `~/.config/soda/pipelines/`:
+- `soda run <ticket> --pipeline quick-fix` — 3-phase: implement→verify→submit
+- `soda run <ticket> --pipeline docs-only` — 2-phase: implement→submit
+- `soda pipelines` — list available pipelines
+- `soda pipelines new <name>` — scaffold a new pipeline definition
 
 ## Embedded content
 
