@@ -157,7 +157,7 @@ func runStatus(stateDir string) error {
 
 	// Render collected entries.
 	isTTY := isatty.IsTerminal(os.Stdout.Fd()) || isatty.IsCygwinTerminal(os.Stdout.Fd())
-	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', tabwriter.StripEscape)
 	fmt.Fprintln(tw, "TICKET\tPHASE\tSTATUS\tSUBMITTED\tELAPSED\tCOST\tREWORK\tTREND")
 	for _, r := range rows {
 		status := colorizeStatus(r.status, isTTY)
@@ -276,28 +276,24 @@ func statusGroup(status string) int {
 }
 
 // colorizeStatus wraps the status string in ANSI color codes when isTTY is true.
-// The status is padded to a fixed width BEFORE adding color codes so that
-// tabwriter sees consistent column widths (ANSI escapes are invisible but
-// counted as characters by tabwriter).
+// ANSI escape sequences are wrapped in \xff delimiters so that tabwriter
+// (with StripEscape) ignores them for column width calculation.
 func colorizeStatus(status string, isTTY bool) string {
-	padded := fmt.Sprintf("%-10s", status)
 	if !isTTY {
-		return padded
+		return status
 	}
+	var color string
 	switch status {
-	case "running":
-		return statusColorGreen + padded + statusColorReset
-	case "completed":
-		return statusColorGreen + padded + statusColorReset
+	case "running", "completed":
+		color = statusColorGreen
 	case "failed":
-		return statusColorRed + padded + statusColorReset
-	case "stale":
-		return statusColorYellow + padded + statusColorReset
-	case "retrying":
-		return statusColorYellow + padded + statusColorReset
+		color = statusColorRed
+	case "stale", "retrying":
+		color = statusColorYellow
 	default:
-		return statusColorDim + padded + statusColorReset
+		color = statusColorDim
 	}
+	return "\xff" + color + "\xff" + status + "\xff" + statusColorReset + "\xff"
 }
 
 func phaseRank(status pipeline.PhaseStatus) int {
@@ -316,14 +312,14 @@ func phaseRank(status pipeline.PhaseStatus) int {
 }
 
 // formatSubmitted returns a human-friendly timestamp: time-only for today,
-// date+time for older entries. Both are padded to consistent width.
+// date+time for older entries.
 func formatSubmitted(startedAt, now time.Time) string {
 	sy, sm, sd := startedAt.Date()
 	ny, nm, nd := now.Date()
 	if sy == ny && sm == nm && sd == nd {
-		return fmt.Sprintf("%-12s", startedAt.Format("15:04"))
+		return startedAt.Format("15:04")
 	}
-	return fmt.Sprintf("%-12s", startedAt.Format("Jan 02 15:04"))
+	return startedAt.Format("Jan 02 15:04")
 }
 
 func formatElapsed(meta *pipeline.PipelineMeta) string {

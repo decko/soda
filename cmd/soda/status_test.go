@@ -158,7 +158,7 @@ func TestFormatSubmitted(t *testing.T) {
 			name:      "same day → time only",
 			startedAt: time.Date(2025, 6, 15, 9, 5, 0, 0, time.UTC),
 			now:       now,
-			want:      "09:05       ",
+			want:      "09:05",
 		},
 		{
 			name:      "yesterday → date + time",
@@ -389,25 +389,140 @@ func TestColorizeStatus(t *testing.T) {
 		isTTY  bool
 		want   string
 	}{
-		// Non-TTY: padded, no colors.
-		{"running", false, "running   "},
-		{"completed", false, "completed "},
-		{"failed", false, "failed    "},
-		{"stale", false, "stale     "},
-		{"pending", false, "pending   "},
+		// Non-TTY: no colors, no padding.
+		{"running", false, "running"},
+		{"completed", false, "completed"},
+		{"failed", false, "failed"},
+		{"stale", false, "stale"},
+		{"pending", false, "pending"},
 
-		// TTY: padded and wrapped in ANSI codes.
-		{"running", true, statusColorGreen + "running   " + statusColorReset},
-		{"completed", true, statusColorGreen + "completed " + statusColorReset},
-		{"failed", true, statusColorRed + "failed    " + statusColorReset},
-		{"stale", true, statusColorYellow + "stale     " + statusColorReset},
-		{"retrying", true, statusColorYellow + "retrying  " + statusColorReset},
-		{"pending", true, statusColorDim + "pending   " + statusColorReset},
+		// TTY: wrapped in ANSI codes with \xff escape delimiters.
+		{"running", true, "\xff" + statusColorGreen + "\xff" + "running" + "\xff" + statusColorReset + "\xff"},
+		{"completed", true, "\xff" + statusColorGreen + "\xff" + "completed" + "\xff" + statusColorReset + "\xff"},
+		{"failed", true, "\xff" + statusColorRed + "\xff" + "failed" + "\xff" + statusColorReset + "\xff"},
+		{"stale", true, "\xff" + statusColorYellow + "\xff" + "stale" + "\xff" + statusColorReset + "\xff"},
+		{"retrying", true, "\xff" + statusColorYellow + "\xff" + "retrying" + "\xff" + statusColorReset + "\xff"},
+		{"pending", true, "\xff" + statusColorDim + "\xff" + "pending" + "\xff" + statusColorReset + "\xff"},
 	}
 	for _, tc := range tests {
 		got := colorizeStatus(tc.status, tc.isTTY)
 		if got != tc.want {
 			t.Errorf("colorizeStatus(%q, %v) = %q, want %q", tc.status, tc.isTTY, got, tc.want)
+		}
+	}
+}
+
+func TestRunStatus_ColumnAlignment(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create sessions with varying status lengths and submitted timestamps
+	// to exercise alignment edge cases.
+	writeStatusMeta(t, filepath.Join(dir, "TICK-1"), &pipeline.PipelineMeta{
+		Ticket:    "TICK-1",
+		StartedAt: time.Now().Add(-1 * time.Hour),
+		TotalCost: 2.50,
+		Phases: map[string]*pipeline.PhaseState{
+			"triage": {Status: pipeline.PhaseCompleted, DurationMs: 5000, Cost: 2.50},
+		},
+	})
+	writeStatusMeta(t, filepath.Join(dir, "TICK-2"), &pipeline.PipelineMeta{
+		Ticket:    "TICK-2",
+		StartedAt: time.Now().Add(-30 * time.Minute),
+		TotalCost: 3.75,
+		Phases: map[string]*pipeline.PhaseState{
+			"triage":    {Status: pipeline.PhaseCompleted, DurationMs: 3000, Cost: 1.00},
+			"implement": {Status: pipeline.PhaseFailed, DurationMs: 10000, Cost: 2.75},
+		},
+	})
+	writeStatusMeta(t, filepath.Join(dir, "TICK-3"), &pipeline.PipelineMeta{
+		Ticket:    "TICK-3",
+		StartedAt: time.Now().Add(-48 * time.Hour), // yesterday — different submitted format
+		TotalCost: 1.00,
+		Phases: map[string]*pipeline.PhaseState{
+			"triage": {Status: pipeline.PhaseCompleted, DurationMs: 2000, Cost: 1.00},
+		},
+	})
+
+	// Capture stdout (runStatus writes directly to os.Stdout).
+	oldStdout := os.Stdout
+	readPipe, writePipe, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = writePipe
+
+	runErr := runStatus(dir)
+
+	writePipe.Close()
+	os.Stdout = oldStdout
+
+	var buf strings.Builder
+	data := make([]byte, 8192)
+	for {
+		n, readErr := readPipe.Read(data)
+		if n > 0 {
+			buf.Write(data[:n])
+		}
+		if readErr != nil {
+			break
+		}
+	}
+	readPipe.Close()
+
+	if runErr != nil {
+		t.Fatalf("runStatus error: %v", runErr)
+	}
+
+	output := buf.String()
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+
+	// Strip ANSI escape codes and tabwriter \xff delimiters for alignment check.
+	ansiRe := regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	stripANSI := func(s string) string {
+		s = strings.ReplaceAll(s, "\xff", "")
+		return ansiRe.ReplaceAllString(s, "")
+	}
+
+	// Find the header and data lines (skip the footer).
+	var tableLines []string
+	for _, line := range lines {
+		stripped := stripANSI(line)
+		if strings.HasPrefix(stripped, "TICKET") || strings.HasPrefix(stripped, "TICK-") {
+			tableLines = append(tableLines, stripped)
+		}
+	}
+
+	if len(tableLines) < 2 {
+		t.Fatalf("expected at least header + 1 data row, got %d lines:\n%s", len(tableLines), output)
+	}
+
+	// Parse column start positions from the header.
+	header := tableLines[0]
+	columns := []string{"TICKET", "PHASE", "STATUS", "SUBMITTED", "ELAPSED", "COST", "REWORK", "TREND"}
+	colPositions := make([]int, len(columns))
+	for idx, col := range columns {
+		pos := strings.Index(header, col)
+		if pos < 0 {
+			t.Fatalf("header missing column %q:\n%s", col, header)
+		}
+		colPositions[idx] = pos
+	}
+
+	// Verify each data row has proper column separation.
+	// Check that there's at least one space before each column start (except TICKET at 0).
+	for _, line := range tableLines[1:] {
+		if len(line) <= colPositions[0] || line[colPositions[0]] == ' ' {
+			t.Errorf("TICKET column not aligned in line: %q", line)
+		}
+
+		for idx := 1; idx < len(columns); idx++ {
+			pos := colPositions[idx]
+			if pos <= 0 || pos >= len(line) {
+				continue
+			}
+			if line[pos-1] != ' ' {
+				t.Errorf("column %s (pos %d) missing separator in line: %q", columns[idx], pos, line)
+			}
 		}
 	}
 }
