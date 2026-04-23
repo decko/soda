@@ -243,6 +243,9 @@ func loadFromSource(from string) ([]byte, error) {
 // renderFromTemplate builds pipeline content for the given name using either
 // a template source (--from) or the built-in scaffold. An optional phase
 // filter (--phases) retains only the named phases and rewrites depends_on.
+//
+// This function uses yaml.Node to preserve field ordering, indentation, and
+// comments from the source pipeline.
 func renderFromTemplate(name, from string, phaseFilter []string) (string, error) {
 	var data []byte
 	if from != "" {
@@ -260,28 +263,34 @@ func renderFromTemplate(name, from string, phaseFilter []string) (string, error)
 		data = []byte(scaffoldContent)
 	}
 
-	var src struct {
-		Phases []map[string]interface{} `yaml:"phases"`
-	}
-	if err := yaml.Unmarshal(data, &src); err != nil {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return "", fmt.Errorf("parse pipeline YAML: %w", err)
 	}
-	if len(src.Phases) == 0 {
+
+	phasesSeq := findPhasesSequence(&doc)
+	if phasesSeq == nil || len(phasesSeq.Content) == 0 {
 		return "", fmt.Errorf("pipeline has no phases")
 	}
 
-	phases := src.Phases
 	if len(phaseFilter) > 0 {
-		phases = filterRawPhases(phases, phaseFilter)
-		if len(phases) == 0 {
+		filterNodePhases(phasesSeq, phaseFilter)
+		if len(phasesSeq.Content) == 0 {
 			return "", fmt.Errorf("no phases matched filter: %v", phaseFilter)
 		}
 	}
 
-	out, err := yaml.Marshal(map[string]interface{}{"phases": phases})
-	if err != nil {
+	// Strip top-level comments from the source document — we replace
+	// them with our own header below.
+	stripDocumentComments(&doc)
+
+	var buf strings.Builder
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(&doc); err != nil {
 		return "", fmt.Errorf("serialize pipeline: %w", err)
 	}
+	enc.Close()
 
 	var header strings.Builder
 	fmt.Fprintf(&header, "# SODA Pipeline: %s\n#\n", name)
@@ -291,41 +300,103 @@ func renderFromTemplate(name, from string, phaseFilter []string) (string, error)
 	fmt.Fprintf(&header, "# Usage:\n#   soda run <ticket> --pipeline %s\n#\n", name)
 	header.WriteString("# Docs: https://github.com/decko/soda#pipelines\n\n")
 
-	return header.String() + string(out), nil
+	return header.String() + buf.String(), nil
 }
 
-// filterRawPhases returns the subset of phases whose name is in selected,
-// with depends_on entries pruned to only reference retained phases.
-func filterRawPhases(phases []map[string]interface{}, selected []string) []map[string]interface{} {
+// findPhasesSequence locates the "phases" sequence node in a parsed YAML
+// document tree.
+func findPhasesSequence(doc *yaml.Node) *yaml.Node {
+	if doc == nil {
+		return nil
+	}
+	// Document node wraps the root content.
+	root := doc
+	if doc.Kind == yaml.DocumentNode && len(doc.Content) > 0 {
+		root = doc.Content[0]
+	}
+	if root.Kind != yaml.MappingNode {
+		return nil
+	}
+	// Mapping content alternates key, value, key, value...
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value == "phases" && root.Content[i+1].Kind == yaml.SequenceNode {
+			return root.Content[i+1]
+		}
+	}
+	return nil
+}
+
+// stripDocumentComments removes head/foot/line comments from the document
+// node and its root mapping node so the caller can prepend its own header.
+func stripDocumentComments(doc *yaml.Node) {
+	if doc == nil {
+		return
+	}
+	doc.HeadComment = ""
+	doc.LineComment = ""
+	doc.FootComment = ""
+	if doc.Kind == yaml.DocumentNode && len(doc.Content) > 0 {
+		doc.Content[0].HeadComment = ""
+		doc.Content[0].LineComment = ""
+		doc.Content[0].FootComment = ""
+	}
+}
+
+// nodeMapValue returns the value node for a given key in a MappingNode,
+// or nil if the key is not found.
+func nodeMapValue(mapping *yaml.Node, key string) *yaml.Node {
+	if mapping.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value == key {
+			return mapping.Content[i+1]
+		}
+	}
+	return nil
+}
+
+// phaseName extracts the "name" scalar value from a phase mapping node.
+func phaseName(phase *yaml.Node) string {
+	v := nodeMapValue(phase, "name")
+	if v != nil && v.Kind == yaml.ScalarNode {
+		return v.Value
+	}
+	return ""
+}
+
+// filterNodePhases modifies the phases sequence node in place, keeping only
+// phases whose name is in selected and rewriting depends_on entries to
+// reference only retained phases.
+func filterNodePhases(seq *yaml.Node, selected []string) {
 	keep := make(map[string]bool, len(selected))
 	for _, s := range selected {
 		keep[s] = true
 	}
 
-	var result []map[string]interface{}
-	for _, ph := range phases {
-		pname, _ := ph["name"].(string)
-		if !keep[pname] {
+	// Filter phases.
+	var kept []*yaml.Node
+	for _, phase := range seq.Content {
+		if keep[phaseName(phase)] {
+			kept = append(kept, phase)
+		}
+	}
+	seq.Content = kept
+
+	// Rewrite depends_on in each retained phase.
+	for _, phase := range seq.Content {
+		depsNode := nodeMapValue(phase, "depends_on")
+		if depsNode == nil || depsNode.Kind != yaml.SequenceNode {
 			continue
 		}
-		// Clone the phase map to avoid mutating the caller's data.
-		cloned := make(map[string]interface{}, len(ph))
-		for k, v := range ph {
-			cloned[k] = v
-		}
-		// Rewrite depends_on to only reference phases still in the set.
-		if deps, ok := cloned["depends_on"].([]interface{}); ok {
-			filtered := make([]interface{}, 0, len(deps))
-			for _, dep := range deps {
-				if depStr, ok := dep.(string); ok && keep[depStr] {
-					filtered = append(filtered, dep)
-				}
+		var filtered []*yaml.Node
+		for _, dep := range depsNode.Content {
+			if dep.Kind == yaml.ScalarNode && keep[dep.Value] {
+				filtered = append(filtered, dep)
 			}
-			cloned["depends_on"] = filtered
 		}
-		result = append(result, cloned)
+		depsNode.Content = filtered
 	}
-	return result
 }
 
 // renderPipelineScaffold executes the scaffold template with the given

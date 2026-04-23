@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/decko/soda/internal/pipeline"
+	"gopkg.in/yaml.v3"
 )
 
 func TestRunPipelineNew_CreatesFile(t *testing.T) {
@@ -328,6 +329,54 @@ func TestRunPipelineNew_FromFilePath(t *testing.T) {
 	}
 }
 
+func TestRunPipelineNew_FromPreservesFieldOrder(t *testing.T) {
+	// Verify that --from preserves the field ordering from the source file
+	// (e.g. "name" before "prompt" before "tools" before "depends_on").
+	srcDir := t.TempDir()
+	srcFile := filepath.Join(srcDir, "ordered.yaml")
+	srcContent := `phases:
+  - name: build
+    prompt: prompts/build.md
+    tools:
+      - Bash
+    timeout: 5m
+    retry:
+      transient: 1
+      parse: 0
+      semantic: 0
+    depends_on: []
+`
+	if err := os.WriteFile(srcFile, []byte(srcContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	err := runPipelineNew(&buf, "ordered", pipelineNewOptions{
+		DryRun: true,
+		From:   srcFile,
+	})
+	if err != nil {
+		t.Fatalf("runPipelineNew error: %v", err)
+	}
+
+	output := buf.String()
+	// Fields should appear in source order: name before prompt before tools
+	// before timeout before retry before depends_on.
+	fields := []string{"name:", "prompt:", "tools:", "timeout:", "retry:", "depends_on:"}
+	lastIdx := -1
+	for _, f := range fields {
+		idx := strings.Index(output, f)
+		if idx < 0 {
+			t.Errorf("expected field %q in output, got:\n%s", f, output)
+			continue
+		}
+		if idx <= lastIdx {
+			t.Errorf("field %q at position %d appears before or at previous field position %d — ordering not preserved", f, idx, lastIdx)
+		}
+		lastIdx = idx
+	}
+}
+
 func TestRunPipelineNew_FromEmbeddedName(t *testing.T) {
 	outDir := t.TempDir()
 	var buf bytes.Buffer
@@ -598,48 +647,58 @@ func TestRunPipelineNew_PhasesDryRun(t *testing.T) {
 	}
 }
 
-func TestFilterRawPhases_DoesNotMutateInput(t *testing.T) {
-	// Build input phases with depends_on that references a phase we'll filter out.
-	phases := []map[string]interface{}{
-		{
-			"name":       "implement",
-			"depends_on": []interface{}{},
-		},
-		{
-			"name":       "verify",
-			"depends_on": []interface{}{"implement"},
-		},
-		{
-			"name":       "submit",
-			"depends_on": []interface{}{"implement", "verify"},
-		},
+func TestFilterNodePhases_FiltersAndRewritesDeps(t *testing.T) {
+	// Build a YAML document with three phases where submit depends on
+	// both implement and verify.
+	src := `phases:
+  - name: implement
+    depends_on: []
+  - name: verify
+    depends_on:
+      - implement
+  - name: submit
+    depends_on:
+      - implement
+      - verify
+`
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(src), &doc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	seq := findPhasesSequence(&doc)
+	if seq == nil {
+		t.Fatal("phases sequence not found")
+	}
+	if len(seq.Content) != 3 {
+		t.Fatalf("expected 3 phases, got %d", len(seq.Content))
 	}
 
 	// Keep only implement and submit — verify is dropped.
-	result := filterRawPhases(phases, []string{"implement", "submit"})
-	if len(result) != 2 {
-		t.Fatalf("expected 2 phases, got %d", len(result))
+	filterNodePhases(seq, []string{"implement", "submit"})
+	if len(seq.Content) != 2 {
+		t.Fatalf("expected 2 phases after filter, got %d", len(seq.Content))
 	}
 
-	// The original submit phase must still reference both implement and verify.
-	origDeps := phases[2]["depends_on"].([]interface{})
-	if len(origDeps) != 2 {
-		t.Errorf("original submit.depends_on was mutated: got %v, want [implement verify]", origDeps)
+	// Verify phase names in result.
+	if phaseName(seq.Content[0]) != "implement" {
+		t.Errorf("first phase = %q, want 'implement'", phaseName(seq.Content[0]))
+	}
+	if phaseName(seq.Content[1]) != "submit" {
+		t.Errorf("second phase = %q, want 'submit'", phaseName(seq.Content[1]))
 	}
 
-	// The filtered submit should only reference implement.
-	var filteredSubmit map[string]interface{}
-	for _, r := range result {
-		if r["name"] == "submit" {
-			filteredSubmit = r
+	// submit's depends_on should only reference implement (verify was dropped).
+	depsNode := nodeMapValue(seq.Content[1], "depends_on")
+	if depsNode == nil {
+		t.Fatal("submit has no depends_on node")
+	}
+	if len(depsNode.Content) != 1 || depsNode.Content[0].Value != "implement" {
+		var vals []string
+		for _, d := range depsNode.Content {
+			vals = append(vals, d.Value)
 		}
-	}
-	if filteredSubmit == nil {
-		t.Fatal("submit not found in result")
-	}
-	filteredDeps := filteredSubmit["depends_on"].([]interface{})
-	if len(filteredDeps) != 1 || filteredDeps[0] != "implement" {
-		t.Errorf("filtered submit.depends_on = %v, want [implement]", filteredDeps)
+		t.Errorf("submit.depends_on = %v, want [implement]", vals)
 	}
 }
 
