@@ -377,6 +377,45 @@ func TestRunPipelineNew_FromPreservesFieldOrder(t *testing.T) {
 	}
 }
 
+func TestRunPipelineNew_FromPreservesComments(t *testing.T) {
+	// Verify that inline YAML comments from the source file are preserved.
+	srcDir := t.TempDir()
+	srcFile := filepath.Join(srcDir, "commented.yaml")
+	srcContent := `phases:
+  - name: build
+    prompt: prompts/build.md # custom build prompt
+    tools:
+      - Bash
+    timeout: 5m # keep this short
+    retry:
+      transient: 1
+      parse: 0
+      semantic: 0
+    depends_on: []
+`
+	if err := os.WriteFile(srcFile, []byte(srcContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	err := runPipelineNew(&buf, "commented", pipelineNewOptions{
+		DryRun: true,
+		From:   srcFile,
+	})
+	if err != nil {
+		t.Fatalf("runPipelineNew error: %v", err)
+	}
+
+	output := buf.String()
+	// Inline comments should be preserved.
+	if !strings.Contains(output, "# custom build prompt") {
+		t.Errorf("inline comment not preserved, got:\n%s", output)
+	}
+	if !strings.Contains(output, "# keep this short") {
+		t.Errorf("inline comment not preserved, got:\n%s", output)
+	}
+}
+
 func TestRunPipelineNew_FromEmbeddedName(t *testing.T) {
 	outDir := t.TempDir()
 	var buf bytes.Buffer
