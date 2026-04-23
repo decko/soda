@@ -576,3 +576,96 @@ func TestEnterResumeSignalSent(t *testing.T) {
 		t.Error("no resume signal received on Enter")
 	}
 }
+
+func testAttachModel() Model {
+	phases := []string{"triage", "plan", "implement"}
+	events := make(chan pipeline.Event, 10)
+	return NewAttach("TEST-ATTACH", phases, events)
+}
+
+func TestAttachModelIsReadOnly(t *testing.T) {
+	m := testAttachModel()
+	if !m.readOnly {
+		t.Error("attached model should be read-only")
+	}
+	if m.pauseSignal != nil {
+		t.Error("attached model should have nil pauseSignal")
+	}
+}
+
+func TestAttachPauseKeyDisabled(t *testing.T) {
+	m := testAttachModel()
+	m.handleEvent(pipeline.Event{Kind: pipeline.EventPhaseStarted, Phase: "triage"})
+	m2, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	mm := m2.(Model)
+	if mm.paused {
+		t.Error("pause should be disabled in read-only mode")
+	}
+	if mm.keys.flash != "read-only: cannot pause" {
+		t.Errorf("expected read-only flash, got %q", mm.keys.flash)
+	}
+}
+
+func TestAttachEnterKeyDisabled(t *testing.T) {
+	m := testAttachModel()
+	m.paused = true // simulate checkpoint
+	m2, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	mm := m2.(Model)
+	if !mm.paused {
+		t.Error("enter should not unpause in read-only mode")
+	}
+}
+
+func TestAttachReceivesEvents(t *testing.T) {
+	m := testAttachModel()
+	m.handleEvent(pipeline.Event{Kind: pipeline.EventPhaseStarted, Phase: "triage"})
+	if m.pipeline.info["triage"].status != pipeline.PhaseRunning {
+		t.Errorf("expected running, got %s", m.pipeline.info["triage"].status)
+	}
+	m.handleEvent(pipeline.Event{
+		Kind: pipeline.EventOutputChunk,
+		Data: map[string]any{"line": "attached output"},
+	})
+	if len(m.output.lines) != 1 || m.output.lines[0] != "attached output" {
+		t.Errorf("expected output line, got %v", m.output.lines)
+	}
+}
+
+func TestAttachKeysViewShowsAttached(t *testing.T) {
+	m := testAttachModel()
+	m.width = 80
+	m.height = 40
+	m.layout()
+	v := m.keys.View()
+	if !strings.Contains(v, "ATTACHED") {
+		t.Error("keys view should show ATTACHED indicator")
+	}
+	if strings.Contains(v, "[p]") {
+		t.Error("keys view should NOT show pause key in read-only mode")
+	}
+	if !strings.Contains(v, "[d]") {
+		t.Error("keys view should show detail key")
+	}
+	if !strings.Contains(v, "[q]") {
+		t.Error("keys view should show quit key")
+	}
+}
+
+func TestAttachQuitStillWorks(t *testing.T) {
+	m := testAttachModel()
+	_, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	if cmd == nil {
+		t.Error("quit should still work in read-only mode")
+	}
+}
+
+func TestAttachDetailToggleWorks(t *testing.T) {
+	m := testAttachModel()
+	m.width = 80
+	m.height = 24
+	m.layout()
+	m2, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	if !m2.(Model).detailMode {
+		t.Error("detail toggle should work in read-only mode")
+	}
+}

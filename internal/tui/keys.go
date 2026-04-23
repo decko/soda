@@ -9,9 +9,10 @@ import (
 )
 
 type keysView struct {
-	paused bool
-	flash  string
-	width  int
+	paused   bool
+	readOnly bool
+	flash    string
+	width    int
 }
 
 func newKeysView() keysView {
@@ -19,12 +20,20 @@ func newKeysView() keysView {
 }
 
 func (v keysView) View() string {
-	bindings := []struct{ key, label string }{
-		{"p", pauseLabel(v.paused)},
-		{"s", "steer"},
-		{"d", "detail"},
-		{"r", "retry"},
-		{"q", "quit"},
+	var bindings []struct{ key, label string }
+	if v.readOnly {
+		bindings = []struct{ key, label string }{
+			{"d", "detail"},
+			{"q", "quit"},
+		}
+	} else {
+		bindings = []struct{ key, label string }{
+			{"p", pauseLabel(v.paused)},
+			{"s", "steer"},
+			{"d", "detail"},
+			{"r", "retry"},
+			{"q", "quit"},
+		}
 	}
 	var parts []string
 	for _, b := range bindings {
@@ -35,6 +44,9 @@ func (v keysView) View() string {
 	}
 
 	bar := lipgloss.JoinHorizontal(lipgloss.Top, joinWith(parts, "  "))
+	if v.readOnly {
+		bar = styleFlash.Render("ATTACHED (read-only)") + "  " + bar
+	}
 	if v.flash != "" {
 		bar += "  " + styleFlash.Render(v.flash)
 	}

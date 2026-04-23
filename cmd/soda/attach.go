@@ -14,7 +14,9 @@ import (
 	"strings"
 	"syscall"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/decko/soda/internal/pipeline"
+	"github.com/decko/soda/internal/tui"
 	"github.com/spf13/cobra"
 )
 
@@ -31,17 +33,19 @@ func newAttachCmd() *cobra.Command {
 			}
 			fromStart, _ := cmd.Flags().GetBool("from-start")
 			showEvents, _ := cmd.Flags().GetBool("events")
-			return runAttach(cmd.OutOrStdout(), cmd.ErrOrStderr(), cfg.StateDir, args[0], fromStart, showEvents)
+			useTUI, _ := cmd.Flags().GetBool("tui")
+			return runAttach(cmd.OutOrStdout(), cmd.ErrOrStderr(), cfg.StateDir, args[0], fromStart, showEvents, useTUI)
 		},
 	}
 
 	cmd.Flags().Bool("from-start", false, "replay event history before live stream")
 	cmd.Flags().Bool("events", false, "show phase-level events (not just output chunks)")
+	cmd.Flags().Bool("tui", false, "launch full TUI in read-only attached mode")
 
 	return cmd
 }
 
-func runAttach(stdout, stderr io.Writer, stateDir, ticketKey string, fromStart, showEvents bool) error {
+func runAttach(stdout, stderr io.Writer, stateDir, ticketKey string, fromStart, showEvents, useTUI bool) error {
 	ticketDir := filepath.Join(stateDir, ticketKey)
 
 	if _, err := os.Stat(ticketDir); os.IsNotExist(err) {
@@ -76,7 +80,64 @@ func runAttach(stdout, stderr io.Writer, stateDir, ticketKey string, fromStart, 
 	}
 	defer conn.Close()
 
+	if useTUI {
+		return runAttachTUI(conn, ticketKey, ticketDir)
+	}
+
 	return streamFromSocket(ctx, stdout, conn, showEvents)
+}
+
+// runAttachTUI launches the full TUI in read-only mode, bridging the
+// socket connection to the TUI's event channel.
+func runAttachTUI(conn net.Conn, ticketKey, ticketDir string) error {
+	eventCh := make(chan pipeline.Event, 64)
+
+	// Discover phase names from meta if available.
+	phases := discoverPhases(ticketDir)
+
+	model := tui.NewAttach(ticketKey, phases, eventCh)
+
+	// Bridge socket → event channel in background.
+	go bridgeSocketToChannel(conn, eventCh)
+
+	p := tea.NewProgram(model, tea.WithAltScreen())
+	if _, err := p.Run(); err != nil {
+		return fmt.Errorf("attach: TUI error: %w", err)
+	}
+	return nil
+}
+
+// bridgeSocketToChannel reads broadcast messages from the socket and
+// sends parsed events to the channel. Closes the channel on EOF or error.
+func bridgeSocketToChannel(conn net.Conn, eventCh chan<- pipeline.Event) {
+	defer close(eventCh)
+	scanner := bufio.NewScanner(conn)
+	for scanner.Scan() {
+		var msg pipeline.BroadcastMessage
+		if err := json.Unmarshal(scanner.Bytes(), &msg); err != nil {
+			continue
+		}
+		var ev pipeline.Event
+		if err := json.Unmarshal(msg.Data, &ev); err != nil {
+			continue
+		}
+		eventCh <- ev
+	}
+}
+
+// discoverPhases reads meta.json and returns phase names in order.
+// Falls back to a default list if meta is unavailable.
+func discoverPhases(ticketDir string) []string {
+	metaPath := filepath.Join(ticketDir, "meta.json")
+	meta, err := pipeline.ReadMeta(metaPath)
+	if err != nil || len(meta.Phases) == 0 {
+		return []string{"triage", "plan", "implement", "verify", "review", "submit"}
+	}
+	var phases []string
+	for name := range meta.Phases {
+		phases = append(phases, name)
+	}
+	return phases
 }
 
 func attachNotRunning(stdout io.Writer, ticketDir, ticketKey string) error {
