@@ -204,17 +204,10 @@ func currentPhaseStatus(meta *pipeline.PipelineMeta, phases []pipeline.PhaseConf
 }
 
 // pipelineStatus computes a pipeline-level status from lock info and phase state.
-// Priority: lock alive → "running", lock stale → "stale", any phase failed → "failed",
-// all phases completed → "completed", otherwise fall back to the most advanced phase status.
+// Phase states take priority over lock state: a pipeline with all phases
+// completed/failed is terminal even if a stale lock file remains on disk.
 func pipelineStatus(meta *pipeline.PipelineMeta, lockInfo *pipeline.LockInfo) string {
-	if lockInfo != nil {
-		if lockInfo.IsAlive {
-			return "running"
-		}
-		return "stale"
-	}
-
-	// No lock file — derive status from phase states.
+	// Derive terminal status from phase states first.
 	hasFailed := false
 	hasNonCompleted := false
 	hasAny := false
@@ -232,6 +225,14 @@ func pipelineStatus(meta *pipeline.PipelineMeta, lockInfo *pipeline.LockInfo) st
 	}
 	if hasAny && !hasNonCompleted {
 		return "completed"
+	}
+
+	// Not terminal — check lock state for active/stale.
+	if lockInfo != nil {
+		if lockInfo.IsAlive {
+			return "running"
+		}
+		return "stale"
 	}
 
 	// Fallback: use the most advanced phase's status.
@@ -275,23 +276,27 @@ func statusGroup(status string) int {
 }
 
 // colorizeStatus wraps the status string in ANSI color codes when isTTY is true.
+// The status is padded to a fixed width BEFORE adding color codes so that
+// tabwriter sees consistent column widths (ANSI escapes are invisible but
+// counted as characters by tabwriter).
 func colorizeStatus(status string, isTTY bool) string {
+	padded := fmt.Sprintf("%-10s", status)
 	if !isTTY {
-		return status
+		return padded
 	}
 	switch status {
 	case "running":
-		return statusColorGreen + status + statusColorReset
+		return statusColorGreen + padded + statusColorReset
 	case "completed":
-		return statusColorGreen + status + statusColorReset
+		return statusColorGreen + padded + statusColorReset
 	case "failed":
-		return statusColorRed + status + statusColorReset
+		return statusColorRed + padded + statusColorReset
 	case "stale":
-		return statusColorYellow + status + statusColorReset
+		return statusColorYellow + padded + statusColorReset
 	case "retrying":
-		return statusColorYellow + status + statusColorReset
+		return statusColorYellow + padded + statusColorReset
 	default:
-		return statusColorDim + status + statusColorReset
+		return statusColorDim + padded + statusColorReset
 	}
 }
 
@@ -311,14 +316,14 @@ func phaseRank(status pipeline.PhaseStatus) int {
 }
 
 // formatSubmitted returns a human-friendly timestamp: time-only for today,
-// date+time for older entries.
+// date+time for older entries. Both are padded to consistent width.
 func formatSubmitted(startedAt, now time.Time) string {
 	sy, sm, sd := startedAt.Date()
 	ny, nm, nd := now.Date()
 	if sy == ny && sm == nm && sd == nd {
-		return fmt.Sprintf("%12s", startedAt.Format("15:04"))
+		return fmt.Sprintf("%-12s", startedAt.Format("15:04"))
 	}
-	return startedAt.Format("Jan 02 15:04")
+	return fmt.Sprintf("%-12s", startedAt.Format("Jan 02 15:04"))
 }
 
 func formatElapsed(meta *pipeline.PipelineMeta) string {
