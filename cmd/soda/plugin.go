@@ -25,6 +25,7 @@ func newPluginCmd() *cobra.Command {
 	cmd.AddCommand(
 		newPluginInstallCmd(),
 		newPluginUninstallCmd(),
+		newPluginUpdateCmd(),
 	)
 
 	return cmd
@@ -84,6 +85,34 @@ Use --global to remove from ~/.claude/ instead.`,
 	}
 
 	cmd.Flags().Bool("global", false, "remove from ~/.claude/ instead of .claude/")
+
+	return cmd
+}
+
+func newPluginUpdateCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "update",
+		Short: "Update SODA commands, skills, and agents to the latest version",
+		Long: `Selectively updates SODA files that differ from the version embedded in
+the current binary. Files that haven't changed are left untouched. New files
+are added automatically.
+
+Use --dry-run to preview what would change without writing anything.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			global, _ := cmd.Flags().GetBool("global")
+			dryRun, _ := cmd.Flags().GetBool("dry-run")
+
+			destDir, err := pluginDestDir(global)
+			if err != nil {
+				return err
+			}
+
+			return updatePlugin(cmd.OutOrStdout(), destDir, dryRun)
+		},
+	}
+
+	cmd.Flags().Bool("global", false, "update ~/.claude/ instead of .claude/")
+	cmd.Flags().Bool("dry-run", false, "preview changes without writing")
 
 	return cmd
 }
@@ -216,6 +245,83 @@ func uninstallPlugin(w io.Writer, destDir string) error {
 	_ = os.Remove(skillDir) // only succeeds if empty
 
 	fmt.Fprintf(w, "Removed SODA from %s/ (%d files)\n", destDir, removed)
+	return nil
+}
+
+// updatePlugin selectively updates files that differ from the embedded version.
+// New files are added; unchanged files are left untouched.
+func updatePlugin(w io.Writer, destDir string, dryRun bool) error {
+	claudeCodeFS, err := fs.Sub(embeddedClaudeCode, "embeds/claude-code")
+	if err != nil {
+		return fmt.Errorf("plugin: embedded filesystem: %w", err)
+	}
+
+	// Check that at least one SODA file exists (i.e., plugin was installed).
+	existing, err := findExistingSodaFiles(destDir, claudeCodeFS)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("plugin: check existing: %w", err)
+	}
+	if len(existing) == 0 {
+		return fmt.Errorf("SODA not installed at %s (run 'soda plugin install' first)", destDir)
+	}
+
+	var updated, added, unchanged int
+
+	walkErr := fs.WalkDir(claudeCodeFS, ".", func(path string, entry fs.DirEntry, wErr error) error {
+		if wErr != nil || entry.IsDir() {
+			return wErr
+		}
+
+		embeddedData, readErr := fs.ReadFile(claudeCodeFS, path)
+		if readErr != nil {
+			return fmt.Errorf("read embedded %s: %w", path, readErr)
+		}
+
+		dest := filepath.Join(destDir, path)
+		installedData, readErr := os.ReadFile(dest)
+
+		if readErr != nil {
+			// File doesn't exist on disk — it's new.
+			if !errors.Is(readErr, os.ErrNotExist) {
+				return fmt.Errorf("read %s: %w", dest, readErr)
+			}
+			added++
+			fmt.Fprintf(w, "  + %s (new)\n", path)
+			if !dryRun {
+				if mkErr := os.MkdirAll(filepath.Dir(dest), 0755); mkErr != nil {
+					return fmt.Errorf("mkdir %s: %w", filepath.Dir(dest), mkErr)
+				}
+				return os.WriteFile(dest, embeddedData, 0644)
+			}
+			return nil
+		}
+
+		if string(installedData) == string(embeddedData) {
+			unchanged++
+			return nil
+		}
+
+		updated++
+		fmt.Fprintf(w, "  ~ %s (updated)\n", path)
+		if !dryRun {
+			return os.WriteFile(dest, embeddedData, 0644)
+		}
+		return nil
+	})
+	if walkErr != nil {
+		return fmt.Errorf("plugin: update: %w", walkErr)
+	}
+
+	if dryRun {
+		fmt.Fprintf(w, "\nDry run: %d would be updated, %d would be added, %d unchanged\n",
+			updated, added, unchanged)
+	} else if updated == 0 && added == 0 {
+		fmt.Fprintln(w, "Already up to date.")
+	} else {
+		fmt.Fprintf(w, "\nUpdated SODA in %s/ (%d updated, %d added, %d unchanged)\n",
+			destDir, updated, added, unchanged)
+	}
+
 	return nil
 }
 

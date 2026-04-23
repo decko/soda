@@ -264,6 +264,156 @@ func TestPluginDestDirGlobal(t *testing.T) {
 	}
 }
 
+func TestUpdatePluginAlreadyUpToDate(t *testing.T) {
+	destDir := filepath.Join(t.TempDir(), ".claude")
+
+	// Install first.
+	if err := installPlugin(&bytes.Buffer{}, destDir, false); err != nil {
+		t.Fatalf("installPlugin() error: %v", err)
+	}
+
+	// Update should report up to date.
+	var buf bytes.Buffer
+	if err := updatePlugin(&buf, destDir, false); err != nil {
+		t.Fatalf("updatePlugin() error: %v", err)
+	}
+
+	if !contains(buf.String(), "Already up to date") {
+		t.Errorf("expected 'Already up to date', got %q", buf.String())
+	}
+}
+
+func TestUpdatePluginModifiedFile(t *testing.T) {
+	destDir := filepath.Join(t.TempDir(), ".claude")
+
+	// Install first.
+	if err := installPlugin(&bytes.Buffer{}, destDir, false); err != nil {
+		t.Fatalf("installPlugin() error: %v", err)
+	}
+
+	// Modify a file to simulate a stale version.
+	target := filepath.Join(destDir, "commands", "soda-run.md")
+	if err := os.WriteFile(target, []byte("old version"), 0644); err != nil {
+		t.Fatalf("write stale file: %v", err)
+	}
+
+	// Update should detect and fix the changed file.
+	var buf bytes.Buffer
+	if err := updatePlugin(&buf, destDir, false); err != nil {
+		t.Fatalf("updatePlugin() error: %v", err)
+	}
+
+	output := buf.String()
+	if !contains(output, "soda-run.md") {
+		t.Errorf("expected output to mention soda-run.md, got %q", output)
+	}
+	if !contains(output, "updated") {
+		t.Errorf("expected output to mention 'updated', got %q", output)
+	}
+	if !contains(output, "1 updated") {
+		t.Errorf("expected '1 updated' in summary, got %q", output)
+	}
+
+	// File should now match the embedded version.
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read updated file: %v", err)
+	}
+	if string(data) == "old version" {
+		t.Error("file should have been updated to embedded version")
+	}
+}
+
+func TestUpdatePluginNewFile(t *testing.T) {
+	destDir := filepath.Join(t.TempDir(), ".claude")
+
+	// Install first.
+	if err := installPlugin(&bytes.Buffer{}, destDir, false); err != nil {
+		t.Fatalf("installPlugin() error: %v", err)
+	}
+
+	// Delete one file to simulate a missing file.
+	target := filepath.Join(destDir, "commands", "soda-log.md")
+	if err := os.Remove(target); err != nil {
+		t.Fatalf("remove file: %v", err)
+	}
+
+	// Update should add the missing file.
+	var buf bytes.Buffer
+	if err := updatePlugin(&buf, destDir, false); err != nil {
+		t.Fatalf("updatePlugin() error: %v", err)
+	}
+
+	output := buf.String()
+	if !contains(output, "soda-log.md") {
+		t.Errorf("expected output to mention soda-log.md, got %q", output)
+	}
+	if !contains(output, "new") {
+		t.Errorf("expected output to mention 'new', got %q", output)
+	}
+
+	// File should now exist.
+	if _, err := os.Stat(target); err != nil {
+		t.Errorf("soda-log.md should exist after update: %v", err)
+	}
+}
+
+func TestUpdatePluginDryRun(t *testing.T) {
+	destDir := filepath.Join(t.TempDir(), ".claude")
+
+	// Install first.
+	if err := installPlugin(&bytes.Buffer{}, destDir, false); err != nil {
+		t.Fatalf("installPlugin() error: %v", err)
+	}
+
+	// Modify a file.
+	target := filepath.Join(destDir, "commands", "soda-run.md")
+	original, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read original: %v", err)
+	}
+	if err := os.WriteFile(target, []byte("modified"), 0644); err != nil {
+		t.Fatalf("write modified: %v", err)
+	}
+
+	// Dry run should report changes but not write.
+	var buf bytes.Buffer
+	if err := updatePlugin(&buf, destDir, true); err != nil {
+		t.Fatalf("updatePlugin(dry-run) error: %v", err)
+	}
+
+	output := buf.String()
+	if !contains(output, "Dry run") {
+		t.Errorf("expected 'Dry run' in output, got %q", output)
+	}
+	if !contains(output, "1 would be updated") {
+		t.Errorf("expected '1 would be updated', got %q", output)
+	}
+
+	// File should NOT have been changed.
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read file after dry run: %v", err)
+	}
+	if string(data) != "modified" {
+		t.Errorf("dry run should not modify files; got %q, want %q", string(data), "modified")
+	}
+	_ = original // verify we read it (suppress unused warning)
+}
+
+func TestUpdatePluginNotInstalled(t *testing.T) {
+	destDir := filepath.Join(t.TempDir(), ".claude")
+
+	err := updatePlugin(&bytes.Buffer{}, destDir, false)
+	if err == nil {
+		t.Fatal("expected error when updating non-existent install, got nil")
+	}
+
+	if !contains(err.Error(), "not installed") {
+		t.Errorf("error %q should mention 'not installed'", err.Error())
+	}
+}
+
 // contains checks if s contains substr (avoids importing strings for a test helper).
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && searchString(s, substr)
