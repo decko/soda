@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,12 +19,14 @@ import (
 
 // Config holds the proxy server configuration.
 type Config struct {
-	SocketPath      string // Unix socket path to listen on
-	UpstreamURL     string // Real API base URL
-	APIKey          string // API key to inject into requests
-	MaxInputTokens  int64  // Budget cap; 0 = unlimited
-	MaxOutputTokens int64  // Budget cap; 0 = unlimited
-	LogDir          string // Directory for request/response logs; empty = no logging
+	SocketPath      string        // Unix socket path to listen on (used when ListenAddr is empty)
+	ListenAddr      string        // TCP address to listen on (e.g. "127.0.0.1:0"); takes precedence over SocketPath
+	UpstreamURL     string        // Real API base URL
+	APIKey          string        // API key to inject into requests (Anthropic direct)
+	TokenFunc       func() string // returns a Bearer token (Vertex OAuth); takes precedence over APIKey
+	MaxInputTokens  int64         // Budget cap; 0 = unlimited
+	MaxOutputTokens int64         // Budget cap; 0 = unlimited
+	LogDir          string        // Directory for request/response logs; empty = no logging
 }
 
 // Stats holds cumulative metering data.
@@ -51,26 +54,33 @@ type Proxy struct {
 	logSeq int64
 }
 
-// New creates and starts the proxy server on the configured Unix socket.
+// New creates and starts the proxy server. When ListenAddr is set, the
+// proxy listens on TCP; otherwise it listens on the Unix socket at SocketPath.
 func New(cfg Config) (*Proxy, error) {
-	if cfg.SocketPath == "" {
-		return nil, fmt.Errorf("proxy: socket path is required")
+	if cfg.ListenAddr == "" && cfg.SocketPath == "" {
+		return nil, fmt.Errorf("proxy: either ListenAddr or SocketPath is required")
 	}
 	if cfg.UpstreamURL == "" {
 		return nil, fmt.Errorf("proxy: upstream URL is required")
 	}
-
-	// Clean up stale socket.
-	os.Remove(cfg.SocketPath)
 
 	upstream, err := url.Parse(cfg.UpstreamURL)
 	if err != nil {
 		return nil, fmt.Errorf("proxy: parse upstream URL: %w", err)
 	}
 
-	ln, err := net.Listen("unix", cfg.SocketPath)
-	if err != nil {
-		return nil, fmt.Errorf("proxy: listen %s: %w", cfg.SocketPath, err)
+	var ln net.Listener
+	if cfg.ListenAddr != "" {
+		ln, err = net.Listen("tcp", cfg.ListenAddr)
+		if err != nil {
+			return nil, fmt.Errorf("proxy: listen %s: %w", cfg.ListenAddr, err)
+		}
+	} else {
+		os.Remove(cfg.SocketPath)
+		ln, err = net.Listen("unix", cfg.SocketPath)
+		if err != nil {
+			return nil, fmt.Errorf("proxy: listen %s: %w", cfg.SocketPath, err)
+		}
 	}
 
 	proxy := &Proxy{
@@ -85,8 +95,20 @@ func New(cfg Config) (*Proxy, error) {
 			req.URL.Host = upstream.Host
 			req.Host = upstream.Host
 
-			// Inject real credentials — the sandbox sees a fake nonce.
-			if cfg.APIKey != "" {
+			// Prepend the upstream's path prefix (e.g. "/v1") to the
+			// incoming request path. This is needed for Vertex AI where
+			// the base URL is https://REGION-aiplatform.googleapis.com/v1
+			// and the client sends /projects/.../rawPredict.
+			if upstream.Path != "" && upstream.Path != "/" {
+				req.URL.Path = singleJoiningSlash(upstream.Path, req.URL.Path)
+			}
+
+			// Inject credentials — the sandbox sees a fake nonce.
+			if cfg.TokenFunc != nil {
+				if token := cfg.TokenFunc(); token != "" {
+					req.Header.Set("Authorization", "Bearer "+token)
+				}
+			} else if cfg.APIKey != "" {
 				req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
 				req.Header.Set("x-api-key", cfg.APIKey)
 			}
@@ -125,10 +147,18 @@ func (p *Proxy) Stats() Stats {
 	}
 }
 
-// Close shuts down the proxy server and removes the socket file.
+// Addr returns the listener's network address. For TCP listeners,
+// use this to discover the assigned port (e.g. when using ":0").
+func (p *Proxy) Addr() net.Addr {
+	return p.listener.Addr()
+}
+
+// Close shuts down the proxy server and removes the socket file (if any).
 func (p *Proxy) Close() error {
 	err := p.server.Close()
-	os.Remove(p.sockPath)
+	if p.sockPath != "" {
+		os.Remove(p.sockPath)
+	}
 	return err
 }
 
@@ -170,7 +200,7 @@ func (p *Proxy) meterResponse(resp *http.Response) error {
 
 	// Log if configured.
 	if p.config.LogDir != "" {
-		go p.logEntry(resp.Request, body, usage)
+		go p.logEntry(resp.Request, body, usage, resp.StatusCode)
 	}
 
 	return nil
@@ -198,19 +228,26 @@ func extractUsage(body []byte) tokenUsage {
 	}
 }
 
-func (p *Proxy) logEntry(req *http.Request, responseBody []byte, usage tokenUsage) {
+func (p *Proxy) logEntry(req *http.Request, responseBody []byte, usage tokenUsage, statusCode int) {
 	p.logMu.Lock()
 	p.logSeq++
 	seq := p.logSeq
 	p.logMu.Unlock()
+
+	bodyExcerpt := string(responseBody)
+	if len(bodyExcerpt) > 200 {
+		bodyExcerpt = bodyExcerpt[:200]
+	}
 
 	entry := map[string]any{
 		"seq":           seq,
 		"timestamp":     time.Now().UTC().Format(time.RFC3339),
 		"method":        req.Method,
 		"path":          req.URL.Path,
+		"status":        statusCode,
 		"input_tokens":  usage.inputTokens,
 		"output_tokens": usage.outputTokens,
+		"body_excerpt":  bodyExcerpt,
 	}
 
 	data, err := json.Marshal(entry)
@@ -227,4 +264,17 @@ func (p *Proxy) logEntry(req *http.Request, responseBody []byte, usage tokenUsag
 	}
 	defer fd.Close()
 	fd.Write(data)
+}
+
+// singleJoiningSlash joins two URL path segments with exactly one slash.
+func singleJoiningSlash(a, b string) string {
+	aSlash := strings.HasSuffix(a, "/")
+	bSlash := strings.HasPrefix(b, "/")
+	switch {
+	case aSlash && bSlash:
+		return a + b[1:]
+	case !aSlash && !bSlash:
+		return a + "/" + b
+	}
+	return a + b
 }

@@ -98,11 +98,10 @@ func systemReadPaths() []string {
 }
 
 // claudeEnv builds the environment for a sandboxed Claude Code process.
-// When useProxy is true, real credentials are NOT passed to the sandbox.
-// Instead, a fake API key is set and ANTHROPIC_BASE_URL points to the
-// proxy's in-sandbox bridge (http://127.0.0.1:8080). The proxy injects
-// real credentials on the host side.
-func claudeEnv(tmpDir string, opts runner.RunOpts, claudeBin string, useProxy bool) []string {
+// When proxyURL is non-empty, real credentials are NOT passed to the sandbox.
+// Instead, a fake API key is set and the base URL points to the proxy.
+// The proxy injects real credentials on the host side.
+func claudeEnv(tmpDir string, opts runner.RunOpts, claudeBin, proxyURL string) []string {
 	env := []string{
 		"HOME=" + tmpDir,
 		"TMPDIR=" + tmpDir,
@@ -124,13 +123,29 @@ func claudeEnv(tmpDir string, opts runner.RunOpts, claudeBin string, useProxy bo
 		env = append(env, "NODE_PATH="+nodePath)
 	}
 
-	if useProxy {
-		// Proxy mode: fake API key + base URL pointing to the in-sandbox
-		// bridge that arapuca sets up from NetworkProxySocket.
-		env = append(env,
-			"ANTHROPIC_API_KEY=sk-proxy-nonce",
-			"ANTHROPIC_BASE_URL=http://127.0.0.1:8080",
-		)
+	if proxyURL != "" {
+		// Proxy mode: the proxy on the host side handles authentication.
+		if os.Getenv("CLAUDE_CODE_USE_VERTEX") != "" {
+			// Vertex mode: pass through Vertex config (project, location)
+			// but route API calls through the proxy and skip Vertex auth
+			// (the proxy injects Google OAuth tokens on the host side).
+			env = append(env,
+				"CLAUDE_CODE_USE_VERTEX=1",
+				"ANTHROPIC_VERTEX_BASE_URL="+proxyURL,
+				"CLAUDE_CODE_SKIP_VERTEX_AUTH=1",
+			)
+			for _, key := range []string{"VERTEXAI_PROJECT", "VERTEXAI_LOCATION", "CLOUD_ML_REGION", "ANTHROPIC_VERTEX_PROJECT_ID"} {
+				if val := os.Getenv(key); val != "" {
+					env = append(env, key+"="+val)
+				}
+			}
+		} else {
+			// Direct Anthropic mode: fake API key + base URL.
+			env = append(env,
+				"ANTHROPIC_API_KEY=sk-proxy-nonce",
+				"ANTHROPIC_BASE_URL="+proxyURL,
+			)
+		}
 	} else {
 		// Direct mode: pass through real credentials.
 		credentialVars := []string{

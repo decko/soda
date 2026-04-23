@@ -36,4 +36,4 @@ require (
 	golang.org/x/text v0.3.8 // indirect
 )
 
-replace github.com/sergio-correia/go-arapuca => github.com/decko/go-arapuca v0.1.0
+replace github.com/sergio-correia/go-arapuca => github.com/decko/go-arapuca v0.1.1-0.20260421121428-18be6a8cdc3f

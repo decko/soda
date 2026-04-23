@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/decko/soda/internal/claude"
@@ -72,7 +73,10 @@ func (r *Runner) Run(ctx context.Context, opts runner.RunOpts) (*runner.RunResul
 	}
 
 	// Create sandbox temp dir first — used for system prompt file and HOME/TMPDIR.
-	tmpDir, err := arapuca.MakeTmpDir(opts.Phase)
+	// Sanitize phase name: replace slashes with dashes since MakeTmpDir uses
+	// the name in a path (e.g. "review/go-specialist" → "review-go-specialist").
+	tmpPhase := strings.ReplaceAll(opts.Phase, "/", "-")
+	tmpDir, err := arapuca.MakeTmpDir(tmpPhase)
 	if err != nil {
 		return nil, fmt.Errorf("sandbox: create temp dir: %w", err)
 	}
@@ -127,51 +131,60 @@ func (r *Runner) Run(ctx context.Context, opts runner.RunOpts) (*runner.RunResul
 	writePaths = append(writePaths, tmpDir)
 
 	useNetNS := r.config.UseNetNS
-	var networkProxySocket string
 	var llmProxy *proxy.Proxy
+	var proxyBaseURL string
 
-	// Start LLM proxy if configured. This enables full network isolation:
-	// Claude Code API calls are routed through the proxy Unix socket,
-	// and arapuca bridges it into the sandbox via NetworkProxySocket.
+	// Start LLM proxy if configured. The proxy listens on TCP localhost
+	// and the sandbox process connects to it via ANTHROPIC_BASE_URL or
+	// ANTHROPIC_VERTEX_BASE_URL. Network namespace isolation is deferred
+	// until go-arapuca implements the NetworkProxySocket bridge.
 	if r.config.Proxy.Enabled {
-		useNetNS = true // force network isolation when proxy is active
-
-		socketDir, socketErr := arapuca.MakeSocketDir()
-		if socketErr != nil {
-			return nil, fmt.Errorf("sandbox: create socket dir for proxy: %w", socketErr)
-		}
-		defer os.RemoveAll(socketDir)
-
-		sockPath := filepath.Join(socketDir, "llm.sock")
-		readPaths = append(readPaths, socketDir)
-
-		apiKey := r.config.Proxy.APIKey
-		if apiKey == "" {
-			apiKey = os.Getenv("ANTHROPIC_API_KEY")
-		}
-		upstreamURL := r.config.Proxy.UpstreamURL
-		if upstreamURL == "" {
-			upstreamURL = os.Getenv("ANTHROPIC_BASE_URL")
-		}
-		if upstreamURL == "" {
-			upstreamURL = "https://api.anthropic.com"
-		}
-
-		var proxyErr error
-		llmProxy, proxyErr = proxy.New(proxy.Config{
-			SocketPath:      sockPath,
-			UpstreamURL:     upstreamURL,
-			APIKey:          apiKey,
+		proxyCfg := proxy.Config{
+			ListenAddr:      "127.0.0.1:0",
 			MaxInputTokens:  r.config.Proxy.MaxInputTokens,
 			MaxOutputTokens: r.config.Proxy.MaxOutputTokens,
 			LogDir:          r.config.Proxy.LogDir,
-		})
+		}
+
+		if os.Getenv("CLAUDE_CODE_USE_VERTEX") != "" {
+			// Vertex mode: resolve upstream URL and token source from ADC.
+			region := os.Getenv("CLOUD_ML_REGION")
+			if region == "" {
+				region = os.Getenv("VERTEXAI_LOCATION")
+			}
+			if region == "" {
+				region = "us-east5"
+			}
+			proxyCfg.UpstreamURL = fmt.Sprintf("https://%s-aiplatform.googleapis.com/v1", region)
+
+			tokenFunc, tokenErr := proxy.VertexTokenSource("")
+			if tokenErr != nil {
+				return nil, fmt.Errorf("sandbox: vertex token source: %w", tokenErr)
+			}
+			proxyCfg.TokenFunc = tokenFunc
+		} else {
+			// Direct Anthropic mode.
+			proxyCfg.APIKey = r.config.Proxy.APIKey
+			if proxyCfg.APIKey == "" {
+				proxyCfg.APIKey = os.Getenv("ANTHROPIC_API_KEY")
+			}
+			proxyCfg.UpstreamURL = r.config.Proxy.UpstreamURL
+			if proxyCfg.UpstreamURL == "" {
+				proxyCfg.UpstreamURL = os.Getenv("ANTHROPIC_BASE_URL")
+			}
+			if proxyCfg.UpstreamURL == "" {
+				proxyCfg.UpstreamURL = "https://api.anthropic.com"
+			}
+		}
+
+		var proxyErr error
+		llmProxy, proxyErr = proxy.New(proxyCfg)
 		if proxyErr != nil {
 			return nil, fmt.Errorf("sandbox: start LLM proxy: %w", proxyErr)
 		}
 		defer llmProxy.Close()
 
-		networkProxySocket = sockPath
+		proxyBaseURL = fmt.Sprintf("http://%s", llmProxy.Addr().String())
 	}
 
 	profile := arapuca.Profile{
@@ -201,24 +214,26 @@ func (r *Runner) Run(ctx context.Context, opts runner.RunOpts) (*runner.RunResul
 	defer stderrW.Close()
 
 	cfg := arapuca.Config{
-		Profile:            profile,
-		TaskID:             opts.Phase,
-		Phase:              opts.Phase,
-		WorkDir:            opts.WorkDir,
-		Stdout:             stdoutW,
-		Stderr:             stderrW,
-		NetworkProxySocket: networkProxySocket,
+		Profile: profile,
+		TaskID:  tmpPhase,
+		Phase:   tmpPhase,
+		WorkDir: opts.WorkDir,
+		Stdout:  stdoutW,
+		Stderr:  stderrW,
 	}
 
-	// Serialize env mutation + Launch to prevent races if multiple Runners
-	// are used concurrently. Restore env immediately after Launch returns —
-	// no need to keep sandbox env vars set during subprocess execution.
-	env := claudeEnv(tmpDir, opts, r.claudeBin, r.config.Proxy.Enabled)
-	launchMu.Lock()
-	restore := setEnvForLaunch(env)
+	// Build env vars for the sandboxed process. go-arapuca v0.1.1+ passes
+	// these directly to the subprocess via Config.Env, avoiding the racy
+	// setEnvForLaunch pattern that mutated the host process env.
+	envSlice := claudeEnv(tmpDir, opts, r.claudeBin, proxyBaseURL)
+	envMap := make(map[string]string, len(envSlice))
+	for _, entry := range envSlice {
+		k, v, _ := parseEnvEntry(entry)
+		envMap[k] = v
+	}
+	cfg.Env = envMap
+
 	proc, launchErr := r.sandbox.Launch(ctx, cfg, r.claudeBin, args, nil)
-	restore()
-	launchMu.Unlock()
 
 	if launchErr != nil {
 		return nil, fmt.Errorf("sandbox: launch: %w", launchErr)
