@@ -1,5 +1,6 @@
 ---
 description: Resume a failed or interrupted SODA pipeline
+argument-hint: <ticket-key> [--from <phase>]
 ---
 
 Resume a SODA pipeline from the last failed or interrupted phase:

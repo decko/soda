@@ -8,4 +8,4 @@ Show the status of active and recent SODA pipelines:
 soda status
 ```
 
-Report the status of each pipeline, including phase progress and any errors.
+Report the status of each pipeline, including phase progress, cost, and any errors.

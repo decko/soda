@@ -1,8 +1,0 @@
-{
-  "name": "soda",
-  "description": "Pipeline management for SODA — Session-Orchestrated Development Agent",
-  "version": "1.0.0",
-  "author": {
-    "name": "decko"
-  }
-}
