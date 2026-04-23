@@ -2,6 +2,7 @@
 
 This file is loaded automatically by Claude Code when working on this project.
 For comprehensive project documentation, see [AGENTS.md](AGENTS.md).
+For non-negotiable principles and design rules, see [CONSTITUTION.md](CONSTITUTION.md).
 
 ## What is SODA
 

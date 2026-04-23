@@ -1,5 +1,7 @@
 # AGENTS.md — SODA project context
 
+For non-negotiable principles and design rules, see [CONSTITUTION.md](CONSTITUTION.md).
+
 ## What is SODA
 
 **Session-Orchestrated Development Agent** — a Go CLI/TUI that orchestrates AI coding sessions through a pipeline to implement tickets end-to-end.
