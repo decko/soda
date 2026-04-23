@@ -161,6 +161,28 @@ func TestRunPipelineNew_DryRun(t *testing.T) {
 	}
 }
 
+func TestRunPipelineNew_RejectsEmptyName(t *testing.T) {
+	tests := []struct {
+		name string
+	}{
+		{""},
+		{" "},
+		{"  \t "},
+	}
+	for _, tt := range tests {
+		t.Run("empty_"+tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			err := runPipelineNew(&buf, tt.name, pipelineNewOptions{})
+			if err == nil {
+				t.Fatalf("expected error for empty name %q, got nil", tt.name)
+			}
+			if !strings.Contains(err.Error(), "name must not be empty") {
+				t.Errorf("error = %q, want 'name must not be empty'", err.Error())
+			}
+		})
+	}
+}
+
 func TestRunPipelineNew_RejectsDefault(t *testing.T) {
 	var buf bytes.Buffer
 	err := runPipelineNew(&buf, "default", pipelineNewOptions{})

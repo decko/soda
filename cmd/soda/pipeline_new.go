@@ -85,6 +85,10 @@ type pipelineNewOptions struct {
 // runPipelineNew generates a scaffold pipeline definition for the given name.
 // The generated file is written as phases-<name>.yaml in the output directory.
 func runPipelineNew(w io.Writer, name string, opts pipelineNewOptions) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("pipeline new: name must not be empty")
+	}
+
 	if err := pipeline.ValidatePipelineName(name); err != nil {
 		return fmt.Errorf("pipeline new: %w", err)
 	}
