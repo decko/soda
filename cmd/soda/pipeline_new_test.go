@@ -576,6 +576,51 @@ func TestRunPipelineNew_PhasesDryRun(t *testing.T) {
 	}
 }
 
+func TestFilterRawPhases_DoesNotMutateInput(t *testing.T) {
+	// Build input phases with depends_on that references a phase we'll filter out.
+	phases := []map[string]interface{}{
+		{
+			"name":       "implement",
+			"depends_on": []interface{}{},
+		},
+		{
+			"name":       "verify",
+			"depends_on": []interface{}{"implement"},
+		},
+		{
+			"name":       "submit",
+			"depends_on": []interface{}{"implement", "verify"},
+		},
+	}
+
+	// Keep only implement and submit — verify is dropped.
+	result := filterRawPhases(phases, []string{"implement", "submit"})
+	if len(result) != 2 {
+		t.Fatalf("expected 2 phases, got %d", len(result))
+	}
+
+	// The original submit phase must still reference both implement and verify.
+	origDeps := phases[2]["depends_on"].([]interface{})
+	if len(origDeps) != 2 {
+		t.Errorf("original submit.depends_on was mutated: got %v, want [implement verify]", origDeps)
+	}
+
+	// The filtered submit should only reference implement.
+	var filteredSubmit map[string]interface{}
+	for _, r := range result {
+		if r["name"] == "submit" {
+			filteredSubmit = r
+		}
+	}
+	if filteredSubmit == nil {
+		t.Fatal("submit not found in result")
+	}
+	filteredDeps := filteredSubmit["depends_on"].([]interface{})
+	if len(filteredDeps) != 1 || filteredDeps[0] != "implement" {
+		t.Errorf("filtered submit.depends_on = %v, want [implement]", filteredDeps)
+	}
+}
+
 func TestRunPipelineNew_StatErrorNotErrNotExist(t *testing.T) {
 	dir := t.TempDir()
 	// Create a parent dir with no read/execute permission so Stat fails

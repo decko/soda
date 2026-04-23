@@ -304,17 +304,22 @@ func filterRawPhases(phases []map[string]interface{}, selected []string) []map[s
 		if !keep[pname] {
 			continue
 		}
+		// Clone the phase map to avoid mutating the caller's data.
+		cloned := make(map[string]interface{}, len(ph))
+		for k, v := range ph {
+			cloned[k] = v
+		}
 		// Rewrite depends_on to only reference phases still in the set.
-		if deps, ok := ph["depends_on"].([]interface{}); ok {
+		if deps, ok := cloned["depends_on"].([]interface{}); ok {
 			filtered := make([]interface{}, 0, len(deps))
 			for _, dep := range deps {
 				if depStr, ok := dep.(string); ok && keep[depStr] {
 					filtered = append(filtered, dep)
 				}
 			}
-			ph["depends_on"] = filtered
+			cloned["depends_on"] = filtered
 		}
-		result = append(result, ph)
+		result = append(result, cloned)
 	}
 	return result
 }
