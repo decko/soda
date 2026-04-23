@@ -12,6 +12,7 @@ import (
 
 	"github.com/decko/soda/internal/pipeline"
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 )
 
 func newPipelineCmd() *cobra.Command {
@@ -43,10 +44,12 @@ Examples:
 			force, _ := cmd.Flags().GetBool("force")
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
 			outputDir, _ := cmd.Flags().GetString("dir")
+			from, _ := cmd.Flags().GetString("from")
 			return runPipelineNew(cmd.OutOrStdout(), args[0], pipelineNewOptions{
 				Force:     force,
 				DryRun:    dryRun,
 				OutputDir: outputDir,
+				From:      from,
 			})
 		},
 	}
@@ -54,6 +57,7 @@ Examples:
 	cmd.Flags().Bool("force", false, "overwrite existing pipeline file")
 	cmd.Flags().Bool("dry-run", false, "print generated pipeline to stdout without writing")
 	cmd.Flags().String("dir", "", "output directory (default: current directory)")
+	cmd.Flags().String("from", "", "load an existing pipeline as template (file path or embedded pipeline name)")
 
 	return cmd
 }
@@ -63,6 +67,7 @@ type pipelineNewOptions struct {
 	Force     bool
 	DryRun    bool
 	OutputDir string
+	From      string // --from: load an existing pipeline as template
 }
 
 // runPipelineNew generates a scaffold pipeline definition for the given name.
@@ -76,9 +81,15 @@ func runPipelineNew(w io.Writer, name string, opts pipelineNewOptions) error {
 		return fmt.Errorf("pipeline new: %q is reserved; use 'soda init --phases' to scaffold the default pipeline", name)
 	}
 
-	content, err := renderPipelineScaffold(name)
+	var content string
+	var err error
+	if opts.From != "" {
+		content, err = renderFromTemplate(name, opts.From)
+	} else {
+		content, err = renderPipelineScaffold(name)
+	}
 	if err != nil {
-		return fmt.Errorf("pipeline new: render scaffold: %w", err)
+		return fmt.Errorf("pipeline new: %w", err)
 	}
 
 	if opts.DryRun {
@@ -186,6 +197,64 @@ phases:
       - implement
       - verify
 `
+
+// loadFromSource returns the raw YAML bytes for the given --from source.
+// If the source contains a path separator or ends in ".yaml" it is treated
+// as a file path and read from disk; otherwise it is looked up as a known
+// embedded pipeline name (or "default").
+func loadFromSource(from string) ([]byte, error) {
+	if strings.ContainsAny(from, `/\`) || strings.HasSuffix(from, ".yaml") {
+		data, err := os.ReadFile(from)
+		if err != nil {
+			return nil, fmt.Errorf("read pipeline file %q: %w", from, err)
+		}
+		return data, nil
+	}
+	if from == "default" {
+		return embeddedPhases, nil
+	}
+	embeddedPath, ok := knownEmbeddedPipelines[from]
+	if !ok {
+		return nil, fmt.Errorf("pipeline %q not found: not a file path or known embedded pipeline name", from)
+	}
+	data, err := fs.ReadFile(embeddedPipelines, embeddedPath)
+	if err != nil {
+		return nil, fmt.Errorf("read embedded pipeline %q: %w", from, err)
+	}
+	return data, nil
+}
+
+// renderFromTemplate loads a source pipeline and re-serializes it with a
+// new header for the given name. The source may be a file path or an
+// embedded pipeline name (see loadFromSource).
+func renderFromTemplate(name, from string) (string, error) {
+	data, err := loadFromSource(from)
+	if err != nil {
+		return "", err
+	}
+
+	var src struct {
+		Phases []map[string]interface{} `yaml:"phases"`
+	}
+	if err := yaml.Unmarshal(data, &src); err != nil {
+		return "", fmt.Errorf("parse source pipeline %q: %w", from, err)
+	}
+	if len(src.Phases) == 0 {
+		return "", fmt.Errorf("source pipeline %q has no phases", from)
+	}
+
+	out, err := yaml.Marshal(map[string]interface{}{"phases": src.Phases})
+	if err != nil {
+		return "", fmt.Errorf("serialize pipeline: %w", err)
+	}
+
+	var header strings.Builder
+	fmt.Fprintf(&header, "# SODA Pipeline: %s\n#\n# Template: %s\n#\n", name, from)
+	fmt.Fprintf(&header, "# Usage:\n#   soda run <ticket> --pipeline %s\n#\n", name)
+	header.WriteString("# Docs: https://github.com/decko/soda#pipelines\n\n")
+
+	return header.String() + string(out), nil
+}
 
 // renderPipelineScaffold executes the scaffold template with the given
 // pipeline name and returns the rendered YAML content.
