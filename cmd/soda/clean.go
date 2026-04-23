@@ -137,7 +137,7 @@ func cleanTicket(ctx context.Context, stateDir, ticketKey string, dryRun, force,
 			fmt.Printf("Would delete branch: %s\n", meta.Branch)
 			fmt.Printf("Would delete remote branch: origin/%s\n", meta.Branch)
 		} else {
-			repoDir, err := resolveRepoDir()
+			repoDir, err := resolveRepoDir(ctx)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: cannot resolve repo dir to delete branch %s: %v\n", meta.Branch, err)
 			} else {
@@ -221,8 +221,8 @@ func tryLock(lockPath string) bool {
 }
 
 // resolveRepoDir returns the top-level directory of the current git repository.
-func resolveRepoDir() (string, error) {
-	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+func resolveRepoDir(ctx context.Context) (string, error) {
+	out, err := exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel").Output()
 	if err != nil {
 		return "", fmt.Errorf("git rev-parse --show-toplevel: %w", err)
 	}
@@ -246,7 +246,7 @@ func isTerminal(meta *pipeline.PipelineMeta) bool {
 	}
 	// At least one phase must have completed or failed
 	for _, ps := range meta.Phases {
-		if ps.Status == pipeline.PhaseCompleted || ps.Status == pipeline.PhaseFailed {
+		if ps.Status == pipeline.PhaseCompleted || ps.Status == pipeline.PhaseFailed || ps.Status == pipeline.PhaseSkipped {
 			return true
 		}
 	}

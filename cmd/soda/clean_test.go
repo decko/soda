@@ -76,6 +76,22 @@ func TestIsTerminal(t *testing.T) {
 			}},
 			want: false,
 		},
+		{
+			name: "completed + skipped → terminal",
+			meta: &pipeline.PipelineMeta{Phases: map[string]*pipeline.PhaseState{
+				"triage":    {Status: pipeline.PhaseCompleted},
+				"patch":     {Status: pipeline.PhaseSkipped},
+				"implement": {Status: pipeline.PhaseCompleted},
+			}},
+			want: true,
+		},
+		{
+			name: "only skipped → terminal",
+			meta: &pipeline.PipelineMeta{Phases: map[string]*pipeline.PhaseState{
+				"patch": {Status: pipeline.PhaseSkipped},
+			}},
+			want: true,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
