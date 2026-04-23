@@ -402,6 +402,180 @@ func TestRunPipelineNew_FromDryRun(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Tests for --phases flag
+// ---------------------------------------------------------------------------
+
+func TestRunPipelineNew_PhasesFiltersScaffold(t *testing.T) {
+	outDir := t.TempDir()
+	var buf bytes.Buffer
+	// Request only "implement" and "verify" from the default scaffold.
+	err := runPipelineNew(&buf, "lite", pipelineNewOptions{
+		OutputDir: outDir,
+		Phases:    []string{"implement", "verify"},
+	})
+	if err != nil {
+		t.Fatalf("runPipelineNew(phases=implement,verify) error: %v", err)
+	}
+
+	dest := filepath.Join(outDir, "phases-lite.yaml")
+	pl, err := pipeline.LoadPipeline(dest)
+	if err != nil {
+		t.Fatalf("LoadPipeline() on filtered output: %v", err)
+	}
+	if len(pl.Phases) != 2 {
+		t.Fatalf("expected 2 phases, got %d", len(pl.Phases))
+	}
+	if pl.Phases[0].Name != "implement" || pl.Phases[1].Name != "verify" {
+		t.Errorf("unexpected phase names: %v", pl.Phases)
+	}
+}
+
+func TestRunPipelineNew_PhasesRewritesDependsOn(t *testing.T) {
+	// Build a source file where "submit" depends on both "implement" and
+	// "verify". When "verify" is dropped via --phases, submit's depends_on
+	// should only contain "implement".
+	srcDir := t.TempDir()
+	srcFile := filepath.Join(srcDir, "phases-multi.yaml")
+	srcContent := `phases:
+  - name: implement
+    prompt: prompts/implement.md
+    tools:
+      - Bash
+    timeout: 5m
+    retry:
+      transient: 1
+      parse: 0
+      semantic: 0
+    depends_on: []
+  - name: verify
+    prompt: prompts/verify.md
+    tools:
+      - Bash
+    timeout: 5m
+    retry:
+      transient: 1
+      parse: 0
+      semantic: 0
+    depends_on:
+      - implement
+  - name: submit
+    prompt: prompts/submit.md
+    tools:
+      - Bash
+    timeout: 3m
+    retry:
+      transient: 1
+      parse: 0
+      semantic: 0
+    depends_on:
+      - implement
+      - verify
+`
+	if err := os.WriteFile(srcFile, []byte(srcContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	outDir := t.TempDir()
+	var buf bytes.Buffer
+	err := runPipelineNew(&buf, "noverify", pipelineNewOptions{
+		OutputDir: outDir,
+		From:      srcFile,
+		Phases:    []string{"implement", "submit"},
+	})
+	if err != nil {
+		t.Fatalf("runPipelineNew(phases=implement,submit) error: %v", err)
+	}
+
+	dest := filepath.Join(outDir, "phases-noverify.yaml")
+	pl, err := pipeline.LoadPipeline(dest)
+	if err != nil {
+		t.Fatalf("LoadPipeline() on filtered output: %v", err)
+	}
+	if len(pl.Phases) != 2 {
+		t.Fatalf("expected 2 phases, got %d: %v", len(pl.Phases), pl.Phases)
+	}
+
+	// submit should only depend on implement (verify was dropped).
+	var submitPhase *pipeline.PhaseConfig
+	for i := range pl.Phases {
+		if pl.Phases[i].Name == "submit" {
+			submitPhase = &pl.Phases[i]
+		}
+	}
+	if submitPhase == nil {
+		t.Fatal("submit phase not found in output")
+	}
+	if len(submitPhase.DependsOn) != 1 || submitPhase.DependsOn[0] != "implement" {
+		t.Errorf("submit.depends_on = %v, want [implement]", submitPhase.DependsOn)
+	}
+}
+
+func TestRunPipelineNew_PhasesNoMatchError(t *testing.T) {
+	var buf bytes.Buffer
+	err := runPipelineNew(&buf, "test", pipelineNewOptions{
+		Phases: []string{"nonexistent-phase"},
+	})
+	if err == nil {
+		t.Fatal("expected error when no phases match filter, got nil")
+	}
+}
+
+func TestRunPipelineNew_FromWithPhases(t *testing.T) {
+	outDir := t.TempDir()
+	var buf bytes.Buffer
+	// Use the embedded quick-fix pipeline and keep only implement.
+	err := runPipelineNew(&buf, "impl-only", pipelineNewOptions{
+		OutputDir: outDir,
+		From:      "quick-fix",
+		Phases:    []string{"implement"},
+	})
+	if err != nil {
+		t.Fatalf("runPipelineNew(from=quick-fix,phases=implement) error: %v", err)
+	}
+
+	dest := filepath.Join(outDir, "phases-impl-only.yaml")
+	pl, err := pipeline.LoadPipeline(dest)
+	if err != nil {
+		t.Fatalf("LoadPipeline() on filtered output: %v", err)
+	}
+	if len(pl.Phases) != 1 {
+		t.Fatalf("expected 1 phase, got %d", len(pl.Phases))
+	}
+	if pl.Phases[0].Name != "implement" {
+		t.Errorf("expected 'implement', got %q", pl.Phases[0].Name)
+	}
+	// No depends_on should reference removed phases.
+	if len(pl.Phases[0].DependsOn) != 0 {
+		t.Errorf("implement.depends_on should be empty, got %v", pl.Phases[0].DependsOn)
+	}
+}
+
+func TestRunPipelineNew_PhasesDryRun(t *testing.T) {
+	outDir := t.TempDir()
+	var buf bytes.Buffer
+	err := runPipelineNew(&buf, "dryfilter", pipelineNewOptions{
+		OutputDir: outDir,
+		Phases:    []string{"implement"},
+		DryRun:    true,
+	})
+	if err != nil {
+		t.Fatalf("runPipelineNew(phases=implement,dry-run) error: %v", err)
+	}
+	// No file should be written.
+	if _, err := os.Stat(filepath.Join(outDir, "phases-dryfilter.yaml")); err == nil {
+		t.Fatal("dry-run should not write a file")
+	}
+	out := buf.String()
+	if !strings.Contains(out, "implement") {
+		t.Errorf("dry-run output should contain 'implement', got: %s", out)
+	}
+	// verify and submit must not appear (they were filtered out).
+	if strings.Contains(out, "verify") || strings.Contains(out, "submit") {
+		t.Errorf("filtered phases must not appear in output, got: %s", out)
+	}
+}
+
 func TestRunPipelineNew_StatErrorNotErrNotExist(t *testing.T) {
 	dir := t.TempDir()
 	// Create a parent dir with no read/execute permission so Stat fails
