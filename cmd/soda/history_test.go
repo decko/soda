@@ -1,7 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/decko/soda/internal/pipeline"
@@ -140,5 +144,110 @@ func TestStatusSymbol(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("statusSymbol(%q, %v) = %q, want %q", tc.status, tc.superseded, got, tc.want)
 		}
+	}
+}
+
+// TestRenderEventsHistory_PromptHash verifies that when --detail is used,
+// the prompt hash stored in meta.Phases is displayed per phase.
+func TestRenderEventsHistory_PromptHash(t *testing.T) {
+	dir := t.TempDir()
+
+	// Write a triage result JSON so the phase has output to display.
+	triageResult := map[string]any{"complexity": "low", "automatable": true}
+	data, _ := json.Marshal(triageResult)
+	if err := os.WriteFile(filepath.Join(dir, "triage.json"), data, 0644); err != nil {
+		t.Fatalf("WriteFile triage.json: %v", err)
+	}
+
+	const wantHash = "abc123def456"
+
+	meta := &pipeline.PipelineMeta{
+		Ticket:    "TEST-1",
+		TotalCost: 0.12,
+		Phases: map[string]*pipeline.PhaseState{
+			"triage": {
+				Status:     pipeline.PhaseCompleted,
+				Cost:       0.12,
+				PromptHash: wantHash,
+			},
+		},
+	}
+
+	events := []pipeline.Event{
+		{Phase: "triage", Kind: pipeline.EventPhaseStarted, Data: map[string]any{"generation": float64(1)}},
+		{Phase: "triage", Kind: pipeline.EventPhaseCompleted, Data: map[string]any{"cost": 0.12, "duration_ms": float64(8000)}},
+	}
+
+	// Capture stdout.
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	err := renderEventsHistory(meta, events, dir, true /* detail */, "" /* phaseFilter */)
+
+	w.Close()
+	os.Stdout = old
+
+	var buf bytes.Buffer
+	_, _ = buf.ReadFrom(r)
+	output := buf.String()
+
+	if err != nil {
+		t.Fatalf("renderEventsHistory error: %v", err)
+	}
+
+	if !strings.Contains(output, wantHash) {
+		t.Errorf("detail output missing prompt hash %q\ngot:\n%s", wantHash, output)
+	}
+
+	if !strings.Contains(output, "Prompt Hash:") {
+		t.Errorf("detail output missing 'Prompt Hash:' label\ngot:\n%s", output)
+	}
+}
+
+// TestRenderEventsHistory_PromptHashNoDetail verifies that without --detail,
+// the prompt hash is NOT shown in the output.
+func TestRenderEventsHistory_PromptHashNoDetail(t *testing.T) {
+	dir := t.TempDir()
+
+	const wantHash = "abc123def456"
+
+	meta := &pipeline.PipelineMeta{
+		Ticket:    "TEST-2",
+		TotalCost: 0.12,
+		Phases: map[string]*pipeline.PhaseState{
+			"triage": {
+				Status:     pipeline.PhaseCompleted,
+				Cost:       0.12,
+				PromptHash: wantHash,
+			},
+		},
+	}
+
+	events := []pipeline.Event{
+		{Phase: "triage", Kind: pipeline.EventPhaseStarted, Data: map[string]any{"generation": float64(1)}},
+		{Phase: "triage", Kind: pipeline.EventPhaseCompleted, Data: map[string]any{"cost": 0.12, "duration_ms": float64(8000)}},
+	}
+
+	// Capture stdout.
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	err := renderEventsHistory(meta, events, dir, false /* detail */, "" /* phaseFilter */)
+
+	w.Close()
+	os.Stdout = old
+
+	var buf bytes.Buffer
+	_, _ = buf.ReadFrom(r)
+	output := buf.String()
+
+	if err != nil {
+		t.Fatalf("renderEventsHistory error: %v", err)
+	}
+
+	if strings.Contains(output, wantHash) {
+		t.Errorf("non-detail output should not contain prompt hash %q\ngot:\n%s", wantHash, output)
 	}
 }
