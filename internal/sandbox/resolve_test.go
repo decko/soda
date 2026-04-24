@@ -109,6 +109,51 @@ func TestClaudeEnvNoKeyMeansNoEntry(t *testing.T) {
 	}
 }
 
+func TestClaudeEnvGitHubTokenPassthrough(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test-key")
+	t.Setenv("GH_TOKEN", "ghp_test123")
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("SSH_AUTH_SOCK", "/tmp/ssh-agent/agent.1234")
+
+	opts := runner.RunOpts{Phase: "submit", WorkDir: "/work"}
+	env := claudeEnv("/tmp/sb", opts, "/usr/bin/claude", "")
+
+	envMap := make(map[string]string)
+	for _, entry := range env {
+		parts := strings.SplitN(entry, "=", 2)
+		if len(parts) == 2 {
+			envMap[parts[0]] = parts[1]
+		}
+	}
+
+	if envMap["GH_TOKEN"] != "ghp_test123" {
+		t.Errorf("GH_TOKEN = %q, want ghp_test123", envMap["GH_TOKEN"])
+	}
+	if envMap["SSH_AUTH_SOCK"] != "/tmp/ssh-agent/agent.1234" {
+		t.Errorf("SSH_AUTH_SOCK = %q, want /tmp/ssh-agent/agent.1234", envMap["SSH_AUTH_SOCK"])
+	}
+}
+
+func TestClaudeEnvGitHubTokenNotDuplicated(t *testing.T) {
+	// When GH_TOKEN is set, the keyring fallback should not run.
+	t.Setenv("ANTHROPIC_API_KEY", "test-key")
+	t.Setenv("GH_TOKEN", "ghp_explicit")
+	t.Setenv("GITHUB_TOKEN", "")
+
+	opts := runner.RunOpts{Phase: "submit", WorkDir: "/work"}
+	env := claudeEnv("/tmp/sb", opts, "/usr/bin/claude", "")
+
+	count := 0
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "GH_TOKEN=") {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("GH_TOKEN appears %d times, want exactly 1", count)
+	}
+}
+
 func TestClaudeEnvProxyMode(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-real-key")
 	t.Setenv("CLAUDE_CODE_USE_VERTEX", "") // ensure non-Vertex for this test
