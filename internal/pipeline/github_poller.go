@@ -1,10 +1,12 @@
 package pipeline
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"sort"
 	"strings"
@@ -71,6 +73,24 @@ type ghComment struct {
 	Line int    `json:"line"`
 }
 
+// decodeGHComments decodes a newline-delimited JSON stream of ghComment
+// objects (as produced by gh --paginate --jq ".[]") into a slice.
+func decodeGHComments(data []byte) ([]ghComment, error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	var comments []ghComment
+	for {
+		var c ghComment
+		if err := dec.Decode(&c); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, err
+		}
+		comments = append(comments, c)
+	}
+	return comments, nil
+}
+
 // GetPRStatus returns the current status of a pull request.
 func (p *GitHubPRPoller) GetPRStatus(ctx context.Context, prURL string) (*PRStatus, error) {
 	owner, repo, number, err := parsePRRef(prURL)
@@ -112,20 +132,20 @@ func (p *GitHubPRPoller) GetNewComments(ctx context.Context, prURL string, after
 	}
 
 	// Get review comments (inline code review comments).
-	// --paginate may produce concatenated JSON arrays, so we use --jq 'flatten'
-	// to merge pages into a single flat array.
+	// --paginate with --jq ".[]" unwraps each page's array into individual
+	// JSON objects, producing a clean newline-delimited stream across pages.
 	// Sort by created ascending so newest comments are last (consistent with afterID filtering).
 	endpoint := fmt.Sprintf("repos/%s/%s/pulls/%s/comments?sort=created&direction=asc", owner, repo, number)
 	out, err := exec.CommandContext(ctx, p.command,
 		"api", endpoint,
-		"--paginate", "--jq", "flatten",
+		"--paginate", "--jq", ".[]",
 	).Output()
 	if err != nil {
 		return nil, fmt.Errorf("monitor: get comments: %w: %s", err, ghStderr(err))
 	}
 
-	var comments []ghComment
-	if err := json.Unmarshal(out, &comments); err != nil {
+	comments, err := decodeGHComments(out)
+	if err != nil {
 		return nil, fmt.Errorf("monitor: parse comments: %w", err)
 	}
 
@@ -134,14 +154,14 @@ func (p *GitHubPRPoller) GetNewComments(ctx context.Context, prURL string, after
 	issueEndpoint := fmt.Sprintf("repos/%s/%s/issues/%s/comments?sort=created&direction=asc", owner, repo, number)
 	issueOut, err := exec.CommandContext(ctx, p.command,
 		"api", issueEndpoint,
-		"--paginate", "--jq", "flatten",
+		"--paginate", "--jq", ".[]",
 	).Output()
 	if err != nil {
 		return nil, fmt.Errorf("monitor: get issue comments: %w: %s", err, ghStderr(err))
 	}
 
-	var issueComments []ghComment
-	if err := json.Unmarshal(issueOut, &issueComments); err != nil {
+	issueComments, err := decodeGHComments(issueOut)
+	if err != nil {
 		return nil, fmt.Errorf("monitor: parse issue comments: %w", err)
 	}
 
