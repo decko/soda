@@ -2328,3 +2328,273 @@ func TestEngine_PhaseBudgetRunnerCapSubtractsCumulativeCost(t *testing.T) {
 		t.Errorf("implement called %d times, want 2", implCalls)
 	}
 }
+
+func TestEngine_ImplementNoChanges_ReworkShortCircuit(t *testing.T) {
+	// When implement re-runs during a rework cycle and produces zero commits
+	// and zero files_changed, the gate should return a PhaseGateError.
+	phases := []PhaseConfig{
+		{
+			Name:         "implement",
+			Prompt:       "implement.md",
+			Retry:        RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			FeedbackFrom: []string{"review", "verify"},
+		},
+	}
+
+	// First run: implement produces a normal result with commits.
+	mock1 := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {{
+				result: &runner.RunResult{
+					Output: json.RawMessage(`{
+						"tests_passed": true,
+						"ticket_key": "TEST-1",
+						"branch": "soda/TEST-1",
+						"commits": [{"hash": "abc123", "message": "feat: initial impl", "task_id": "T1"}],
+						"files_changed": [{"path": "handler.go", "action": "modified"}],
+						"task_results": [{"task_id": "T1", "status": "completed"}]
+					}`),
+					RawText: "Implementation v1",
+					CostUSD: 0.50,
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, state := setupEngine(t, phases, mock1, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(e Event) {
+			events = append(events, e)
+		}
+	})
+
+	// First run succeeds.
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+
+	// Second run: simulate rework — implement produces no changes (short-circuit).
+	mock2 := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {{
+				result: &runner.RunResult{
+					Output: json.RawMessage(`{
+						"tests_passed": true,
+						"ticket_key": "TEST-1",
+						"branch": "soda/TEST-1",
+						"commits": [],
+						"files_changed": [],
+						"task_results": [{"task_id": "T1", "status": "skipped", "reason": "already implemented"}]
+					}`),
+					RawText: "No changes needed",
+					CostUSD: 0.10,
+				},
+			}},
+		},
+	}
+
+	events = nil
+	engine2 := NewEngine(mock2, state, engine.config)
+
+	err := engine2.Resume(context.Background(), "implement")
+	if err == nil {
+		t.Fatal("expected PhaseGateError for rework short-circuit")
+	}
+
+	var gateErr *PhaseGateError
+	if !errors.As(err, &gateErr) {
+		t.Fatalf("expected PhaseGateError, got: %v", err)
+	}
+	if gateErr.Phase != "implement" {
+		t.Errorf("gate error phase = %q, want %q", gateErr.Phase, "implement")
+	}
+	if !strings.Contains(gateErr.Reason, "short-circuited") {
+		t.Errorf("gate error reason should mention short-circuit, got: %q", gateErr.Reason)
+	}
+
+	// Verify the implement_no_changes event was emitted.
+	hasNoChangesEvent := false
+	for _, e := range events {
+		if e.Kind == EventImplementNoChanges {
+			hasNoChangesEvent = true
+			if e.Phase != "implement" {
+				t.Errorf("no_changes event phase = %q, want %q", e.Phase, "implement")
+			}
+			if gen, ok := e.Data["generation"].(int); ok && gen <= 1 {
+				t.Errorf("no_changes event generation = %d, want > 1", gen)
+			}
+			if skipped, ok := e.Data["skipped_tasks"].(int); ok && skipped != 1 {
+				t.Errorf("no_changes event skipped_tasks = %d, want 1", skipped)
+			}
+		}
+	}
+	if !hasNoChangesEvent {
+		t.Error("implement_no_changes event not emitted")
+	}
+}
+
+func TestEngine_ImplementNoChanges_FirstRunAllowed(t *testing.T) {
+	// First-run implement with no changes should NOT trigger the short-circuit
+	// gate — the guard only activates when generation > 1 (rework cycles).
+	phases := []PhaseConfig{
+		{
+			Name:   "implement",
+			Prompt: "implement.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {{
+				result: &runner.RunResult{
+					Output: json.RawMessage(`{
+						"tests_passed": true,
+						"ticket_key": "TEST-1",
+						"branch": "soda/TEST-1",
+						"commits": [],
+						"files_changed": [],
+						"task_results": []
+					}`),
+					RawText: "Nothing to change",
+					CostUSD: 0.10,
+				},
+			}},
+		},
+	}
+
+	engine, _ := setupEngine(t, phases, mock)
+
+	err := engine.Run(context.Background())
+	if err != nil {
+		t.Fatalf("first-run implement with no changes should succeed, got: %v", err)
+	}
+}
+
+func TestEngine_ImplementWithChanges_ReworkAllowed(t *testing.T) {
+	// When implement re-runs during a rework cycle and produces actual changes,
+	// the gate should NOT block — this is the normal rework flow.
+	phases := []PhaseConfig{
+		{
+			Name:   "implement",
+			Prompt: "implement.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	// First run: normal result.
+	mock1 := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {{
+				result: &runner.RunResult{
+					Output: json.RawMessage(`{
+						"tests_passed": true,
+						"ticket_key": "TEST-1",
+						"branch": "soda/TEST-1",
+						"commits": [{"hash": "abc123", "message": "feat: initial", "task_id": "T1"}],
+						"files_changed": [{"path": "a.go", "action": "modified"}],
+						"task_results": [{"task_id": "T1", "status": "completed"}]
+					}`),
+					RawText: "Impl v1",
+					CostUSD: 0.50,
+				},
+			}},
+		},
+	}
+
+	engine, state := setupEngine(t, phases, mock1)
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+
+	// Second run: rework with actual changes.
+	mock2 := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {{
+				result: &runner.RunResult{
+					Output: json.RawMessage(`{
+						"tests_passed": true,
+						"ticket_key": "TEST-1",
+						"branch": "soda/TEST-1",
+						"commits": [{"hash": "def456", "message": "fix: address feedback", "task_id": "T1"}],
+						"files_changed": [{"path": "a.go", "action": "modified"}],
+						"task_results": [{"task_id": "T1", "status": "completed"}]
+					}`),
+					RawText: "Impl v2 with fixes",
+					CostUSD: 0.60,
+				},
+			}},
+		},
+	}
+
+	engine2 := NewEngine(mock2, state, engine.config)
+
+	if err := engine2.Resume(context.Background(), "implement"); err != nil {
+		t.Fatalf("rework with changes should succeed, got: %v", err)
+	}
+}
+
+func TestEngine_ImplementNoChanges_CommitsOnlyAllowed(t *testing.T) {
+	// When implement re-runs during rework and has commits but no files_changed
+	// (edge case — shouldn't normally happen but let's be safe), the gate
+	// should NOT block because commits indicate actual work.
+	phases := []PhaseConfig{
+		{
+			Name:   "implement",
+			Prompt: "implement.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock1 := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {{
+				result: &runner.RunResult{
+					Output: json.RawMessage(`{
+						"tests_passed": true,
+						"ticket_key": "TEST-1",
+						"branch": "soda/TEST-1",
+						"commits": [{"hash": "abc", "message": "first", "task_id": "T1"}],
+						"files_changed": [{"path": "a.go", "action": "modified"}],
+						"task_results": []
+					}`),
+					RawText: "Impl v1",
+					CostUSD: 0.50,
+				},
+			}},
+		},
+	}
+
+	engine, state := setupEngine(t, phases, mock1)
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+
+	// Second run: has commits but no files_changed.
+	mock2 := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {{
+				result: &runner.RunResult{
+					Output: json.RawMessage(`{
+						"tests_passed": true,
+						"ticket_key": "TEST-1",
+						"branch": "soda/TEST-1",
+						"commits": [{"hash": "def", "message": "fix: address rework", "task_id": "T1"}],
+						"files_changed": [],
+						"task_results": []
+					}`),
+					RawText: "Impl v2",
+					CostUSD: 0.30,
+				},
+			}},
+		},
+	}
+
+	engine2 := NewEngine(mock2, state, engine.config)
+
+	if err := engine2.Resume(context.Background(), "implement"); err != nil {
+		t.Fatalf("rework with commits-only should succeed, got: %v", err)
+	}
+}
