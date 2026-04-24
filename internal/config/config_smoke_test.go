@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -624,43 +625,53 @@ state_dir: .soda
 
 // TestSmoke_RepoConfig_FieldParity verifies that config.RepoConfig and
 // pipeline.RepoConfig remain in sync. If a field is added to one but not
-// the other, this test catches it.
+// the other, this test catches it via reflect-based field comparison.
 func TestSmoke_RepoConfig_FieldParity(t *testing.T) {
-	// Build a config.RepoConfig with all fields populated.
-	configRepo := RepoConfig{
-		Name:        "test-repo",
-		Forge:       "github",
-		PushTo:      "user/repo",
-		Target:      "org/repo",
-		Description: "Test repository",
-		Formatter:   "gofmt -w .",
-		TestCommand: "go test ./...",
-		Labels:      []string{"ai-assisted"},
-		Trailers:    []string{"Assisted-by: SODA"},
+	configType := reflect.TypeOf(RepoConfig{})
+	pipelineType := reflect.TypeOf(pipeline.RepoConfig{})
+
+	// Check field count.
+	if configType.NumField() != pipelineType.NumField() {
+		t.Errorf("field count mismatch: config.RepoConfig has %d fields, pipeline.RepoConfig has %d fields",
+			configType.NumField(), pipelineType.NumField())
 	}
 
-	// Build a pipeline.RepoConfig with the same values.
-	pipelineRepo := pipeline.RepoConfig{
-		Name:        configRepo.Name,
-		Forge:       configRepo.Forge,
-		PushTo:      configRepo.PushTo,
-		Target:      configRepo.Target,
-		Description: configRepo.Description,
-		Formatter:   configRepo.Formatter,
-		TestCommand: configRepo.TestCommand,
-		Labels:      configRepo.Labels,
-		Trailers:    configRepo.Trailers,
+	// Build maps of field name → field type for each struct.
+	configFields := make(map[string]reflect.StructField)
+	for i := 0; i < configType.NumField(); i++ {
+		f := configType.Field(i)
+		configFields[f.Name] = f
 	}
 
-	// Verify they match.
-	if pipelineRepo.Name != configRepo.Name {
-		t.Errorf("Name mismatch: %q != %q", pipelineRepo.Name, configRepo.Name)
+	pipelineFields := make(map[string]reflect.StructField)
+	for i := 0; i < pipelineType.NumField(); i++ {
+		f := pipelineType.Field(i)
+		pipelineFields[f.Name] = f
 	}
-	if pipelineRepo.Forge != configRepo.Forge {
-		t.Errorf("Forge mismatch: %q != %q", pipelineRepo.Forge, configRepo.Forge)
+
+	// Check for fields in config but not in pipeline.
+	for name, cf := range configFields {
+		pf, ok := pipelineFields[name]
+		if !ok {
+			t.Errorf("config.RepoConfig has field %q (%v) missing from pipeline.RepoConfig", name, cf.Type)
+			continue
+		}
+		if cf.Type != pf.Type {
+			t.Errorf("field %q type mismatch: config has %v, pipeline has %v", name, cf.Type, pf.Type)
+		}
+		// Verify YAML tags match so serialization stays consistent.
+		configTag := cf.Tag.Get("yaml")
+		pipelineTag := pf.Tag.Get("yaml")
+		if configTag != pipelineTag {
+			t.Errorf("field %q yaml tag mismatch: config has %q, pipeline has %q", name, configTag, pipelineTag)
+		}
 	}
-	if pipelineRepo.TestCommand != configRepo.TestCommand {
-		t.Errorf("TestCommand mismatch: %q != %q", pipelineRepo.TestCommand, configRepo.TestCommand)
+
+	// Check for fields in pipeline but not in config.
+	for name, pf := range pipelineFields {
+		if _, ok := configFields[name]; !ok {
+			t.Errorf("pipeline.RepoConfig has field %q (%v) missing from config.RepoConfig", name, pf.Type)
+		}
 	}
 }
 
