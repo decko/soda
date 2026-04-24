@@ -185,12 +185,12 @@ func TestResolvePhasesPath_EmbeddedDocsOnly(t *testing.T) {
 		t.Fatalf("LoadPipeline failed: %v", err)
 	}
 
-	if len(pl.Phases) != 2 {
-		t.Fatalf("docs-only: expected 2 phases, got %d", len(pl.Phases))
+	if len(pl.Phases) != 3 {
+		t.Fatalf("docs-only: expected 3 phases, got %d", len(pl.Phases))
 	}
 
 	// Verify phase names and order.
-	wantNames := []string{"implement", "submit"}
+	wantNames := []string{"plan", "implement", "submit"}
 	for i, want := range wantNames {
 		if pl.Phases[i].Name != want {
 			t.Errorf("phase[%d] = %q, want %q", i, pl.Phases[i].Name, want)
