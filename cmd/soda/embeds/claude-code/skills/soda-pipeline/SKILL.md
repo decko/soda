@@ -85,9 +85,14 @@ Pipeline state lives in `.soda/<ticket>/`:
 
 After PR submission, the monitor polls for activity:
 
-- **Passive mode** (default): polls CI status, PR state (merged/closed/approved), detects new comments and notifies user. No self_user required.
-- **Active mode** (`respond_to_comments: true` + `self_user`): classifies comments, responds with Claude sessions (fix or reply), posts acknowledgments, auto-rebases.
+- **Passive mode** (default): polls CI status, PR state (merged/closed/approved), detects new comments and emits `monitor_notify_user` events — even without `self_user` or `respond_to_comments`. No special config required; this is always on.
+- **Active mode** (`respond_to_comments: true` + `self_user` in config): classifies comments by authority (CODEOWNERS), responds with Claude sessions (fix or reply), posts acknowledgments, auto-rebases.
 - **Profiles**: `conservative`, `smart`, `aggressive` control auto-rebase, nit handling, and response to non-authoritative comments.
+
+To check passive-mode comment detection:
+```bash
+grep '"monitor_new_comments"\|"monitor_notify_user"' .soda/<ticket>/events.jsonl
+```
 
 ## Named pipelines
 
@@ -97,11 +102,45 @@ Custom pipeline definitions in `./pipelines/` or `~/.config/soda/pipelines/`:
 - `soda pipelines` — list available pipelines
 - `soda pipelines new <name>` — scaffold a new pipeline definition
 
+## Plugin management
+
+The SODA plugin installs slash commands, skills, and agents into Claude Code's `.claude/` directory for auto-discovery.
+
+```bash
+soda plugin install [--global] [--force]    # Install to .claude/ (or ~/.claude/ with --global)
+soda plugin uninstall [--global]            # Remove SODA files
+soda plugin update [--global] [--dry-run]   # Selectively refresh changed files
+```
+
+`soda plugin update` performs a **diff-based refresh**: it compares each installed file against the version embedded in the current binary. Only changed files are overwritten; unchanged files are left untouched. New files are automatically added. Use `--dry-run` to preview what would change without writing.
+
+Run `soda plugin update` after upgrading the `soda` binary to pick up updated commands, skills, and agents without touching other `.claude/` files.
+
+## Sandbox environment requirements
+
+The arapuca sandbox isolates filesystem and network access but passes through specific environment variables from the host shell. These are required for submit, follow-up, and monitor phases:
+
+| Variable | Required for | Auto-extracted |
+|----------|--------------|----------------|
+| `GH_TOKEN` or `GITHUB_TOKEN` | `gh` CLI operations (submit, follow-up, monitor) | Yes — extracted from `gh auth token` if unset |
+| `SSH_AUTH_SOCK` | `git push` via SSH key | Yes — passed from parent shell |
+| `GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL` | Git commits | Yes — passed from parent shell |
+| `ANTHROPIC_API_KEY` | Claude Code API calls | Yes — passed from parent shell |
+
+**Automatic extraction:** If `GH_TOKEN` is not set in the environment, SODA calls `gh auth token` on the host side and injects the result before spawning the sandbox (fixed in #361). In most cases, no manual setup is needed.
+
+**If `gh` commands still fail inside the sandbox:**
+```bash
+export GH_TOKEN=$(gh auth token)
+```
+Add this to your shell profile (`~/.bashrc`, `~/.zshrc`) to make it permanent.
+
 ## Embedded content
 
 Embedded content lives in `cmd/soda/embeds/`:
 - `phases.yaml` — pipeline phase definitions (go:embed as `[]byte`)
 - `prompts/*.md` — phase prompt templates (go:embed as `embed.FS`)
+- `claude-code/` — commands, skills, agents (go:embed as `embed.FS`)
 
 Resolution order: user config dir > working dir > embedded defaults.
 
