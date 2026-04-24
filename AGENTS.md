@@ -167,7 +167,7 @@ soda/
 │   │       ├── phases.yaml        # Default pipeline config
 │   │       ├── pipelines/          # Named pipeline definitions (quick-fix, docs-only)
 │   │       ├── prompts/           # Phase prompt templates
-│   │       └── plugin/            # Claude Code plugin files
+│   │       └── claude-code/       # Claude Code commands, skills, agents
 │   ├── schemagen/main.go          # JSON schema generator
 │   └── tui-demo/main.go           # TUI demo harness
 ├── internal/
@@ -409,6 +409,12 @@ Atomic writes: always write to `.tmp` then rename. Archive on re-run (`verify.js
 18. **Always use `exec.CommandContext`**: bare `exec.Command` in git/worktree operations can hang indefinitely. Use `exec.CommandContext(ctx, ...)` for any operation that could block (network, worktree removal).
 19. **Token data persisted in meta.json**: `PhaseState` stores `TokensIn`, `TokensOut`, and `CacheTokensIn` alongside `Cost` and `DurationMs`. Token counts are accumulated per-generation (zeroed on re-run) and emitted in `phase_completed` events. Legacy sessions without token data will show zero values.
 20. **`EnrichedFinding` wraps `schemas.ReviewFinding`**: defined in `prompt.go`, it adds `CodeSnippet` without changing the schema contract. Enrichment happens in `extractReviewFeedback()` only — the review phase still outputs plain `ReviewFinding`.
+21. **Sandbox needs `GH_TOKEN` + `SSH_AUTH_SOCK` for submit/follow-up**: `gh` CLI authenticates via OS keyring, which is inaccessible inside the arapuca sandbox. `claudeEnv()` extracts the token from `gh auth token` on the host side and passes it as `GH_TOKEN`. The SSH agent socket directory is added to sandbox read paths for `git push`.
+22. **`go mod download` never smudges LFS**: Go's module tooling uses `git archive` (even with `GOPROXY=direct`), which does not invoke git-lfs smudge filters. `libarapuca.a` in go-arapuca is an LFS pointer after `go mod download`. CI and local builds must fetch the real binary via the LFS batch API or direct download. See `sergio-correia/go-arapuca#1`.
+23. **`gh api --slurp --jq` incompatibility**: newer `gh` CLI versions reject `--slurp` combined with `--jq`. Fixed in #391 — the GitHub poller now uses `--paginate --jq` without `--slurp`. If you see monitor warnings about this, rebuild the binary.
+24. **`tabwriter.StripEscape` does NOT make content zero-width**: wrapping ANSI codes in `\xff` delimiters only prevents tab/newline interpretation inside the escaped segment — the bytes are still counted for column width. For ANSI-colored table output, compute column widths from plain text, pad before adding escape codes, and use `fmt.Sprintf` instead of tabwriter.
+25. **Default implement timeout (15m) is too short for large tickets**: tickets with 7+ tasks routinely exceed 15 minutes. The root `phases.yaml` should use 25m for implement. The embedded default remains 15m for backward compatibility.
+26. **Review budget can exhaust with 2+ rework cycles**: `CumulativeCost` accumulates across rework generations. With the default `max_cost_per_phase: $8.00`, two review cycles ($3-5 each) plus rework implement sessions can exceed the limit. Consider raising to $15 for review-heavy workflows or using `max_cost_per_generation` instead.
 
 ## Raki evaluation framework
 
