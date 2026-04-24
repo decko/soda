@@ -376,62 +376,111 @@ func TestCheckNode_NotFound(t *testing.T) {
 	}
 }
 
-// --- checkGlobalConfig tests ---
+// --- checkConfig tests ---
 
-func TestCheckGlobalConfig_Exists(t *testing.T) {
+func TestCheckConfig_LocalExists(t *testing.T) {
 	env := allPassEnv()
-	r := checkGlobalConfig(env)
+	r := checkConfig(env)
 	if !r.passed {
-		t.Error("expected global-config check to pass")
+		t.Error("expected config check to pass")
+	}
+	if !strings.Contains(r.detail, "local") {
+		t.Errorf("expected detail to mention local, got: %q", r.detail)
 	}
 }
 
-func TestCheckGlobalConfig_Missing(t *testing.T) {
-	env := allPassEnv()
-	env.Stat = func(name string) (os.FileInfo, error) {
-		if strings.Contains(name, "config.yaml") {
-			return nil, os.ErrNotExist
-		}
-		return mockFileInfo{name: name}, nil
-	}
-	r := checkGlobalConfig(env)
-	if r.passed {
-		t.Error("expected global-config check to fail")
-	}
-}
-
-func TestCheckGlobalConfig_NoConfigDir(t *testing.T) {
-	env := allPassEnv()
-	env.UserConfigDir = func() (string, error) {
-		return "", errors.New("no config dir")
-	}
-	r := checkGlobalConfig(env)
-	if r.passed {
-		t.Error("expected global-config check to fail when config dir unknown")
-	}
-}
-
-// --- checkLocalConfig tests ---
-
-func TestCheckLocalConfig_Exists(t *testing.T) {
-	env := allPassEnv()
-	r := checkLocalConfig(env)
-	if !r.passed {
-		t.Error("expected local-config check to pass")
-	}
-}
-
-func TestCheckLocalConfig_Missing(t *testing.T) {
+func TestCheckConfig_OnlyGlobal(t *testing.T) {
 	env := allPassEnv()
 	env.Stat = func(name string) (os.FileInfo, error) {
 		if name == "soda.yaml" {
 			return nil, os.ErrNotExist
 		}
-		return mockFileInfo{name: name}, nil
+		return mockFileInfo{name: name, isDir: !strings.HasSuffix(name, ".yaml")}, nil
 	}
-	r := checkLocalConfig(env)
+	r := checkConfig(env)
+	if !r.passed {
+		t.Error("expected config check to pass with global config only")
+	}
+	if !strings.Contains(r.detail, "global") {
+		t.Errorf("expected detail to mention global, got: %q", r.detail)
+	}
+}
+
+func TestCheckConfig_NoneFound(t *testing.T) {
+	env := allPassEnv()
+	env.Stat = func(name string) (os.FileInfo, error) {
+		return nil, os.ErrNotExist
+	}
+	r := checkConfig(env)
 	if r.passed {
-		t.Error("expected local-config check to fail")
+		t.Error("expected config check to fail when no config exists")
+	}
+	if !r.required {
+		t.Error("expected config check to be required")
+	}
+}
+
+func TestCheckConfig_NoConfigDir(t *testing.T) {
+	env := allPassEnv()
+	env.Stat = func(name string) (os.FileInfo, error) {
+		if name == "soda.yaml" {
+			return nil, os.ErrNotExist
+		}
+		return nil, os.ErrNotExist
+	}
+	env.UserConfigDir = func() (string, error) {
+		return "", errors.New("no config dir")
+	}
+	r := checkConfig(env)
+	if r.passed {
+		t.Error("expected config check to fail when no local config and no config dir")
+	}
+}
+
+// --- checkGhAuth tests ---
+
+func TestCheckGhAuth_Authenticated(t *testing.T) {
+	env := allPassEnv()
+	r := checkGhAuth(env)
+	if !r.passed {
+		t.Error("expected gh-auth check to pass")
+	}
+}
+
+func TestCheckGhAuth_NotAuthenticated(t *testing.T) {
+	env := allPassEnv()
+	env.RunCmd = func(name string, args ...string) (string, error) {
+		if name == "gh" && len(args) > 0 && args[0] == "auth" {
+			return "", errors.New("not logged in")
+		}
+		if name == "claude" && len(args) > 0 && args[0] == "--version" {
+			return fmt.Sprintf("claude %s", claude.MinCLIVersion), nil
+		}
+		if name == "git" {
+			return ".git", nil
+		}
+		return "", nil
+	}
+	r := checkGhAuth(env)
+	if r.passed {
+		t.Error("expected gh-auth check to fail")
+	}
+	if !strings.Contains(r.fix, "gh auth login") {
+		t.Errorf("expected fix to suggest gh auth login, got: %q", r.fix)
+	}
+}
+
+func TestCheckGhAuth_SkippedWhenGhMissing(t *testing.T) {
+	env := allPassEnv()
+	env.LookPath = func(file string) (string, error) {
+		if file == "gh" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + file, nil
+	}
+	r := checkGhAuth(env)
+	if !r.skipped {
+		t.Error("expected gh-auth check to be skipped when gh is missing")
 	}
 }
 
@@ -487,59 +536,6 @@ func TestCheckConfigValid_NoConfigFound(t *testing.T) {
 	}
 }
 
-// --- checkStateDir tests ---
-
-func TestCheckStateDir_Exists(t *testing.T) {
-	env := allPassEnv()
-	env.Stat = func(name string) (os.FileInfo, error) {
-		return mockFileInfo{name: "soda", isDir: true}, nil
-	}
-	r := checkStateDir(env)
-	if !r.passed {
-		t.Error("expected state-dir check to pass")
-	}
-}
-
-func TestCheckStateDir_Missing(t *testing.T) {
-	env := allPassEnv()
-	env.Stat = func(name string) (os.FileInfo, error) {
-		if strings.HasSuffix(name, "soda") && !strings.HasSuffix(name, ".yaml") {
-			return nil, os.ErrNotExist
-		}
-		return mockFileInfo{name: name}, nil
-	}
-	r := checkStateDir(env)
-	if r.passed {
-		t.Error("expected state-dir check to fail")
-	}
-}
-
-func TestCheckStateDir_NotADirectory(t *testing.T) {
-	env := allPassEnv()
-	env.Stat = func(name string) (os.FileInfo, error) {
-		// Return a file (not a directory) for the soda path.
-		return mockFileInfo{name: "soda", isDir: false}, nil
-	}
-	r := checkStateDir(env)
-	if r.passed {
-		t.Error("expected state-dir check to fail when path is not a directory")
-	}
-	if !strings.Contains(r.detail, "not a directory") {
-		t.Errorf("expected 'not a directory' in detail, got: %q", r.detail)
-	}
-}
-
-func TestCheckStateDir_NoConfigDir(t *testing.T) {
-	env := allPassEnv()
-	env.UserConfigDir = func() (string, error) {
-		return "", errors.New("no config dir")
-	}
-	r := checkStateDir(env)
-	if r.passed {
-		t.Error("expected state-dir check to fail when config dir unknown")
-	}
-}
-
 // --- extractSemver tests ---
 
 func TestExtractSemver(t *testing.T) {
@@ -550,6 +546,7 @@ func TestExtractSemver(t *testing.T) {
 		{"claude 2.1.81", "2.1.81"},
 		{"claude 10.20.300", "10.20.300"},
 		{"2.1.81", "2.1.81"},
+		{"2.1.111 (Claude Code)", "2.1.111"},
 		{"no version here", ""},
 		{"v2.1.81", ""},        // prefixed with 'v' — not pure digits
 		{"claude abc.1.2", ""}, // non-numeric

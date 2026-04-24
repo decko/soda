@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/decko/soda/internal/claude"
@@ -74,11 +75,10 @@ func runDoctor(w io.Writer, env *doctorEnv) error {
 		checkClaude,
 		checkClaudeVersion,
 		checkGh,
+		checkGhAuth,
 		checkNode,
-		checkGlobalConfig,
-		checkLocalConfig,
+		checkConfig,
 		checkConfigValid,
-		checkStateDir,
 	}
 
 	var failed int
@@ -266,10 +266,10 @@ func compareSemver(a, b string) int {
 	for i := 0; i < 3; i++ {
 		ai, bi := 0, 0
 		if i < len(aParts) {
-			fmt.Sscanf(aParts[i], "%d", &ai)
+			ai, _ = strconv.Atoi(aParts[i])
 		}
 		if i < len(bParts) {
-			fmt.Sscanf(bParts[i], "%d", &bi)
+			bi, _ = strconv.Atoi(bParts[i])
 		}
 		if ai < bi {
 			return -1
@@ -301,7 +301,36 @@ func checkGh(env *doctorEnv) checkResult {
 	}
 }
 
+// checkGhAuth verifies that the GitHub CLI is authenticated.
+// Skipped when gh is not installed.
+func checkGhAuth(env *doctorEnv) checkResult {
+	if _, err := env.LookPath("gh"); err != nil {
+		return checkResult{
+			name:    "gh-auth",
+			skipped: true,
+			detail:  "skipped (gh not found)",
+		}
+	}
+	_, err := env.RunCmd("gh", "auth", "status")
+	if err != nil {
+		return checkResult{
+			name:     "gh-auth",
+			passed:   false,
+			required: false,
+			detail:   "gh is not authenticated",
+			fix:      "run: gh auth login",
+		}
+	}
+	return checkResult{
+		name:     "gh-auth",
+		passed:   true,
+		required: false,
+		detail:   "authenticated",
+	}
+}
+
 // checkNode verifies that Node.js is available in PATH (optional).
+// Node.js is only needed for sandboxed execution, not for normal operation.
 func checkNode(env *doctorEnv) checkResult {
 	path, err := env.LookPath("node")
 	if err != nil {
@@ -309,7 +338,7 @@ func checkNode(env *doctorEnv) checkResult {
 			name:     "node",
 			passed:   false,
 			required: false,
-			detail:   "not found in PATH (optional, used by claude sandbox)",
+			detail:   "not found in PATH (optional, needed only for sandboxed execution)",
 			fix:      "install Node.js: https://nodejs.org",
 		}
 	}
@@ -321,60 +350,46 @@ func checkNode(env *doctorEnv) checkResult {
 	}
 }
 
-// checkGlobalConfig verifies that the global config file exists at
-// ~/.config/soda/config.yaml.
-func checkGlobalConfig(env *doctorEnv) checkResult {
-	configDir, err := env.UserConfigDir()
-	if err != nil {
+// checkConfig verifies that at least one config file exists.
+// SODA's loadConfig uses a fallback chain: soda.yaml in CWD → ~/.config/soda/config.yaml.
+// Either one is sufficient.
+func checkConfig(env *doctorEnv) checkResult {
+	// Check local config first.
+	if _, err := env.Stat("soda.yaml"); err == nil {
 		return checkResult{
-			name:     "global-config",
-			passed:   false,
+			name:     "config",
+			passed:   true,
 			required: true,
-			detail:   "cannot determine config directory",
-			fix:      "set $XDG_CONFIG_HOME or $HOME",
+			detail:   "soda.yaml (local)",
 		}
 	}
-	path := filepath.Join(configDir, "soda", "config.yaml")
-	if _, err := env.Stat(path); err != nil {
-		return checkResult{
-			name:     "global-config",
-			passed:   false,
-			required: true,
-			detail:   fmt.Sprintf("%s not found", path),
-			fix:      "run: soda init",
-		}
-	}
-	return checkResult{
-		name:     "global-config",
-		passed:   true,
-		required: true,
-		detail:   path,
-	}
-}
 
-// checkLocalConfig verifies that a project-local soda.yaml exists in the
-// current working directory.
-func checkLocalConfig(env *doctorEnv) checkResult {
-	if _, err := env.Stat("soda.yaml"); err != nil {
-		return checkResult{
-			name:     "local-config",
-			passed:   false,
-			required: true,
-			detail:   "soda.yaml not found in current directory",
-			fix:      "run: soda init",
+	// Check global config.
+	configDir, err := env.UserConfigDir()
+	if err == nil {
+		path := filepath.Join(configDir, "soda", "config.yaml")
+		if _, statErr := env.Stat(path); statErr == nil {
+			return checkResult{
+				name:     "config",
+				passed:   true,
+				required: true,
+				detail:   path + " (global)",
+			}
 		}
 	}
+
 	return checkResult{
-		name:     "local-config",
-		passed:   true,
+		name:     "config",
+		passed:   false,
 		required: true,
-		detail:   "soda.yaml",
+		detail:   "no config file found (checked soda.yaml and ~/.config/soda/config.yaml)",
+		fix:      "run: soda init",
 	}
 }
 
 // checkConfigValid attempts to parse the best available config file
 // (local soda.yaml first, then global config.yaml) and reports whether
-// it is valid.
+// it is valid. Skipped if no config file was found by checkConfig.
 func checkConfigValid(env *doctorEnv) checkResult {
 	// Try local config first.
 	if _, statErr := env.Stat("soda.yaml"); statErr == nil {
@@ -399,21 +414,17 @@ func checkConfigValid(env *doctorEnv) checkResult {
 	configDir, err := env.UserConfigDir()
 	if err != nil {
 		return checkResult{
-			name:     "config-valid",
-			passed:   false,
-			required: true,
-			detail:   "no config file found to validate",
-			fix:      "run: soda init",
+			name:    "config-valid",
+			skipped: true,
+			detail:  "skipped (no config file found)",
 		}
 	}
 	path := filepath.Join(configDir, "soda", "config.yaml")
 	if _, statErr := env.Stat(path); statErr != nil {
 		return checkResult{
-			name:     "config-valid",
-			passed:   false,
-			required: true,
-			detail:   "no config file found to validate",
-			fix:      "run: soda init",
+			name:    "config-valid",
+			skipped: true,
+			detail:  "skipped (no config file found)",
 		}
 	}
 	if _, err := env.LoadConfig(path); err != nil {
@@ -430,46 +441,5 @@ func checkConfigValid(env *doctorEnv) checkResult {
 		passed:   true,
 		required: true,
 		detail:   fmt.Sprintf("%s parses successfully", path),
-	}
-}
-
-// checkStateDir verifies that the state directory (~/.config/soda/) exists
-// and is accessible.
-func checkStateDir(env *doctorEnv) checkResult {
-	configDir, err := env.UserConfigDir()
-	if err != nil {
-		return checkResult{
-			name:     "state-dir",
-			passed:   false,
-			required: true,
-			detail:   "cannot determine config directory",
-			fix:      "set $XDG_CONFIG_HOME or $HOME",
-		}
-	}
-	dir := filepath.Join(configDir, "soda")
-	info, err := env.Stat(dir)
-	if err != nil {
-		return checkResult{
-			name:     "state-dir",
-			passed:   false,
-			required: true,
-			detail:   fmt.Sprintf("%s not found", dir),
-			fix:      "run: soda init",
-		}
-	}
-	if !info.IsDir() {
-		return checkResult{
-			name:     "state-dir",
-			passed:   false,
-			required: true,
-			detail:   fmt.Sprintf("%s exists but is not a directory", dir),
-			fix:      fmt.Sprintf("remove %s and run: soda init", dir),
-		}
-	}
-	return checkResult{
-		name:     "state-dir",
-		passed:   true,
-		required: true,
-		detail:   dir,
 	}
 }
