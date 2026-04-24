@@ -125,6 +125,61 @@ func TestEngine_ParallelReview_HappyPath(t *testing.T) {
 	}
 }
 
+func TestEngine_ParallelReview_PromptHash(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:  "review",
+			Type:  "parallel-review",
+			Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Reviewers: []ReviewerConfig{
+				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+				{Name: "ai-harness", Prompt: "prompts/review-harness.md", Focus: "AI harness"},
+			},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"review/go-specialist": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[],"verdict":"pass"}`),
+					RawText: "No issues found",
+					CostUSD: 0.10,
+				},
+			}},
+			"review/ai-harness": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[],"verdict":"pass"}`),
+					RawText: "No issues found",
+					CostUSD: 0.10,
+				},
+			}},
+		},
+	}
+
+	engine, state := setupReviewEngine(t, phases, mock)
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	ps := state.Meta().Phases["review"]
+	if ps == nil {
+		t.Fatal("review phase state missing")
+	}
+
+	// PromptHash must be set after a parallel-review completes.
+	if ps.PromptHash == "" {
+		t.Error("PromptHash should be set after parallel-review completion")
+	}
+
+	// It should be a valid 64-char SHA-256 hex string.
+	if len(ps.PromptHash) != 64 {
+		t.Errorf("PromptHash length = %d, want 64 (SHA-256 hex)", len(ps.PromptHash))
+	}
+
+}
+
 func TestEngine_ParallelReview_PerReviewerModel(t *testing.T) {
 	phases := []PhaseConfig{
 		{
