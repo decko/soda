@@ -51,9 +51,10 @@ from the releases page, you can skip Go.
 go version
 ```
 
-### 5. A Go project with a GitHub-hosted repo
+### 5. A project with a GitHub-hosted repo
 
-SODA works on any Go project with:
+This guide uses a Go project as the example, but SODA works with any language
+that `soda init` can detect (Go, Python, TypeScript, Rust, Java). You need:
 
 - A GitHub repository (public or private)
 - Issues enabled
@@ -116,7 +117,7 @@ your project. It auto-detects:
 **Sample output:**
 
 ```
-Detected: Go project (github.com/myorg/my-service)
+Detected: Go project (github.com/myorg/my-service)  # example; your language may differ
 Forge:     github
 Writing:   soda.yaml
 Writing:   .gitignore entries for .soda/ and .worktrees/
