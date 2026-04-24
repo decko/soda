@@ -85,11 +85,11 @@ func runDoctor(w io.Writer, env *doctorEnv) error {
 		checkGitRepo,
 		checkClaude,
 		checkClaudeVersion,
+		checkConfig,
+		checkConfigValid,
 		checkGh,
 		checkGhAuth,
 		checkNode,
-		checkConfig,
-		checkConfigValid,
 	}
 
 	var failed int
