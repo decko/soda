@@ -174,7 +174,11 @@ func TestRunPreflight_ClaudeVersionTooOld(t *testing.T) {
 	}
 }
 
-func TestRunPreflight_NoConfig(t *testing.T) {
+func TestRunPreflight_NoConfigDoesNotFail(t *testing.T) {
+	// Config checks are intentionally excluded from preflight because
+	// loadConfig already validates the config (respecting --config)
+	// before runPipeline is called. Missing config at default paths
+	// should not cause preflight to fail.
 	env := allPassEnv()
 	env.Stat = func(name string) (os.FileInfo, error) {
 		return nil, os.ErrNotExist
@@ -183,45 +187,21 @@ func TestRunPreflight_NoConfig(t *testing.T) {
 		return "/home/testuser/.config", nil
 	}
 	err := runPreflight(env, false)
-	if err == nil {
-		t.Fatal("expected error when config is missing")
-	}
-	var pe *PreflightError
-	if !errors.As(err, &pe) {
-		t.Fatalf("expected PreflightError, got: %T", err)
-	}
-	found := false
-	for _, f := range pe.Failures {
-		if f.name == "config" {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("expected config failure in PreflightError")
+	if err != nil {
+		t.Fatalf("expected no error (config checks excluded from preflight), got: %v", err)
 	}
 }
 
-func TestRunPreflight_InvalidConfig(t *testing.T) {
+func TestRunPreflight_InvalidConfigDoesNotFail(t *testing.T) {
+	// Config validation is handled by loadConfig before runPipeline,
+	// so preflight should not re-check config validity.
 	env := allPassEnv()
 	env.LoadConfig = func(path string) (*config.Config, error) {
 		return nil, errors.New("invalid YAML syntax")
 	}
 	err := runPreflight(env, false)
-	if err == nil {
-		t.Fatal("expected error when config is invalid")
-	}
-	var pe *PreflightError
-	if !errors.As(err, &pe) {
-		t.Fatalf("expected PreflightError, got: %T", err)
-	}
-	found := false
-	for _, f := range pe.Failures {
-		if f.name == "config-valid" {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("expected config-valid failure in PreflightError")
+	if err != nil {
+		t.Fatalf("expected no error (config checks excluded from preflight), got: %v", err)
 	}
 }
 
@@ -241,8 +221,9 @@ func TestRunPreflight_MultipleFailures(t *testing.T) {
 	if !errors.As(err, &pe) {
 		t.Fatalf("expected PreflightError, got: %T", err)
 	}
-	if len(pe.Failures) < 3 {
-		t.Errorf("expected at least 3 failures (git, claude, config), got %d", len(pe.Failures))
+	// Config checks are excluded from preflight; expect git + claude failures.
+	if len(pe.Failures) < 2 {
+		t.Errorf("expected at least 2 failures (git, claude), got %d", len(pe.Failures))
 	}
 }
 

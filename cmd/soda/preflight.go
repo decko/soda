@@ -42,7 +42,11 @@ func runPreflight(env *doctorEnv, useMock bool) error {
 		checks = append(checks, checkClaude, checkClaudeVersion)
 	}
 
-	checks = append(checks, checkConfig, checkConfigValid)
+	// Config checks (checkConfig, checkConfigValid) are intentionally
+	// omitted here. loadConfig already validated the configuration
+	// (respecting --config) before runPipeline was called, so
+	// re-checking from default paths would incorrectly reject valid
+	// --config overrides.
 
 	var failures []checkResult
 	for _, check := range checks {
