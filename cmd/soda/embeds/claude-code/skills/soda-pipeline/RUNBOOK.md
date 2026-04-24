@@ -61,6 +61,25 @@ All pipeline state lives under `.soda/<ticket>/`:
 
 > **Note:** `flock` is per-machine. The lock file does not protect against concurrent runs on different hosts.
 
+### Process crash — no failure event in events.jsonl
+
+**Symptom:** `soda run <ticket>` reports the pipeline as still running, but no process is alive. `events.jsonl` shows a `phase_started` with no matching `phase_completed` or `phase_failed`.
+
+**Cause:** SODA crashed or was killed between phase completion and event emission (e.g., OOM kill, SIGKILL, machine restart).
+
+**Diagnosis:**
+1. Check the lock file: `cat .soda/<ticket>/lock` — note the PID and timestamp
+2. Verify the PID is dead: `kill -0 <pid>` (non-zero exit = process not running)
+3. Find the incomplete phase:
+   ```bash
+   grep '"phase_started"\|"phase_completed"' .soda/<ticket>/events.jsonl
+   ```
+   The last `phase_started` without a matching `phase_completed` is the crashed phase.
+
+**Fix:**
+1. Remove the stale lock: `rm .soda/<ticket>/lock`
+2. Resume from the crashed phase: `soda run <ticket> --from <phase>`
+
 ### Phase failed — transient error (429, 500, timeout)
 
 **Symptom:** Phase fails with `claude: transient (rate_limit)`, `claude: transient (timeout)`, or `claude: transient (overloaded)`.
@@ -94,6 +113,25 @@ All pipeline state lives under `.soda/<ticket>/`:
 3. Fix the root cause (API key, account credits, model access)
 4. Resume: `soda run <ticket> --from <phase>`
 
+### Sandbox submit — gh auth hangs
+
+**Symptom:** Submit or follow-up phase hangs indefinitely inside the sandbox. No output after the `gh` call. The phase eventually times out.
+
+**Cause:** The `gh` CLI attempts OS keyring or browser authentication, which is inaccessible inside the arapuca sandbox. Fixed in #361: `claudeEnv()` now extracts `GH_TOKEN` from `gh auth token` on the host side and injects it before spawning the sandbox. Users with older binaries still need the workaround.
+
+**Fix (older binaries or if the automatic extraction fails):**
+1. Export the token manually before running soda:
+   ```bash
+   export GH_TOKEN=$(gh auth token)
+   soda run <ticket> --from submit
+   ```
+2. Or add it to your shell profile so it persists across sessions:
+   ```bash
+   echo 'export GH_TOKEN=$(gh auth token 2>/dev/null)' >> ~/.bashrc
+   ```
+
+> **Note:** Upgrade to the latest `soda` binary to get the automatic `GH_TOKEN` extraction.
+
 ### Budget exceeded
 
 **Symptom:** Pipeline stops with `pipeline: budget exceeded in phase <name>`.
@@ -112,6 +150,31 @@ All pipeline state lives under `.soda/<ticket>/`:
 
 > **Note:** `max_cost_per_phase` is cumulative across rework/patch generations, not just the current run.
 
+### Review phase — budget exceeded after rework cycles
+
+**Symptom:** Review phase fails with `pipeline: budget exceeded in phase review` after one or more rework cycles.
+
+**Cause:** `max_cost_per_phase` is cumulative across rework generations. Two review cycles ($3–5 each) plus the rework implement sessions they trigger can exhaust a conservative limit. See gotcha #11 in AGENTS.md.
+
+**Fix — choose one approach:**
+
+Option A — raise the cumulative cap for review-heavy workflows:
+```yaml
+limits:
+  max_cost_per_phase: 15.00
+```
+
+Option B — switch to a per-attempt cap so each generation is capped independently (allows more rework cycles):
+```yaml
+limits:
+  max_cost_per_phase: 0        # disable cumulative cap (or remove the line)
+  max_cost_per_generation: 8.00
+```
+
+> **Tradeoff:** `max_cost_per_phase` limits total spend per phase (safer for absolute budget control). `max_cost_per_generation` caps each attempt independently but allows unlimited rework cycles — total spend is unbounded if rework loops repeat.
+
+Resume: `soda run <ticket> --from review`
+
 ### Pipeline timeout
 
 **Symptom:** Pipeline stops with `pipeline: timeout after <elapsed> (limit <limit>) during phase <name>`.
@@ -122,6 +185,23 @@ All pipeline state lives under `.soda/<ticket>/`:
 1. Review phase durations: `soda history <ticket>`
 2. Increase `limits.max_pipeline_duration` in `soda.yaml` if the work legitimately needs more time
 3. Resume: `soda run <ticket> --from <phase>`
+
+### Implement phase — context deadline exceeded on large tickets
+
+**Symptom:** Implement phase fails with `context deadline exceeded` or times out part-way through. Ticket has 7 or more tasks.
+
+**Cause:** The embedded default implement timeout is 15m — too short for large tickets. The root `phases.yaml` (if present) overrides the embedded defaults without requiring a rebuild. See gotcha #25 in AGENTS.md.
+
+**Fix:**
+1. Create or edit `phases.yaml` in your project root:
+   ```yaml
+   phases:
+     implement:
+       timeout: 25m
+   ```
+2. Resume: `soda run <ticket> --from implement`
+
+> **Note:** The root `phases.yaml` takes precedence over the compiled-in defaults. Changes take effect immediately — no rebuild required.
 
 ### Triage gates ticket as not automatable
 
@@ -224,6 +304,25 @@ grep '"reviewer_failed"' .soda/<ticket>/events.jsonl
        respond_to_comments: true
    ```
 3. Re-run: `soda run <ticket> --from monitor`
+
+### GitHub Actions — all CI jobs fail in under 3 seconds
+
+**Symptom:** All CI jobs fail within 3 seconds of triggering. No test output, no compilation errors. The failure happens before any code runs.
+
+**Cause:** GitHub Actions runner allocation failure — the runner never started. This is a GitHub infrastructure issue, not a code problem.
+
+**How to distinguish from a real failure:**
+- Real test failures: jobs run for >10 seconds before failing
+- Runner allocation failures: jobs fail in <3 seconds with no meaningful output
+
+**Fix:**
+1. Re-run the workflow: `gh run rerun <run-id>`
+2. If the PR is already reviewed and approved and you need to unblock immediately:
+   ```bash
+   gh pr merge <pr-number> --admin --squash
+   ```
+
+> **Note:** Do not push new commits or restart the pipeline in response to a <3s CI failure — the code is fine. It will pass on the next attempt.
 
 ### Worktree issues — nested worktrees or stale branches
 

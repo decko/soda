@@ -29,7 +29,7 @@ mode: autonomous   # or "checkpoint"
 # Model (used for all phases in v1)
 model: claude-opus-4-6
 
-# Sandbox (via agentic-orchestrator)
+# Sandbox (via go-arapuca)
 sandbox:
   enabled: true
   binary: agent-node
@@ -37,6 +37,15 @@ sandbox:
     memory_mb: 2048
     cpu_percent: 200
     max_pids: 256
+
+  # Environment passthrough: the sandbox automatically passes through these
+  # variables from the calling shell — no config needed:
+  #   GH_TOKEN / GITHUB_TOKEN  — for gh CLI (auto-extracted via `gh auth token` if unset)
+  #   SSH_AUTH_SOCK             — for git push via SSH key
+  #   GIT_AUTHOR_NAME / EMAIL, GIT_COMMITTER_NAME / EMAIL — for git commits
+  #   ANTHROPIC_API_KEY         — for Claude Code API calls
+  #
+  # If submit/follow-up phases hang on gh auth, run: export GH_TOKEN=$(gh auth token)
 
   # LLM proxy — route API calls through a host-side proxy for
   # credential isolation, token metering, and budget enforcement.
@@ -52,8 +61,16 @@ sandbox:
 # Budget and duration limits
 limits:
   max_cost_per_ticket: 30.00
+  # max_cost_per_phase: cumulative cap across ALL rework/patch generations of a phase.
+  # Two review cycles ($3-5 each) can exceed a $8 limit. Raise to $15 for review-heavy
+  # workflows, or disable (set to 0) and use max_cost_per_generation instead.
   max_cost_per_phase: 15.00
-  max_cost_per_generation: 8.00  # per-attempt cost cap (resets each generation); 0 or omitted means disabled
+  # max_cost_per_generation: per-attempt cap that resets on each rework cycle.
+  # Use this instead of (or alongside) max_cost_per_phase when you want to cap
+  # individual attempts without limiting total rework cycles.
+  # Tradeoff: max_cost_per_phase = hard ceiling on total phase spend;
+  #           max_cost_per_generation = ceiling per attempt (total spend is unbounded).
+  max_cost_per_generation: 8.00  # 0 or omitted means disabled
   max_pipeline_duration: "2h"    # max wall-clock time for the entire pipeline; empty or "0" means no limit
   max_api_concurrency: 2         # max concurrent API calls (e.g., parallel reviewers); 0 or omitted means unlimited
 
@@ -108,7 +125,10 @@ monitor:
   # - aggressive: 1min polls, 5 rounds, auto-fix nits, auto-rebase, respond to non-auth
   profile: smart
 
-  # PR author username (for self-comment filtering)
+  # PR author username — required for active comment response.
+  # Without self_user, monitor runs in passive mode: it polls CI status and
+  # PR state, detects new comments and notifies you, but does NOT respond
+  # automatically. Set self_user to enable active response mode.
   self_user: soda-bot
 
   # Known bot usernames to filter out
@@ -125,3 +145,12 @@ monitor:
 # Prompt overrides (optional)
 # Place custom prompts in ~/.config/soda/prompts/<phase>.md
 # They take precedence over built-in prompts.
+
+# Phase-level overrides (optional) — these merge with your root phases.yaml.
+# Example: enable active comment response in the monitor phase.
+# phases:
+#   monitor:
+#     polling:
+#       respond_to_comments: true   # enable active response (requires self_user above)
+#       max_response_rounds: 3      # max Claude sessions for comment responses
+#       max_duration: "4h"          # total monitor phase wall-clock limit
