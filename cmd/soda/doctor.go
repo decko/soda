@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/decko/soda/internal/claude"
 	"github.com/decko/soda/internal/config"
 	"github.com/spf13/cobra"
 )
@@ -16,6 +17,7 @@ import (
 type checkResult struct {
 	name     string
 	passed   bool
+	skipped  bool
 	required bool
 	detail   string
 	fix      string
@@ -82,7 +84,9 @@ func runDoctor(w io.Writer, env *doctorEnv) error {
 	var failed int
 	for _, check := range checks {
 		result := check(env)
-		if result.passed {
+		if result.skipped {
+			fmt.Fprintf(w, "- %s: %s\n", result.name, result.detail)
+		} else if result.passed {
 			fmt.Fprintf(w, "✓ %s: %s\n", result.name, result.detail)
 		} else if result.required {
 			fmt.Fprintf(w, "✗ %s: %s\n", result.name, result.detail)
@@ -128,7 +132,15 @@ func checkGit(env *doctorEnv) checkResult {
 }
 
 // checkGitRepo verifies that the current directory is inside a git repository.
+// Skipped when git itself is not installed to avoid misleading cascading failures.
 func checkGitRepo(env *doctorEnv) checkResult {
+	if _, err := env.LookPath("git"); err != nil {
+		return checkResult{
+			name:    "git-repo",
+			skipped: true,
+			detail:  "skipped (git not found)",
+		}
+	}
 	_, err := env.RunCmd("git", "rev-parse", "--git-dir")
 	if err != nil {
 		return checkResult{
@@ -167,8 +179,17 @@ func checkClaude(env *doctorEnv) checkResult {
 	}
 }
 
-// checkClaudeVersion runs claude --version and reports the output.
+// checkClaudeVersion runs claude --version, reports the output, and verifies
+// that the installed version meets the minimum required version.
+// Skipped when claude itself is not installed to avoid cascading failures.
 func checkClaudeVersion(env *doctorEnv) checkResult {
+	if _, err := env.LookPath("claude"); err != nil {
+		return checkResult{
+			name:    "claude-version",
+			skipped: true,
+			detail:  "skipped (claude not found)",
+		}
+	}
 	out, err := env.RunCmd("claude", "--version")
 	if err != nil {
 		return checkResult{
@@ -179,12 +200,85 @@ func checkClaudeVersion(env *doctorEnv) checkResult {
 			fix:      "ensure claude is installed correctly and executable",
 		}
 	}
+
+	ver := extractSemver(out)
+	if ver == "" {
+		return checkResult{
+			name:     "claude-version",
+			passed:   false,
+			required: true,
+			detail:   fmt.Sprintf("could not parse version from: %s", out),
+			fix:      "ensure claude is installed correctly",
+		}
+	}
+
+	if compareSemver(ver, claude.MinCLIVersion) < 0 {
+		return checkResult{
+			name:     "claude-version",
+			passed:   false,
+			required: true,
+			detail:   fmt.Sprintf("%s (minimum required: %s)", out, claude.MinCLIVersion),
+			fix:      fmt.Sprintf("upgrade Claude Code to >= %s: npm update -g @anthropic-ai/claude-code", claude.MinCLIVersion),
+		}
+	}
+
 	return checkResult{
 		name:     "claude-version",
 		passed:   true,
 		required: true,
 		detail:   out,
 	}
+}
+
+// extractSemver extracts the first semver-like version (X.Y.Z) from a string.
+// For example, "claude 2.1.81" returns "2.1.81".
+func extractSemver(s string) string {
+	for _, field := range strings.Fields(s) {
+		parts := strings.SplitN(field, ".", 3)
+		if len(parts) == 3 {
+			allDigits := true
+			for _, p := range parts {
+				if p == "" {
+					allDigits = false
+					break
+				}
+				for _, c := range p {
+					if c < '0' || c > '9' {
+						allDigits = false
+						break
+					}
+				}
+			}
+			if allDigits {
+				return field
+			}
+		}
+	}
+	return ""
+}
+
+// compareSemver compares two semver strings (X.Y.Z).
+// Returns -1 if a < b, 0 if a == b, +1 if a > b.
+func compareSemver(a, b string) int {
+	aParts := strings.SplitN(a, ".", 3)
+	bParts := strings.SplitN(b, ".", 3)
+
+	for i := 0; i < 3; i++ {
+		ai, bi := 0, 0
+		if i < len(aParts) {
+			fmt.Sscanf(aParts[i], "%d", &ai)
+		}
+		if i < len(bParts) {
+			fmt.Sscanf(bParts[i], "%d", &bi)
+		}
+		if ai < bi {
+			return -1
+		}
+		if ai > bi {
+			return 1
+		}
+	}
+	return 0
 }
 
 // checkGh verifies that the GitHub CLI is available in PATH (optional).

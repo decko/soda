@@ -3,11 +3,13 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/decko/soda/internal/claude"
 	"github.com/decko/soda/internal/config"
 )
 
@@ -32,7 +34,7 @@ func allPassEnv() *doctorEnv {
 		},
 		RunCmd: func(name string, args ...string) (string, error) {
 			if name == "claude" && len(args) > 0 && args[0] == "--version" {
-				return "claude 1.0.0", nil
+				return fmt.Sprintf("claude %s", claude.MinCLIVersion), nil
 			}
 			if name == "git" && len(args) > 0 && args[0] == "rev-parse" {
 				return ".git", nil
@@ -189,6 +191,23 @@ func TestCheckGitRepo_Outside(t *testing.T) {
 	}
 }
 
+func TestCheckGitRepo_SkippedWhenGitMissing(t *testing.T) {
+	env := allPassEnv()
+	env.LookPath = func(file string) (string, error) {
+		if file == "git" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + file, nil
+	}
+	r := checkGitRepo(env)
+	if !r.skipped {
+		t.Error("expected git-repo check to be skipped when git is missing")
+	}
+	if !strings.Contains(r.detail, "skipped") {
+		t.Errorf("expected 'skipped' in detail, got: %q", r.detail)
+	}
+}
+
 // --- checkClaude tests ---
 
 func TestCheckClaude_Found(t *testing.T) {
@@ -224,7 +243,7 @@ func TestCheckClaudeVersion_Success(t *testing.T) {
 	if !r.passed {
 		t.Error("expected claude-version check to pass")
 	}
-	if !strings.Contains(r.detail, "1.0.0") {
+	if !strings.Contains(r.detail, claude.MinCLIVersion) {
 		t.Errorf("expected version in detail, got: %q", r.detail)
 	}
 }
@@ -240,6 +259,60 @@ func TestCheckClaudeVersion_Failure(t *testing.T) {
 	r := checkClaudeVersion(env)
 	if r.passed {
 		t.Error("expected claude-version check to fail")
+	}
+}
+
+func TestCheckClaudeVersion_SkippedWhenClaudeMissing(t *testing.T) {
+	env := allPassEnv()
+	env.LookPath = func(file string) (string, error) {
+		if file == "claude" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + file, nil
+	}
+	r := checkClaudeVersion(env)
+	if !r.skipped {
+		t.Error("expected claude-version check to be skipped when claude is missing")
+	}
+	if !strings.Contains(r.detail, "skipped") {
+		t.Errorf("expected 'skipped' in detail, got: %q", r.detail)
+	}
+}
+
+func TestCheckClaudeVersion_BelowMinimum(t *testing.T) {
+	env := allPassEnv()
+	env.RunCmd = func(name string, args ...string) (string, error) {
+		if name == "claude" && len(args) > 0 && args[0] == "--version" {
+			return "claude 2.0.5", nil
+		}
+		return ".git", nil
+	}
+	r := checkClaudeVersion(env)
+	if r.passed {
+		t.Error("expected claude-version check to fail for version below minimum")
+	}
+	if !strings.Contains(r.detail, "minimum required") {
+		t.Errorf("expected 'minimum required' in detail, got: %q", r.detail)
+	}
+	if !strings.Contains(r.fix, "upgrade") {
+		t.Errorf("expected upgrade suggestion in fix, got: %q", r.fix)
+	}
+}
+
+func TestCheckClaudeVersion_UnparseableVersion(t *testing.T) {
+	env := allPassEnv()
+	env.RunCmd = func(name string, args ...string) (string, error) {
+		if name == "claude" && len(args) > 0 && args[0] == "--version" {
+			return "unknown-version", nil
+		}
+		return ".git", nil
+	}
+	r := checkClaudeVersion(env)
+	if r.passed {
+		t.Error("expected claude-version check to fail for unparseable version")
+	}
+	if !strings.Contains(r.detail, "could not parse") {
+		t.Errorf("expected 'could not parse' in detail, got: %q", r.detail)
 	}
 }
 
@@ -464,5 +537,94 @@ func TestCheckStateDir_NoConfigDir(t *testing.T) {
 	r := checkStateDir(env)
 	if r.passed {
 		t.Error("expected state-dir check to fail when config dir unknown")
+	}
+}
+
+// --- extractSemver tests ---
+
+func TestExtractSemver(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"claude 2.1.81", "2.1.81"},
+		{"claude 10.20.300", "10.20.300"},
+		{"2.1.81", "2.1.81"},
+		{"no version here", ""},
+		{"v2.1.81", ""},        // prefixed with 'v' — not pure digits
+		{"claude abc.1.2", ""}, // non-numeric
+		{"", ""},
+	}
+	for _, tt := range tests {
+		got := extractSemver(tt.input)
+		if got != tt.want {
+			t.Errorf("extractSemver(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+// --- compareSemver tests ---
+
+func TestCompareSemver(t *testing.T) {
+	tests := []struct {
+		a, b string
+		want int
+	}{
+		{"2.1.81", "2.1.81", 0},
+		{"2.1.80", "2.1.81", -1},
+		{"2.1.82", "2.1.81", 1},
+		{"2.0.100", "2.1.0", -1},
+		{"3.0.0", "2.99.99", 1},
+		{"1.0.0", "2.1.81", -1},
+	}
+	for _, tt := range tests {
+		got := compareSemver(tt.a, tt.b)
+		if got != tt.want {
+			t.Errorf("compareSemver(%q, %q) = %d, want %d", tt.a, tt.b, got, tt.want)
+		}
+	}
+}
+
+// --- runDoctor skipped output tests ---
+
+func TestRunDoctor_GitMissing_SkipsGitRepo(t *testing.T) {
+	env := allPassEnv()
+	env.LookPath = func(file string) (string, error) {
+		if file == "git" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + file, nil
+	}
+	var buf bytes.Buffer
+	_ = runDoctor(&buf, env)
+	out := buf.String()
+	// git-repo should be skipped, not failed
+	if !strings.Contains(out, "- git-repo: skipped") {
+		t.Errorf("expected git-repo to be skipped, got:\n%s", out)
+	}
+	// git itself should fail
+	if !strings.Contains(out, "✗ git:") {
+		t.Errorf("expected git check to fail, got:\n%s", out)
+	}
+}
+
+func TestRunDoctor_ClaudeMissing_SkipsClaudeVersion(t *testing.T) {
+	env := allPassEnv()
+	env.LookPath = func(file string) (string, error) {
+		if file == "claude" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + file, nil
+	}
+	var buf bytes.Buffer
+	_ = runDoctor(&buf, env)
+	out := buf.String()
+	// claude-version should be skipped, not failed
+	if !strings.Contains(out, "- claude-version: skipped") {
+		t.Errorf("expected claude-version to be skipped, got:\n%s", out)
+	}
+	// claude itself should fail
+	if !strings.Contains(out, "✗ claude:") {
+		t.Errorf("expected claude check to fail, got:\n%s", out)
 	}
 }
