@@ -112,13 +112,13 @@ func (p *GitHubPRPoller) GetNewComments(ctx context.Context, prURL string, after
 	}
 
 	// Get review comments (inline code review comments).
-	// --paginate --slurp produces [[page1...],[page2...]], so we use --jq 'flatten'
+	// --paginate may produce concatenated JSON arrays, so we use --jq 'flatten'
 	// to merge pages into a single flat array.
 	// Sort by created ascending so newest comments are last (consistent with afterID filtering).
 	endpoint := fmt.Sprintf("repos/%s/%s/pulls/%s/comments?sort=created&direction=asc", owner, repo, number)
 	out, err := exec.CommandContext(ctx, p.command,
 		"api", endpoint,
-		"--paginate", "--slurp", "--jq", "flatten",
+		"--paginate", "--jq", "flatten",
 	).Output()
 	if err != nil {
 		return nil, fmt.Errorf("monitor: get comments: %w: %s", err, ghStderr(err))
@@ -134,7 +134,7 @@ func (p *GitHubPRPoller) GetNewComments(ctx context.Context, prURL string, after
 	issueEndpoint := fmt.Sprintf("repos/%s/%s/issues/%s/comments?sort=created&direction=asc", owner, repo, number)
 	issueOut, err := exec.CommandContext(ctx, p.command,
 		"api", issueEndpoint,
-		"--paginate", "--slurp", "--jq", "flatten",
+		"--paginate", "--jq", "flatten",
 	).Output()
 	if err != nil {
 		return nil, fmt.Errorf("monitor: get issue comments: %w: %s", err, ghStderr(err))
