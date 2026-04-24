@@ -96,6 +96,12 @@ func newRunCmd() *cobra.Command {
 }
 
 func runPipeline(cfg *config.Config, opts pipelineOpts) error {
+	// Fail fast: run lightweight prerequisite checks before any expensive
+	// work (ticket fetching, worktree setup, runner creation, etc.).
+	if err := runPreflight(defaultDoctorEnv(), opts.useMock); err != nil {
+		return err
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
