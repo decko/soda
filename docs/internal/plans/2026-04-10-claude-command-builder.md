@@ -8,7 +8,7 @@
 
 **Tech Stack:** Go 1.25, stdlib only (no external dependencies)
 
-**Spec:** `docs/superpowers/specs/2026-04-10-claude-command-builder-design.md`
+**Spec:** `docs/internal/specs/2026-04-10-claude-command-builder-design.md`
 
 ---
 
