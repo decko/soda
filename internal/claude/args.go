@@ -2,6 +2,21 @@ package claude
 
 import "strconv"
 
+// MinCLIVersion is the minimum Claude Code CLI version that supports all
+// flags used by SODA. The bottleneck is --bare, introduced in v2.1.81.
+//
+// Flag introduction timeline:
+//
+//	--print                            pre-0.2.x
+//	--output-format json               ≤ v0.2.66
+//	--allowed-tools                    pre-1.0.x
+//	--system-prompt-file               v1.0.55
+//	--permission-mode bypassPermissions ≤ v2.0.x
+//	--max-budget-usd                   v2.0.28
+//	--json-schema                      ≤ v2.1.21 (fix in v2.1.22)
+//	--bare                             v2.1.81 ← bottleneck
+const MinCLIVersion = "2.1.81"
+
 // BuildArgs constructs the CLI argument list from RunOpts and model.
 // When opts.Model is non-empty it takes precedence over the runner-level
 // model, enabling per-phase and per-reviewer model overrides.
