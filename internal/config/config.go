@@ -221,3 +221,17 @@ func DefaultPath() (string, error) {
 	}
 	return filepath.Join(configDir, "soda", "config.yaml"), nil
 }
+
+// ResolveConfigPath implements the config file discovery chain:
+//
+//  1. localPath (e.g., soda.yaml in CWD) — if it exists on disk, wins.
+//  2. globalPath (e.g., ~/.config/soda/config.yaml) — fallback.
+//
+// This is the resolution logic used by the CLI when --config is not
+// explicitly set. An explicit --config flag bypasses this entirely.
+func ResolveConfigPath(localPath, globalPath string) string {
+	if _, err := os.Stat(localPath); err == nil {
+		return localPath
+	}
+	return globalPath
+}

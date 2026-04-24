@@ -11,8 +11,8 @@ import (
 )
 
 // TestSmoke_ConfigDiscovery_ResolutionOrder verifies the full config file
-// discovery chain: local soda.yaml takes precedence over the global
-// ~/.config/soda/config.yaml. This mirrors the resolution logic in cmd/soda/main.go.
+// discovery chain using the production ResolveConfigPath function: local
+// soda.yaml takes precedence over the global ~/.config/soda/config.yaml.
 func TestSmoke_ConfigDiscovery_ResolutionOrder(t *testing.T) {
 	t.Run("local_soda_yaml_takes_precedence", func(t *testing.T) {
 		localDir := t.TempDir()
@@ -40,12 +40,11 @@ state_dir: .soda
 			t.Fatalf("write global config: %v", err)
 		}
 
-		// Simulate discovery: check for local first, fall back to global.
-		var resolvedPath string
-		if _, err := os.Stat(localPath); err == nil {
-			resolvedPath = localPath
-		} else {
-			resolvedPath = globalPath
+		// Use the production discovery function — local should win.
+		resolvedPath := ResolveConfigPath(localPath, globalPath)
+
+		if resolvedPath != localPath {
+			t.Errorf("ResolveConfigPath() = %q, want local path %q", resolvedPath, localPath)
 		}
 
 		cfg, err := Load(resolvedPath)
@@ -73,13 +72,12 @@ state_dir: .soda
 			t.Fatalf("write global config: %v", err)
 		}
 
-		// Simulate discovery: local doesn't exist, use global.
+		// Local path does not exist — ResolveConfigPath should fall back to global.
 		localPath := filepath.Join(localDir, "soda.yaml")
-		var resolvedPath string
-		if _, err := os.Stat(localPath); err == nil {
-			resolvedPath = localPath
-		} else {
-			resolvedPath = globalPath
+		resolvedPath := ResolveConfigPath(localPath, globalPath)
+
+		if resolvedPath != globalPath {
+			t.Errorf("ResolveConfigPath() = %q, want global path %q", resolvedPath, globalPath)
 		}
 
 		cfg, err := Load(resolvedPath)

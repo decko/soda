@@ -88,9 +88,7 @@ func loadConfig(cmd *cobra.Command) (*config.Config, error) {
 
 	if !cmd.Flags().Changed("config") {
 		if localPath, localErr := filepath.Abs("soda.yaml"); localErr == nil {
-			if _, statErr := os.Stat(localPath); statErr == nil {
-				cfgPath = localPath
-			}
+			cfgPath = config.ResolveConfigPath(localPath, cfgPath)
 		}
 	}
 
