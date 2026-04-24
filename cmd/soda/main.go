@@ -66,6 +66,7 @@ func newRootCmd() *cobra.Command {
 		newPipelinesCmd(),
 		newSpecCmd(),
 		newPluginCmd(),
+		newDoctorCmd(),
 		newVersionCmd(),
 	)
 
