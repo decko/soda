@@ -291,6 +291,11 @@ func (e *Engine) Run(ctx context.Context) error {
 	}
 	e.emit(Event{Kind: EventPhaseCostsReset})
 
+	// Recover any phases left in "running" status from a prior crash.
+	// Must happen before executePhases so the event log records the failure
+	// and MarkRunning starts a fresh generation instead of silently overwriting.
+	e.recoverCrashedPhases()
+
 	e.reranPhases = make(map[string]bool)
 	startedData := map[string]any{}
 	if e.config.PipelineName != "" {
@@ -359,6 +364,11 @@ func (e *Engine) Resume(ctx context.Context, fromPhase string) error {
 	if err := e.ensureWorktree(ctx); err != nil {
 		return err
 	}
+
+	// Recover any phases left in "running" status from a prior crash.
+	// Must happen before executePhases so the event log records the failure
+	// and MarkRunning starts a fresh generation instead of silently overwriting.
+	e.recoverCrashedPhases()
 
 	e.reranPhases = make(map[string]bool)
 	resumeData := map[string]any{"resumed_from": fromPhase}
@@ -1212,4 +1222,25 @@ func (e *Engine) emitPhaseFailed(phase string, phaseErr error) {
 		data["cost"] = ps.Cost
 	}
 	e.emit(Event{Phase: phase, Kind: EventPhaseFailed, Data: data})
+}
+
+// recoverCrashedPhases scans pipeline phases for any left in "running" status
+// from a prior process crash. For each such phase, it marks the phase as
+// failed and emits a phase_failed event so the event log is consistent.
+//
+// This covers the window between prompt_loaded and the Claude subprocess
+// spawn: if the process dies in that window, meta.json records "running"
+// but events.jsonl has no corresponding phase_failed entry. Without this
+// recovery, the stale "running" status is silently overwritten when the
+// phase re-runs, leaving an observability gap.
+func (e *Engine) recoverCrashedPhases() {
+	for _, phase := range e.config.Pipeline.Phases {
+		ps := e.state.Meta().Phases[phase.Name]
+		if ps == nil || ps.Status != PhaseRunning {
+			continue
+		}
+		crashErr := fmt.Errorf("process crashed while phase was running (recovered on restart)")
+		_ = e.state.MarkFailed(phase.Name, crashErr)
+		e.emitPhaseFailed(phase.Name, crashErr)
+	}
 }
