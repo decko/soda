@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
+	"os"
 	"sync"
 	"time"
 
@@ -61,6 +63,7 @@ type EngineConfig struct {
 	MonitorProfile         *MonitorProfile   // behavioral profile; nil → use polling config as-is
 	SelfUser               string            // PR author username for self-comment filtering
 	BotUsers               []string          // known bot usernames to filter
+	Stderr                 io.Writer         // destination for warning messages; defaults to os.Stderr
 }
 
 // maxReworkCycles returns the configured max rework cycles, defaulting to DefaultMaxReworkCycles.
@@ -90,6 +93,7 @@ type Engine struct {
 	apiSem           *Semaphore // limits concurrent runner.Run calls; nil means unlimited
 	confirmCh        chan struct{}
 	reranPhases      map[string]bool // phases that ran (not skipped) in this execution
+	eventLogWarnOnce sync.Once       // ensures at most one LogEvent warning is printed
 	pauseMu          sync.Mutex
 	paused           bool
 	pauseCond        *sync.Cond
@@ -107,6 +111,9 @@ func NewEngine(r runner.Runner, state *State, cfg EngineConfig) *Engine {
 	}
 	if cfg.JitterFunc == nil {
 		cfg.JitterFunc = func(time.Duration) time.Duration { return 0 }
+	}
+	if cfg.Stderr == nil {
+		cfg.Stderr = os.Stderr
 	}
 
 	e := &Engine{
@@ -1066,8 +1073,14 @@ func (e *Engine) makeOnChunk(ctx context.Context, phase string) func(string) {
 
 // emit logs an event to state and calls the OnEvent callback if set.
 // Also broadcasts to any attached clients via the Unix socket.
+// If LogEvent fails (e.g., disk full), a warning is printed to stderr
+// once to avoid flooding logs; subsequent failures are silently ignored.
 func (e *Engine) emit(event Event) {
-	_ = e.state.LogEvent(event)
+	if err := e.state.LogEvent(event); err != nil {
+		e.eventLogWarnOnce.Do(func() {
+			fmt.Fprintf(e.config.Stderr, "engine: warning: failed to write event log: %v\n", err)
+		})
+	}
 	if e.config.OnEvent != nil {
 		e.config.OnEvent(event)
 	}
