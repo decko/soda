@@ -33,6 +33,7 @@ type PhaseState struct {
 	Error          string      `json:"error,omitempty"`
 	Generation     int         `json:"generation,omitempty"`
 	PlanHash       string      `json:"plan_hash,omitempty"`
+	PromptHash     string      `json:"prompt_hash,omitempty"` // SHA-256 hex digest of the rendered prompt sent to the LLM
 	startedAt      time.Time
 }
 
