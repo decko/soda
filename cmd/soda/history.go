@@ -107,11 +107,12 @@ func renderEventsHistory(meta *pipeline.PipelineMeta, events []pipeline.Event, s
 	var lastFailPhase string
 	var lastFailError string
 
-	// Collect full outputs to print after the table (to avoid breaking
-	// tabwriter alignment).
+	// Collect full outputs and prompt hashes to print after the table (to avoid
+	// breaking tabwriter alignment).
 	type outputBlock struct {
 		phase      string
 		generation int
+		promptHash string
 		data       json.RawMessage
 	}
 	var outputs []outputBlock
@@ -139,10 +140,11 @@ func renderEventsHistory(meta *pipeline.PipelineMeta, events []pipeline.Event, s
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
 			entry.Phase, gen, sym, dur, cost, details)
 
-		if len(entry.FullOutput) > 0 {
+		if (detail || phaseFilter != "") && (len(entry.FullOutput) > 0 || entry.PromptHash != "") {
 			outputs = append(outputs, outputBlock{
 				phase:      entry.Phase,
 				generation: entry.Generation,
+				promptHash: entry.PromptHash,
 				data:       entry.FullOutput,
 			})
 		}
@@ -169,10 +171,15 @@ func renderEventsHistory(meta *pipeline.PipelineMeta, events []pipeline.Event, s
 		fmt.Printf("\nLast failure (%s):\n  Error: %s\n", lastFailPhase, lastFailError)
 	}
 
-	// Print full structured outputs after the table.
+	// Print full structured outputs and prompt hashes after the table.
 	for _, ob := range outputs {
 		fmt.Printf("\n--- %s (gen %d) ---\n", ob.phase, ob.generation)
-		fmt.Println(prettyJSON(ob.data))
+		if ob.promptHash != "" {
+			fmt.Printf("Prompt Hash: %s\n", ob.promptHash)
+		}
+		if len(ob.data) > 0 {
+			fmt.Println(prettyJSON(ob.data))
+		}
 	}
 
 	return nil
