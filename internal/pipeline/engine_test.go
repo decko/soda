@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -5659,5 +5660,65 @@ func TestEngine_RecoverCrashedPhase_PhaseStatusMarkedFailed(t *testing.T) {
 	}
 	if failedIdx >= startedIdx {
 		t.Errorf("crash-recovery phase_failed (idx=%d) should appear before phase_started (idx=%d)", failedIdx, startedIdx)
+	}
+}
+
+func TestEngine_EmitLogsWarningOnEventLogFailure(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage: automatable",
+					CostUSD: 0.05,
+				},
+			}},
+		},
+	}
+
+	var stderr bytes.Buffer
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.Stderr = &stderr
+	})
+
+	// Replace events.jsonl with a directory so every LogEvent call fails
+	// with "is a directory" (or equivalent OS error).
+	eventsPath := filepath.Join(state.Dir(), "events.jsonl")
+	os.Remove(eventsPath) // remove if pre-existing
+	if err := os.Mkdir(eventsPath, 0755); err != nil {
+		t.Fatalf("mkdir events.jsonl: %v", err)
+	}
+
+	// Run should still succeed — LogEvent errors are non-fatal.
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run should succeed despite event log failure: %v", err)
+	}
+
+	// Verify exactly one warning line was printed to stderr.
+	output := stderr.String()
+	if output == "" {
+		t.Fatal("expected a warning on stderr, got nothing")
+	}
+
+	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
+	if len(lines) != 1 {
+		t.Errorf("expected exactly 1 warning line, got %d:\n%s", len(lines), output)
+	}
+
+	if !strings.Contains(output, "engine: warning: failed to write event log") {
+		t.Errorf("warning message doesn't match expected prefix, got: %s", output)
+	}
+
+	// The pipeline should still complete successfully.
+	if !state.IsCompleted("triage") {
+		t.Error("triage should be completed")
 	}
 }
