@@ -74,8 +74,14 @@ func runHistory(stateDir, ticketKey string, detail bool, phaseFilter string) err
 func renderEventsHistory(meta *pipeline.PipelineMeta, events []pipeline.Event, stateDir string, detail bool, phaseFilter string) error {
 	h := pipeline.BuildHistory(events, stateDir)
 
-	// Populate PromptHash on each entry from the persisted PhaseState in meta.
+	// Populate PromptHash on non-superseded entries only. The PhaseState in
+	// meta stores the hash for the latest generation; applying it to
+	// superseded entries would show a misleading hash that doesn't match the
+	// prompt actually sent for that generation.
 	for i := range h.Entries {
+		if h.Entries[i].Superseded {
+			continue
+		}
 		if ps, ok := meta.Phases[h.Entries[i].Phase]; ok {
 			h.Entries[i].PromptHash = ps.PromptHash
 		}
