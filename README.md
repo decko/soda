@@ -60,10 +60,10 @@ go install github.com/decko/soda/cmd/soda@latest
 
 | Platform | File |
 |----------|------|
-| Linux amd64 | `soda_linux_amd64.tar.gz` |
-| Linux arm64 | `soda_linux_arm64.tar.gz` |
-| macOS amd64 | `soda_darwin_amd64.tar.gz` |
-| macOS arm64 | `soda_darwin_arm64.tar.gz` |
+| Linux amd64 (with sandbox) | `soda-linux-amd64-sandbox` |
+| Linux arm64 | `soda-linux-arm64` |
+| macOS Intel | `soda-darwin-amd64` |
+| macOS Apple Silicon | `soda-darwin-arm64` |
 
 **Build from source**:
 
@@ -127,7 +127,7 @@ and [docs/configuration.md](docs/configuration.md) for the full guide.
 |----------|--------|----------|
 | `default` | Full 9-phase pipeline | New features, bug fixes |
 | `quick-fix` | implement → verify → submit | Small, well-understood fixes |
-| `docs-only` | implement → submit | Documentation changes |
+| `docs-only` | plan → implement → submit | Documentation changes (Sonnet) |
 
 ```bash
 soda run 42 --pipeline quick-fix
