@@ -98,9 +98,9 @@ Initial release of SODA — Session-Orchestrated Development Agent.
 #### Named pipelines
 
 - `--pipeline <name>` flag on `soda run` to select a non-default pipeline
-- Built-in **quick-fix** pipeline: triage → implement → verify → submit (no plan,
+- Built-in **quick-fix** pipeline: implement → verify → submit (no triage, no plan,
   no full review)
-- Built-in **docs-only** pipeline: triage → implement → submit (documentation-only
+- Built-in **docs-only** pipeline: plan → implement → submit (documentation-only, Sonnet
   changes)
 - `soda pipelines new` scaffolds a new pipeline definition file
 - `soda pipelines` lists all available named pipelines (built-in + project-local)
@@ -187,7 +187,7 @@ Initial release of SODA — Session-Orchestrated Development Agent.
 
 - Per-phase cost limits via `max_cost_per_phase` (cumulative across rework cycles)
   and `max_cost_per_generation` (per single run)
-- Per-ticket pipeline cost cap via `max_pipeline_cost_usd`
+- Per-ticket pipeline cost cap via `max_cost_per_ticket`
 - `max_pipeline_duration` global wall-clock limit for the entire pipeline
 - Token counts (`TokensIn`, `TokensOut`, `CacheTokensIn`) persisted in `meta.json`
   alongside per-phase cost and duration
