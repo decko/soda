@@ -11,7 +11,7 @@ Guides for people running SODA against their own projects.
 
 | Document | Description | Status |
 |----------|-------------|--------|
-| [quickstart.md](quickstart.md) | Install, configure, and run your first ticket end-to-end | planned (#367) |
+| [quickstart.md](quickstart.md) | Install, configure, and run your first ticket end-to-end | available |
 | [install.md](install.md) | All installation methods (binary, Go install, source) | available |
 | [configuration.md](configuration.md) | `soda.yaml` and `phases.yaml` reference | planned |
 | [cli-reference.md](cli-reference.md) | Full CLI command reference | planned |
