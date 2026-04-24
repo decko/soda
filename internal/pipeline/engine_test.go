@@ -4531,7 +4531,7 @@ func TestEngine_ReviewReworkAndPatchIndependent(t *testing.T) {
 				// First implement.
 				{
 					result: &runner.RunResult{
-						Output:  json.RawMessage(`{"tests_passed":true}`),
+						Output:  json.RawMessage(`{"tests_passed":true,"commits":[{"hash":"a1","message":"impl","task_id":"T1"}],"files_changed":[{"path":"a.go","action":"modified"}]}`),
 						RawText: "impl1",
 						CostUSD: 0.10,
 					},
@@ -4539,7 +4539,7 @@ func TestEngine_ReviewReworkAndPatchIndependent(t *testing.T) {
 				// Second implement (after review rework).
 				{
 					result: &runner.RunResult{
-						Output:  json.RawMessage(`{"tests_passed":true}`),
+						Output:  json.RawMessage(`{"tests_passed":true,"commits":[{"hash":"a2","message":"rework","task_id":"T1"}],"files_changed":[{"path":"a.go","action":"modified"}]}`),
 						RawText: "impl2",
 						CostUSD: 0.10,
 					},
@@ -4978,7 +4978,7 @@ func TestEngine_PipelineTimeout_ResumeWithStaleFailed(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"implement": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"ok":true}`),
+					Output:  json.RawMessage(`{"tests_passed":true,"commits":[{"hash":"a1","message":"impl","task_id":"T1"}],"files_changed":[{"path":"a.go","action":"modified"}]}`),
 					RawText: "implement ok",
 					CostUSD: 0.01,
 				},

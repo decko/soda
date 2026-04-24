@@ -172,3 +172,12 @@ After all tasks are complete:
 
 Do NOT skip tasks. Do NOT combine tasks into a single commit.
 If a task cannot be completed, explain why and move to the next.
+{{- if .ReworkFeedback}}
+
+**IMPORTANT — Rework cycle:** You are re-running because reviewers or verification
+found issues with the previous implementation. The existing code may already match
+the plan's task descriptions, but it contains defects listed above. You MUST make
+actual code changes to address every finding — do not short-circuit by reporting
+tasks as already complete. Your output must include at least one commit and at least
+one file change, or the pipeline will reject this as a no-op.
+{{- end}}

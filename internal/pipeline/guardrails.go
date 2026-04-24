@@ -134,7 +134,12 @@ func (e *Engine) gatePhase(phase PhaseConfig) error {
 
 	case "implement":
 		var result struct {
-			TestsPassed bool `json:"tests_passed"`
+			TestsPassed  bool       `json:"tests_passed"`
+			Commits      []struct{} `json:"commits"`
+			FilesChanged []struct{} `json:"files_changed"`
+			TaskResults  []struct {
+				Status string `json:"status"`
+			} `json:"task_results"`
 		}
 		if err := json.Unmarshal(raw, &result); err != nil {
 			return nil
@@ -145,6 +150,36 @@ func (e *Engine) gatePhase(phase PhaseConfig) error {
 				Kind:  EventPhaseRetrying,
 				Data:  map[string]any{"warning": "tests did not pass during implementation"},
 			})
+		}
+
+		// Short-circuit detection: when implement re-runs during a rework
+		// cycle (generation > 1) and produces zero commits and zero
+		// files_changed, the LLM likely saw existing code matching plan
+		// tasks and short-circuited without addressing the rework feedback.
+		// Gate with a clear error so the operator can see what happened.
+		if ps := e.state.Meta().Phases[phase.Name]; ps != nil && ps.Generation > 1 {
+			if len(result.Commits) == 0 && len(result.FilesChanged) == 0 {
+				skippedTasks := 0
+				for _, tr := range result.TaskResults {
+					if strings.EqualFold(tr.Status, "skipped") {
+						skippedTasks++
+					}
+				}
+				e.emit(Event{
+					Phase: phase.Name,
+					Kind:  EventImplementNoChanges,
+					Data: map[string]any{
+						"generation":    ps.Generation,
+						"commits":       len(result.Commits),
+						"files_changed": len(result.FilesChanged),
+						"skipped_tasks": skippedTasks,
+					},
+				})
+				return &PhaseGateError{
+					Phase:  phase.Name,
+					Reason: "rework produced no changes — implement short-circuited without addressing feedback",
+				}
+			}
 		}
 		// Proceed to verify regardless — verify will catch test failures.
 

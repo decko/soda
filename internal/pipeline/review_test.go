@@ -2616,19 +2616,19 @@ func TestEngine_ReworkFeedbackIncludesPriorReviewCycles(t *testing.T) {
 			"implement": {
 				// First implement.
 				{result: &runner.RunResult{
-					Output:  json.RawMessage(`{"tests_passed":true}`),
+					Output:  json.RawMessage(`{"tests_passed":true,"commits":[{"hash":"a1","message":"impl","task_id":"T1"}],"files_changed":[{"path":"handler.go","action":"modified"}]}`),
 					RawText: "impl1",
 					CostUSD: 0.10,
 				}},
 				// Second implement (after first rework).
 				{result: &runner.RunResult{
-					Output:  json.RawMessage(`{"tests_passed":true}`),
+					Output:  json.RawMessage(`{"tests_passed":true,"commits":[{"hash":"a2","message":"rework1","task_id":"T1"}],"files_changed":[{"path":"handler.go","action":"modified"}]}`),
 					RawText: "impl2",
 					CostUSD: 0.10,
 				}},
 				// Third implement (after second rework).
 				{result: &runner.RunResult{
-					Output:  json.RawMessage(`{"tests_passed":true}`),
+					Output:  json.RawMessage(`{"tests_passed":true,"commits":[{"hash":"a3","message":"rework2","task_id":"T1"}],"files_changed":[{"path":"util.go","action":"modified"}]}`),
 					RawText: "impl3",
 					CostUSD: 0.10,
 				}},
