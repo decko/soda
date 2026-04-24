@@ -531,8 +531,8 @@ func TestCheckConfigValid_NoConfigFound(t *testing.T) {
 		return nil, os.ErrNotExist
 	}
 	r := checkConfigValid(env)
-	if r.passed {
-		t.Error("expected config-valid check to fail with no config files")
+	if !r.skipped {
+		t.Error("expected config-valid check to be skipped when no config files exist")
 	}
 }
 
