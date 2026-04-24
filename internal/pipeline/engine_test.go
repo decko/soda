@@ -5414,3 +5414,250 @@ func TestEngine_ExtrasNotUsedForBuiltinPhases(t *testing.T) {
 		t.Error("plan prompt should not have Extras populated for built-in phase deps")
 	}
 }
+
+func TestEngine_RecoverCrashedPhase_RunEmitsFailureEvent(t *testing.T) {
+	// Simulate a prior crash: triage completed, plan left in "running" status.
+	// On Run(), the engine should emit a phase_failed event for plan before
+	// re-running it, closing the observability gap between prompt_loaded and
+	// Claude spawn.
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "plan",
+			Prompt:    "plan.md",
+			DependsOn: []string{"triage"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage: automatable",
+					CostUSD: 0.10,
+				},
+			}},
+			"plan": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tasks":["task1"]}`),
+					RawText: "Plan: one task",
+					CostUSD: 0.20,
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(ev Event) { events = append(events, ev) }
+	})
+
+	// Simulate prior crash: triage completed, plan left in "running".
+	_ = state.MarkRunning("triage")
+	_ = state.MarkCompleted("triage")
+	_ = state.WriteResult("triage", json.RawMessage(`{"automatable":true}`))
+	_ = state.WriteArtifact("triage", []byte("Triage done"))
+
+	_ = state.MarkRunning("plan")
+	// DO NOT mark completed — this simulates a crash mid-phase.
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// There should be a phase_failed event for plan from crash recovery.
+	var crashFailedCount int
+	for _, ev := range events {
+		if ev.Kind == EventPhaseFailed && ev.Phase == "plan" {
+			errMsg, ok := ev.Data["error"].(string)
+			if ok && strings.Contains(errMsg, "crashed") {
+				crashFailedCount++
+			}
+		}
+	}
+	if crashFailedCount != 1 {
+		t.Errorf("expected exactly 1 crash-recovery phase_failed event for plan, got %d", crashFailedCount)
+	}
+
+	// Plan should be re-run and completed successfully.
+	if !state.IsCompleted("plan") {
+		t.Error("plan should be completed after recovery and re-run")
+	}
+}
+
+func TestEngine_RecoverCrashedPhase_ResumeEmitsFailureEvent(t *testing.T) {
+	// Same scenario but via Resume: a crashed phase should get a failure event
+	// before the resume target re-runs.
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "plan",
+			Prompt:    "plan.md",
+			DependsOn: []string{"triage"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"plan": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tasks":["task1"]}`),
+					RawText: "Plan: one task",
+					CostUSD: 0.20,
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(ev Event) { events = append(events, ev) }
+	})
+
+	// Simulate prior crash: triage completed, plan left in "running".
+	_ = state.MarkRunning("triage")
+	_ = state.MarkCompleted("triage")
+	_ = state.WriteResult("triage", json.RawMessage(`{"automatable":true}`))
+	_ = state.WriteArtifact("triage", []byte("Triage done"))
+
+	_ = state.MarkRunning("plan")
+
+	// Resume from plan — should recover the crashed phase first.
+	if err := engine.Resume(context.Background(), "plan"); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+
+	var crashFailedCount int
+	for _, ev := range events {
+		if ev.Kind == EventPhaseFailed && ev.Phase == "plan" {
+			errMsg, ok := ev.Data["error"].(string)
+			if ok && strings.Contains(errMsg, "crashed") {
+				crashFailedCount++
+			}
+		}
+	}
+	if crashFailedCount != 1 {
+		t.Errorf("expected exactly 1 crash-recovery phase_failed event for plan, got %d", crashFailedCount)
+	}
+
+	if !state.IsCompleted("plan") {
+		t.Error("plan should be completed after recovery and re-run via Resume")
+	}
+}
+
+func TestEngine_RecoverCrashedPhase_NoCrashNoEvent(t *testing.T) {
+	// When no phases are in "running" status, recoverCrashedPhases should
+	// not emit any phase_failed events.
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage: automatable",
+					CostUSD: 0.10,
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(ev Event) { events = append(events, ev) }
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// No crash-recovery events should be emitted.
+	for _, ev := range events {
+		if ev.Kind == EventPhaseFailed {
+			errMsg, ok := ev.Data["error"].(string)
+			if ok && strings.Contains(errMsg, "crashed") {
+				t.Errorf("unexpected crash-recovery phase_failed event for phase %q", ev.Phase)
+			}
+		}
+	}
+}
+
+func TestEngine_RecoverCrashedPhase_PhaseStatusMarkedFailed(t *testing.T) {
+	// Verify that recoverCrashedPhases transitions the phase from "running"
+	// to "failed" before the engine re-runs it.
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage: automatable",
+					CostUSD: 0.10,
+				},
+			}},
+		},
+	}
+
+	var eventsBeforeEngine []Event
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(ev Event) {
+			eventsBeforeEngine = append(eventsBeforeEngine, ev)
+		}
+	})
+
+	// Simulate triage left in "running" from a crash.
+	_ = state.MarkRunning("triage")
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// The crash-recovery phase_failed event should appear BEFORE the
+	// phase_started event for the re-run.
+	failedIdx := -1
+	startedIdx := -1
+	for i, ev := range eventsBeforeEngine {
+		if ev.Kind == EventPhaseFailed && ev.Phase == "triage" {
+			if errMsg, ok := ev.Data["error"].(string); ok && strings.Contains(errMsg, "crashed") {
+				failedIdx = i
+			}
+		}
+		if ev.Kind == EventPhaseStarted && ev.Phase == "triage" {
+			startedIdx = i
+		}
+	}
+
+	if failedIdx < 0 {
+		t.Fatal("no crash-recovery phase_failed event found for triage")
+	}
+	if startedIdx < 0 {
+		t.Fatal("no phase_started event found for triage re-run")
+	}
+	if failedIdx >= startedIdx {
+		t.Errorf("crash-recovery phase_failed (idx=%d) should appear before phase_started (idx=%d)", failedIdx, startedIdx)
+	}
+}
