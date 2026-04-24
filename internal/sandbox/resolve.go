@@ -164,6 +164,34 @@ func claudeEnv(tmpDir string, opts runner.RunOpts, claudeBin, proxyURL string) [
 		}
 	}
 
+	// Git/GitHub credentials for submit, follow-up, and monitor phases.
+	// gh CLI uses GH_TOKEN or GITHUB_TOKEN; git push uses SSH_AUTH_SOCK.
+	gitVars := []string{
+		"GH_TOKEN",
+		"GITHUB_TOKEN",
+		"GH_HOST",
+		"SSH_AUTH_SOCK",
+		"GIT_AUTHOR_NAME",
+		"GIT_AUTHOR_EMAIL",
+		"GIT_COMMITTER_NAME",
+		"GIT_COMMITTER_EMAIL",
+	}
+	for _, key := range gitVars {
+		if val := os.Getenv(key); val != "" {
+			env = append(env, key+"="+val)
+		}
+	}
+
+	// If no GH_TOKEN is set, try to extract from gh CLI keyring so that
+	// gh commands work inside the sandbox (no keyring access there).
+	if os.Getenv("GH_TOKEN") == "" && os.Getenv("GITHUB_TOKEN") == "" {
+		if token, err := exec.Command("gh", "auth", "token").Output(); err == nil {
+			if t := strings.TrimSpace(string(token)); t != "" {
+				env = append(env, "GH_TOKEN="+t)
+			}
+		}
+	}
+
 	return env
 }
 

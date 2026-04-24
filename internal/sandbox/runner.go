@@ -123,6 +123,11 @@ func (r *Runner) Run(ctx context.Context, opts runner.RunOpts) (*runner.RunResul
 	readPaths = append(readPaths, opts.WorkDir)
 	readPaths = append(readPaths, r.config.ExtraReadPaths...)
 
+	// Allow SSH agent socket access for git push.
+	if sshSock := os.Getenv("SSH_AUTH_SOCK"); sshSock != "" {
+		readPaths = append(readPaths, filepath.Dir(sshSock))
+	}
+
 	writePaths := []string{opts.WorkDir}
 	writePaths = append(writePaths, r.config.ExtraWritePaths...)
 
