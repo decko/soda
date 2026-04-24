@@ -32,6 +32,17 @@ type doctorEnv struct {
 	Stat          func(name string) (os.FileInfo, error)
 	LoadConfig    func(path string) (*config.Config, error)
 	UserConfigDir func() (string, error)
+
+	// ParsedConfig is populated by checkConfigValid on success.
+	// Downstream checks use it to adjust their required status.
+	ParsedConfig *config.Config
+}
+
+// isGitHubSource reports whether the parsed config sets ticket_source to "github".
+// Returns false when ParsedConfig is nil (config missing or unparseable),
+// making gh checks default to optional — a safe fallback.
+func (e *doctorEnv) isGitHubSource() bool {
+	return e.ParsedConfig != nil && e.ParsedConfig.TicketSource == "github"
 }
 
 // defaultDoctorEnv returns a doctorEnv wired to the real OS.
