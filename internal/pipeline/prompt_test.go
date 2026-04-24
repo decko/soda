@@ -1182,6 +1182,66 @@ Context: {{.}}
 		}
 	})
 
+	t.Run("renders_rework_warning_when_feedback_present", func(t *testing.T) {
+		tmplBytes, err := os.ReadFile(filepath.Join("..", "..", "cmd", "soda", "embeds", "prompts", "implement.md"))
+		if err != nil {
+			t.Skipf("skipping: cannot read embedded implement.md: %v", err)
+		}
+		tmpl := string(tmplBytes)
+
+		data := PromptData{
+			Ticket:       TicketData{Key: "TEST-395", Summary: "rework warning test"},
+			WorktreePath: "/tmp/wt",
+			Branch:       "soda/TEST-395",
+			BaseBranch:   "main",
+			Config:       PromptConfigData{Formatter: "gofmt -w .", TestCommand: "go test ./..."},
+			ReworkFeedback: &ReworkFeedback{
+				Source:  "review",
+				Verdict: "rework",
+				ReviewFindings: []EnrichedFinding{
+					{ReviewFinding: schemas.ReviewFinding{Severity: "critical", File: "x.go", Line: 1, Issue: "bug", Suggestion: "fix", Source: "go-specialist"}},
+				},
+			},
+		}
+
+		result, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+
+		if !strings.Contains(result, "Rework cycle") {
+			t.Errorf("implement prompt should contain rework cycle warning when feedback present;\ngot: %s", result)
+		}
+		if !strings.Contains(result, "do not short-circuit") {
+			t.Errorf("implement prompt should warn against short-circuiting;\ngot: %s", result)
+		}
+	})
+
+	t.Run("omits_rework_warning_without_feedback", func(t *testing.T) {
+		tmplBytes, err := os.ReadFile(filepath.Join("..", "..", "cmd", "soda", "embeds", "prompts", "implement.md"))
+		if err != nil {
+			t.Skipf("skipping: cannot read embedded implement.md: %v", err)
+		}
+		tmpl := string(tmplBytes)
+
+		data := PromptData{
+			Ticket:       TicketData{Key: "TEST-395", Summary: "no rework warning test"},
+			WorktreePath: "/tmp/wt",
+			Branch:       "soda/TEST-395",
+			BaseBranch:   "main",
+			Config:       PromptConfigData{Formatter: "gofmt -w .", TestCommand: "go test ./..."},
+		}
+
+		result, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+
+		if strings.Contains(result, "Rework cycle") {
+			t.Errorf("implement prompt should NOT contain rework cycle warning without feedback;\ngot: %s", result)
+		}
+	})
+
 	t.Run("renders_implement_prompt_with_diff_and_prior_cycles", func(t *testing.T) {
 		tmplBytes, err := os.ReadFile(filepath.Join("..", "..", "cmd", "soda", "embeds", "prompts", "implement.md"))
 		if err != nil {
