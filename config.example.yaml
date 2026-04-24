@@ -2,26 +2,26 @@
 # Auto-generate a starter version of this file with: soda init
 
 # Ticket source
-ticket_source: jira
-jira:
-  command: wtmcp
-  project: MYPROJECT
-  query: "labels = ai-workable AND status = Refinement"
+ticket_source: github
+github:
+  owner: myorg
+  repo: my-service
+  fetch_comments: true
+  # Extraction strategies: pull spec/plan from ticket comments using markers.
+  # When configured, comments are scanned for content between start/end markers.
+  # If multiple comments contain the same markers, the last one wins.
+  spec:
+    start_marker: "<!-- spec:start -->"
+    end_marker: "<!-- spec:end -->"
+  plan:
+    start_marker: "<!-- plan:start -->"
+    end_marker: "<!-- plan:end -->"
 
-# GitHub Issues source (alternative to Jira)
-# github:
-#   owner: myorg
-#   repo: my-service
-#   fetch_comments: true
-#   # Extraction strategies: pull spec/plan from ticket comments using markers.
-#   # When configured, comments are scanned for content between start/end markers.
-#   # If multiple comments contain the same markers, the last one wins.
-#   spec:
-#     start_marker: "<!-- spec:start -->"
-#     end_marker: "<!-- spec:end -->"
-#   plan:
-#     start_marker: "<!-- plan:start -->"
-#     end_marker: "<!-- plan:end -->"
+# Jira configuration (uncomment to use Jira instead)
+# jira:
+#   command: wtmcp
+#   project: MYPROJECT
+#   query: "labels = ai-workable AND status = Refinement"
 
 # Default execution mode
 mode: autonomous   # or "checkpoint"
