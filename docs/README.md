@@ -13,7 +13,7 @@ Guides for people running SODA against their own projects.
 |----------|-------------|--------|
 | [quickstart.md](quickstart.md) | Install, configure, and run your first ticket end-to-end | available |
 | [install.md](install.md) | All installation methods (binary, Go install, source) | available |
-| [configuration.md](configuration.md) | `soda.yaml` and `phases.yaml` reference | planned |
+| [configuration.md](configuration.md) | `soda.yaml` and `phases.yaml` reference | available |
 | [cli-reference.md](cli-reference.md) | Full CLI command reference | planned |
 | [pipelines.md](pipelines.md) | Named pipelines, custom pipelines, phase customization | planned |
 | [plugin.md](plugin.md) | Claude Code plugin: install, commands, agent | planned |
