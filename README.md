@@ -93,6 +93,18 @@ files are embedded in the soda binary and version-matched — updates come with
 - **Pluggable ticket sources** (Jira first, GitHub later)
 - **Config-driven phases** (add, remove, reorder via YAML)
 
+## Documentation
+
+Full documentation lives in [`docs/`](docs/README.md):
+
+- **[Quickstart](docs/quickstart.md)** — install, configure, run your first ticket
+- **[CLI reference](docs/cli-reference.md)** — all commands and flags
+- **[Configuration](docs/configuration.md)** — `soda.yaml` and `phases.yaml` reference
+- **[Pipelines](docs/pipelines.md)** — named pipelines and phase customization
+- **[Troubleshooting](docs/troubleshooting.md)** — common failure modes and fixes
+
+See [`docs/README.md`](docs/README.md) for the full documentation index.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for setup instructions, pre-commit
