@@ -344,8 +344,8 @@ func TestRunValidate_DocsOnlyPipeline(t *testing.T) {
 	if !strings.Contains(output, "✓ phases:") {
 		t.Error("expected phases valid message for docs-only")
 	}
-	if !strings.Contains(output, "2 phases loaded") {
-		t.Errorf("expected '2 phases loaded' for docs-only, got: %s", output)
+	if !strings.Contains(output, "3 phases loaded") {
+		t.Errorf("expected '3 phases loaded' for docs-only, got: %s", output)
 	}
 	if !strings.Contains(output, "Validation passed") {
 		t.Error("expected validation passed for docs-only")
