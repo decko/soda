@@ -24,6 +24,7 @@ type PhaseGeneration struct {
 	Details       string          // one-line summary from result JSON
 	FullOutput    json.RawMessage // full structured output JSON (populated by LoadFullOutputs)
 	Superseded    bool            // true if a later generation exists
+	PromptHash    string          // SHA-256 hex digest of the rendered prompt (from PhaseState)
 }
 
 // History holds the reconstructed multi-generation history for a ticket.
