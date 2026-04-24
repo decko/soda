@@ -404,7 +404,8 @@ func checkConfig(env *doctorEnv) checkResult {
 func checkConfigValid(env *doctorEnv) checkResult {
 	// Try local config first.
 	if _, statErr := env.Stat("soda.yaml"); statErr == nil {
-		if _, err := env.LoadConfig("soda.yaml"); err != nil {
+		cfg, err := env.LoadConfig("soda.yaml")
+		if err != nil {
 			return checkResult{
 				name:     "config-valid",
 				passed:   false,
@@ -413,6 +414,7 @@ func checkConfigValid(env *doctorEnv) checkResult {
 				fix:      "fix syntax errors in soda.yaml",
 			}
 		}
+		env.ParsedConfig = cfg
 		return checkResult{
 			name:     "config-valid",
 			passed:   true,
@@ -438,7 +440,8 @@ func checkConfigValid(env *doctorEnv) checkResult {
 			detail:  "skipped (no config file found)",
 		}
 	}
-	if _, err := env.LoadConfig(path); err != nil {
+	cfg, err := env.LoadConfig(path)
+	if err != nil {
 		return checkResult{
 			name:     "config-valid",
 			passed:   false,
@@ -447,6 +450,7 @@ func checkConfigValid(env *doctorEnv) checkResult {
 			fix:      "fix syntax errors in config file",
 		}
 	}
+	env.ParsedConfig = cfg
 	return checkResult{
 		name:     "config-valid",
 		passed:   true,
