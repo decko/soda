@@ -727,7 +727,7 @@ func TestEngine_PatchExhaustedEscalates(t *testing.T) {
 				// First implement call.
 				{
 					result: &runner.RunResult{
-						Output:  json.RawMessage(`{"tests_passed":true}`),
+						Output:  json.RawMessage(`{"tests_passed":true,"commits":[{"hash":"a1","message":"impl","task_id":"T1"}],"files_changed":[{"path":"a.go","action":"modified"}]}`),
 						RawText: "impl1",
 						CostUSD: 0.10,
 					},
@@ -735,7 +735,7 @@ func TestEngine_PatchExhaustedEscalates(t *testing.T) {
 				// Second implement call (escalation).
 				{
 					result: &runner.RunResult{
-						Output:  json.RawMessage(`{"tests_passed":true}`),
+						Output:  json.RawMessage(`{"tests_passed":true,"commits":[{"hash":"a2","message":"escalated","task_id":"T1"}],"files_changed":[{"path":"a.go","action":"modified"}]}`),
 						RawText: "impl2",
 						CostUSD: 3.00,
 					},
@@ -839,7 +839,7 @@ func TestEngine_PatchTooComplexEscalates(t *testing.T) {
 			"implement": {
 				{
 					result: &runner.RunResult{
-						Output:  json.RawMessage(`{"tests_passed":true}`),
+						Output:  json.RawMessage(`{"tests_passed":true,"commits":[{"hash":"a1","message":"impl","task_id":"T1"}],"files_changed":[{"path":"a.go","action":"modified"}]}`),
 						RawText: "impl1",
 						CostUSD: 0.10,
 					},
@@ -847,7 +847,7 @@ func TestEngine_PatchTooComplexEscalates(t *testing.T) {
 				// Escalated implement.
 				{
 					result: &runner.RunResult{
-						Output:  json.RawMessage(`{"tests_passed":true}`),
+						Output:  json.RawMessage(`{"tests_passed":true,"commits":[{"hash":"a2","message":"escalated","task_id":"T1"}],"files_changed":[{"path":"a.go","action":"modified"}]}`),
 						RawText: "impl2",
 						CostUSD: 3.00,
 					},
