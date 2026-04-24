@@ -74,6 +74,13 @@ func runHistory(stateDir, ticketKey string, detail bool, phaseFilter string) err
 func renderEventsHistory(meta *pipeline.PipelineMeta, events []pipeline.Event, stateDir string, detail bool, phaseFilter string) error {
 	h := pipeline.BuildHistory(events, stateDir)
 
+	// Populate PromptHash on each entry from the persisted PhaseState in meta.
+	for i := range h.Entries {
+		if ps, ok := meta.Phases[h.Entries[i].Phase]; ok {
+			h.Entries[i].PromptHash = ps.PromptHash
+		}
+	}
+
 	// When --detail or --phase is used, load full outputs.
 	if detail || phaseFilter != "" {
 		h.LoadFullOutputs(stateDir, phaseFilter)
