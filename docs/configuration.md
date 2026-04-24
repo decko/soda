@@ -365,7 +365,7 @@ The default pipeline (`phases.yaml`) also checks `phases_path` in `soda.yaml` be
 |------|--------|----------|
 | `default` | triage → plan → implement → verify → review → submit → monitor | Full pipeline for standard tickets |
 | `quick-fix` | implement → verify → submit | Small, well-understood fixes that don't need triage or planning |
-| `docs-only` | implement → submit | Documentation-only changes |
+| `docs-only` | plan → implement → submit | Documentation-only changes (Sonnet) |
 
 ### Listing available pipelines
 
