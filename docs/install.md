@@ -4,8 +4,9 @@ This page covers all installation methods for soda.
 
 ## Requirements
 
-- **Claude Code CLI** — soda spawns `claude` in each pipeline phase.
-  Install it from [claude.ai/code](https://claude.ai/code).
+- **Claude Code CLI >= 2.1.81** — soda spawns `claude` in each pipeline phase.
+  Install it from [claude.ai/code](https://claude.ai/code). Run `soda doctor`
+  to verify your version meets the minimum requirement.
 - **Go 1.25+** — required for `go install` or building from source.
 - **git** — required for worktree management and commits.
 - **gh** (GitHub) or **glab** (GitLab) — required for PR creation and
