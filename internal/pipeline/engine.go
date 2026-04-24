@@ -654,6 +654,11 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 		return fmt.Errorf("engine: render prompt for %s: %w", phase.Name, err)
 	}
 
+	// Persist prompt content hash for traceability so operators can verify
+	// exactly which prompt was sent to the LLM for each phase execution.
+	promptDigest := sha256.Sum256([]byte(rendered))
+	e.state.Meta().Phases[phase.Name].PromptHash = fmt.Sprintf("%x", promptDigest)
+
 	_ = e.state.WriteLog(phase.Name, "prompt", []byte(rendered))
 
 	// Build runner opts. Tighten budget to the smallest remaining limit.
