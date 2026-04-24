@@ -10,6 +10,79 @@ Each phase runs in a fresh, sandboxed Claude Code session with structured output
 State lives on disk. Context resets between phases. The agent runs inside
 OS-level isolation (Landlock, network namespaces, cgroups).
 
+## Installation
+
+### Go install
+
+```bash
+go install github.com/decko/soda/cmd/soda@latest
+```
+
+Requires Go 1.25+. The installed binary runs without sandbox enforcement (`CGO_ENABLED=0`).
+
+### Binary download
+
+Pre-built binaries are available on the
+[GitHub Releases](https://github.com/decko/soda/releases) page.
+
+| Binary | Platform | Sandbox |
+|--------|----------|---------|
+| `soda-linux-amd64-sandbox` | Linux x86_64 | ✅ full isolation |
+| `soda-linux-arm64` | Linux ARM64 | ❌ no sandbox |
+| `soda-darwin-amd64` | macOS Intel | ❌ no sandbox |
+| `soda-darwin-arm64` | macOS Apple Silicon | ❌ no sandbox |
+
+Binaries with `-sandbox` include kernel-enforced process isolation
+(Landlock + seccomp + cgroups). Without it, soda runs normally but
+skips sandbox enforcement.
+
+**Linux (amd64, with sandbox):**
+
+```bash
+curl -L https://github.com/decko/soda/releases/latest/download/soda-linux-amd64-sandbox -o soda
+chmod +x soda
+sudo mv soda /usr/local/bin/
+```
+
+**Linux (arm64):**
+
+```bash
+curl -L https://github.com/decko/soda/releases/latest/download/soda-linux-arm64 -o soda
+chmod +x soda
+sudo mv soda /usr/local/bin/
+```
+
+**macOS (Apple Silicon):**
+
+```bash
+curl -L https://github.com/decko/soda/releases/latest/download/soda-darwin-arm64 -o soda
+chmod +x soda
+sudo mv soda /usr/local/bin/
+```
+
+**macOS (Intel):**
+
+```bash
+curl -L https://github.com/decko/soda/releases/latest/download/soda-darwin-amd64 -o soda
+chmod +x soda
+sudo mv soda /usr/local/bin/
+```
+
+Verify the download against `checksums.txt` included in each release.
+
+### Build from source
+
+```bash
+git clone https://github.com/decko/soda
+cd soda
+CGO_ENABLED=0 go build -o soda ./cmd/soda
+```
+
+`CGO_ENABLED=0` produces a fully static binary without sandbox support.
+The sandbox (Landlock + seccomp + cgroups) requires CGO and the
+`go-arapuca` native library — see [docs/install.md](docs/install.md)
+for CGO build instructions.
+
 ## Status
 
 Design phase. Not yet implemented.
