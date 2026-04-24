@@ -40,7 +40,7 @@ Files that define project scope, principles, and history.
 | [../CONSTITUTION.md](../CONSTITUTION.md) | Project principles and values | contributor |
 | [../CLAUDE.md](../CLAUDE.md) | Claude Code auto-loaded summary | contributor (AI) |
 | [../AGENTS.md](../AGENTS.md) | AI agent context | contributor (AI) |
-| [../CHANGELOG.md](../CHANGELOG.md) | Release history | user / contributor |
+| [../CHANGELOG.md](../CHANGELOG.md) | Release history (#369) | user / contributor |
 | [../config.example.yaml](../config.example.yaml) | Fully annotated configuration example | user |
 | [../phases.yaml](../phases.yaml) | Pipeline phase definitions | user / contributor |
 

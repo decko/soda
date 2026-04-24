@@ -8,7 +8,7 @@
 
 **Tech Stack:** Go 1.25, `gopkg.in/yaml.v3` (first external dep), `text/template`, `os/exec` (for git)
 
-**Spec:** `docs/superpowers/specs/2026-04-11-pipeline-engine-design.md`
+**Spec:** `docs/internal/specs/2026-04-11-pipeline-engine-design.md`
 
 ---
 
