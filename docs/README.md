@@ -17,7 +17,7 @@ Guides for people running SODA against their own projects.
 | [cli-reference.md](cli-reference.md) | Full CLI command reference | planned |
 | [pipelines.md](pipelines.md) | Named pipelines, custom pipelines, phase customization | planned |
 | [plugin.md](plugin.md) | Claude Code plugin: install, commands, agent | planned |
-| [troubleshooting.md](troubleshooting.md) | Top failure modes and fixes | planned |
+| [troubleshooting.md](troubleshooting.md) | Top failure modes and fixes | available |
 
 ## Contributor docs
 
