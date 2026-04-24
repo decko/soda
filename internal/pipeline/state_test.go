@@ -216,6 +216,30 @@ func TestMarkRunning(t *testing.T) {
 			t.Errorf("duration after rerun = %d, want 0", ps.DurationMs)
 		}
 	})
+
+	t.Run("rerun_zeroes_prompt_hash", func(t *testing.T) {
+		dir := t.TempDir()
+		state, _ := LoadOrCreate(dir, "T-4")
+
+		state.MarkRunning("triage")
+		// Simulate engine setting PromptHash after render.
+		state.meta.Phases["triage"].PromptHash = "abc123"
+		state.MarkCompleted("triage")
+
+		// Verify PromptHash is set before re-run.
+		ps := state.meta.Phases["triage"]
+		if ps.PromptHash != "abc123" {
+			t.Errorf("PromptHash before rerun = %q, want %q", ps.PromptHash, "abc123")
+		}
+
+		// Re-run should clear PromptHash.
+		state.MarkRunning("triage")
+
+		ps = state.meta.Phases["triage"]
+		if ps.PromptHash != "" {
+			t.Errorf("PromptHash after rerun = %q, want empty", ps.PromptHash)
+		}
+	})
 }
 
 func TestMarkCompleted(t *testing.T) {
