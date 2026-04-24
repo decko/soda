@@ -74,6 +74,32 @@ func TestRunDoctor_AllPass(t *testing.T) {
 	}
 }
 
+func TestRunDoctor_OptionalOnlyFailures_NoError(t *testing.T) {
+	env := allPassEnv()
+	// Only gh and node are missing — both are optional.
+	env.LookPath = func(file string) (string, error) {
+		if file == "gh" || file == "node" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + file, nil
+	}
+	var buf bytes.Buffer
+	err := runDoctor(&buf, env)
+	if err != nil {
+		t.Fatalf("expected no error when only optional checks fail, got: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "All checks passed") {
+		t.Errorf("expected 'All checks passed', got:\n%s", out)
+	}
+	if !strings.Contains(out, "⚠ gh:") {
+		t.Errorf("expected ⚠ marker for gh, got:\n%s", out)
+	}
+	if !strings.Contains(out, "⚠ node:") {
+		t.Errorf("expected ⚠ marker for node, got:\n%s", out)
+	}
+}
+
 func TestRunDoctor_SomeFailures(t *testing.T) {
 	env := allPassEnv()
 	env.LookPath = func(file string) (string, error) {
@@ -242,6 +268,9 @@ func TestCheckGh_NotFound(t *testing.T) {
 	if !strings.Contains(r.detail, "optional") {
 		t.Errorf("expected detail to mention optional, got: %q", r.detail)
 	}
+	if r.required {
+		t.Error("expected gh check to be optional (required=false)")
+	}
 }
 
 // --- checkNode tests ---
@@ -268,6 +297,9 @@ func TestCheckNode_NotFound(t *testing.T) {
 	}
 	if !strings.Contains(r.detail, "optional") {
 		t.Errorf("expected detail to mention optional, got: %q", r.detail)
+	}
+	if r.required {
+		t.Error("expected node check to be optional (required=false)")
 	}
 }
 
