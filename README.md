@@ -55,24 +55,30 @@ and per-generation limits are also available.
 go install github.com/decko/soda/cmd/soda@latest
 ```
 
-**Binary release** — download a pre-built binary for your platform from
-[GitHub Releases](https://github.com/decko/soda/releases):
-
-| Platform | File |
-|----------|------|
-| Linux amd64 (with sandbox) | `soda-linux-amd64-sandbox` |
-| Linux arm64 | `soda-linux-arm64` |
-| macOS Intel | `soda-darwin-amd64` |
-| macOS Apple Silicon | `soda-darwin-arm64` |
-
-**Build from source**:
+**Binary download** — copy-paste for your platform:
 
 ```bash
-CGO_ENABLED=0 go build -o soda ./cmd/soda
+# Linux (amd64, with sandbox)
+curl -L https://github.com/decko/soda/releases/latest/download/soda-linux-amd64-sandbox -o soda && chmod +x soda
+
+# Linux (arm64)
+curl -L https://github.com/decko/soda/releases/latest/download/soda-linux-arm64 -o soda && chmod +x soda
+
+# macOS (Apple Silicon)
+curl -L https://github.com/decko/soda/releases/latest/download/soda-darwin-arm64 -o soda && chmod +x soda
+
+# macOS (Intel)
+curl -L https://github.com/decko/soda/releases/latest/download/soda-darwin-amd64 -o soda && chmod +x soda
 ```
 
-> **Note:** Sandbox features (Landlock, seccomp, cgroups) require
-> `CGO_ENABLED=1`. The binary works without them — sandbox is optional.
+Move to your PATH: `sudo mv soda /usr/local/bin/`
+
+See [docs/install.md](docs/install.md) for build-from-source, CGO/sandbox
+builds, and checksum verification.
+
+> **Note:** Sandbox features (Landlock, seccomp, cgroups) require the
+> `-sandbox` binary (Linux amd64 only). All other binaries work without
+> sandbox — it's optional.
 
 ## Quick Start
 
