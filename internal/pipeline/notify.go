@@ -53,14 +53,22 @@ const EventNotifyFailed = "notify_failed"
 // EventNotifySuccess is emitted when a notification callback succeeds.
 const EventNotifySuccess = "notify_success"
 
+// phaseTokens holds the per-phase token counts included in webhook payloads.
+type phaseTokens struct {
+	TokensIn      int64 `json:"tokens_in"`
+	TokensOut     int64 `json:"tokens_out"`
+	CacheTokensIn int64 `json:"cache_tokens_in"`
+}
+
 // webhookPayload is the JSON body sent to the configured webhook URL.
 type webhookPayload struct {
-	Ticket    string       `json:"ticket"`
-	Status    NotifyStatus `json:"status"`
-	Branch    string       `json:"branch,omitempty"`
-	PRURL     string       `json:"pr_url,omitempty"`
-	TotalCost float64      `json:"total_cost"`
-	Error     string       `json:"error,omitempty"`
+	Ticket    string                 `json:"ticket"`
+	Status    NotifyStatus           `json:"status"`
+	Branch    string                 `json:"branch,omitempty"`
+	PRURL     string                 `json:"pr_url,omitempty"`
+	TotalCost float64                `json:"total_cost"`
+	Error     string                 `json:"error,omitempty"`
+	Tokens    map[string]phaseTokens `json:"tokens,omitempty"`
 }
 
 // deriveStatus determines the notification status from the pipeline run error
@@ -101,6 +109,19 @@ func (e *Engine) buildWebhookPayload(status NotifyStatus, runErr error) webhookP
 	}
 	// Extract PR URL from submit result.
 	p.PRURL = e.extractPRURL()
+	// Populate per-phase token counts with cache breakdown.
+	if len(meta.Phases) > 0 {
+		p.Tokens = make(map[string]phaseTokens, len(meta.Phases))
+		for name, ps := range meta.Phases {
+			if ps != nil {
+				p.Tokens[name] = phaseTokens{
+					TokensIn:      ps.TokensIn,
+					TokensOut:     ps.TokensOut,
+					CacheTokensIn: ps.CacheTokensIn,
+				}
+			}
+		}
+	}
 	return p
 }
 
