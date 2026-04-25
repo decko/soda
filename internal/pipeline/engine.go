@@ -257,7 +257,7 @@ func (e *Engine) ensureWorktree(ctx context.Context) error {
 }
 
 // Run executes the full pipeline from the beginning, skipping completed phases.
-func (e *Engine) Run(ctx context.Context) error {
+func (e *Engine) Run(ctx context.Context) (runErr error) {
 	if err := e.state.AcquireLock(); err != nil {
 		return fmt.Errorf("engine: %w", err)
 	}
@@ -266,6 +266,9 @@ func (e *Engine) Run(ctx context.Context) error {
 	// Start broadcast socket for live streaming to attach clients.
 	e.startBroadcaster()
 	defer e.stopBroadcaster()
+
+	// Fire notification hooks on exit (best-effort).
+	defer func() { e.notifyOnFinish(runErr) }()
 
 	// Apply pipeline-level timeout if configured.
 	ctx, cancel := e.applyPipelineTimeout(ctx)
@@ -329,7 +332,7 @@ func (e *Engine) Run(ctx context.Context) error {
 }
 
 // Resume restarts the pipeline from the named phase, skipping prior completed phases.
-func (e *Engine) Resume(ctx context.Context, fromPhase string) error {
+func (e *Engine) Resume(ctx context.Context, fromPhase string) (runErr error) {
 	startIdx := -1
 	for i, phase := range e.config.Pipeline.Phases {
 		if phase.Name == fromPhase {
@@ -349,6 +352,9 @@ func (e *Engine) Resume(ctx context.Context, fromPhase string) error {
 	// Start broadcast socket for live streaming to attach clients.
 	e.startBroadcaster()
 	defer e.stopBroadcaster()
+
+	// Fire notification hooks on exit (best-effort).
+	defer func() { e.notifyOnFinish(runErr) }()
 
 	// Apply pipeline-level timeout if configured.
 	ctx, cancel := e.applyPipelineTimeout(ctx)
