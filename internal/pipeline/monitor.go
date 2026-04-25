@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -29,6 +30,7 @@ type MonitorState struct {
 	MaxResponseRounds int           `json:"max_response_rounds"`
 	LastCommentID     string        `json:"last_comment_id,omitempty"`
 	LastCIStatus      string        `json:"last_ci_status,omitempty"`
+	MergePending      bool          `json:"merge_pending,omitempty"`
 	LastPolledAt      time.Time     `json:"last_polled_at"`
 	StartedAt         time.Time     `json:"started_at"`
 	Status            MonitorStatus `json:"status"`
@@ -47,12 +49,37 @@ type PRPoller interface {
 	// PostComment posts a comment to the pull request. Used for canned
 	// acknowledgments and reply summaries.
 	PostComment(ctx context.Context, prURL string, body string) error
+	// MergePR merges the pull request using the specified method
+	// ("merge", "squash", or "rebase"). Returns ErrMergeConflict if the
+	// merge fails due to conflicts, or ErrPRClosed if the PR is already
+	// closed or merged.
+	MergePR(ctx context.Context, prURL string, method string) error
 }
+
+// MergeValidator is an optional interface that PRPoller implementations may
+// satisfy to allow callers to check merge prerequisites (e.g., branch
+// protection rules) before attempting a merge.
+type MergeValidator interface {
+	// ValidateMergePrerequisites checks whether the PR's target branch has
+	// any protection rules that would prevent merging (e.g.,
+	// dismiss_stale_reviews). Returns nil if merging is allowed.
+	ValidateMergePrerequisites(ctx context.Context, prURL string) error
+}
+
+// ErrMergeConflict is returned by MergePR when the merge fails due to
+// merge conflicts on the target branch.
+var ErrMergeConflict = errors.New("monitor: merge conflict")
+
+// ErrPRClosed is returned by MergePR when the pull request is already
+// closed or merged and cannot be merged.
+var ErrPRClosed = errors.New("monitor: pull request is closed")
 
 // PRStatus holds the current state of a pull request.
 type PRStatus struct {
-	State    string // "open", "closed", "merged"
-	Approved bool   // true if at least one approving review
+	State          string // "open", "closed", "merged"
+	Approved       bool   // true if at least one approving review
+	ReviewDecision string // raw review decision: "APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED", ""
+	HeadSHA        string // SHA of the PR's head commit (headRefOid)
 }
 
 // PRComment represents a review comment on a pull request.
@@ -67,8 +94,9 @@ type PRComment struct {
 
 // CIStatus holds the aggregate CI status and per-job details.
 type CIStatus struct {
-	Overall string      // "success", "failure", "pending", "unknown"
-	Jobs    []CIJobInfo // individual job details
+	Overall   string      // "success", "failure", "pending", "unknown"
+	Jobs      []CIJobInfo // individual job details
+	CommitSHA string      // SHA of the commit these checks ran against
 }
 
 // CIJobInfo describes a single CI job/check.

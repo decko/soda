@@ -294,6 +294,11 @@ func (p *GitHubPRPoller) PostComment(ctx context.Context, prURL string, body str
 	return nil
 }
 
+// MergePR merges the pull request using the specified method.
+func (p *GitHubPRPoller) MergePR(ctx context.Context, prURL string, method string) error {
+	return fmt.Errorf("monitor: MergePR not yet implemented")
+}
+
 // filterCommentsAfterID returns comments that appear after afterID in the
 // sorted comment list. If afterID is empty, all comments are returned.
 // If afterID is not found (e.g., deleted comment), returns nil to avoid

@@ -93,6 +93,10 @@ func (m *mockPRPoller) PostComment(ctx context.Context, prURL string, body strin
 	return m.postCommentErr
 }
 
+func (m *mockPRPoller) MergePR(ctx context.Context, prURL string, method string) error {
+	return nil
+}
+
 // setupMonitorEngine creates an engine configured for monitor testing.
 // The submit phase is pre-completed with a PR URL.
 func setupMonitorEngine(t *testing.T, poller PRPoller, pollingConfig *PollingConfig, opts ...func(*EngineConfig)) (*Engine, *State, *[]Event) {
