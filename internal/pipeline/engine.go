@@ -64,6 +64,7 @@ type EngineConfig struct {
 	SelfUser               string            // PR author username for self-comment filtering
 	BotUsers               []string          // known bot usernames to filter
 	Stderr                 io.Writer         // destination for warning messages; defaults to os.Stderr
+	Notify                 NotifyConfig      // notification settings for pipeline completion; zero value disables
 }
 
 // maxReworkCycles returns the configured max rework cycles, defaulting to DefaultMaxReworkCycles.
