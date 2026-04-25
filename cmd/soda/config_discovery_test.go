@@ -209,6 +209,41 @@ func TestLoadConfig_ExplicitFlagTakesPrecedence(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_PhasesAndPromptsPath(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "custom.yaml")
+
+	cfg := config.DefaultConfig()
+	cfg.PhasesPath = "/some/phases.yaml"
+	cfg.PromptsPath = "/some/prompts"
+	cfg.Mode = "autonomous"
+	data, err := config.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfgFile, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var got *config.Config
+	root := configDiscoveryCmd("", func(cmd *cobra.Command) error {
+		var err error
+		got, err = loadConfig(cmd)
+		return err
+	})
+	root.SetArgs([]string{"child", "--config", cfgFile})
+
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if got.PhasesPath != "/some/phases.yaml" {
+		t.Errorf("PhasesPath = %q, want %q", got.PhasesPath, "/some/phases.yaml")
+	}
+	if got.PromptsPath != "/some/prompts" {
+		t.Errorf("PromptsPath = %q, want %q", got.PromptsPath, "/some/prompts")
+	}
+}
+
 func TestLoadConfig_MalformedYAML(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
