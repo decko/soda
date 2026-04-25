@@ -133,14 +133,20 @@ func (e *WorktreeError) Unwrap() error { return e.Err }
 
 // PromptError is returned when a phase prompt cannot be loaded or rendered.
 // It wraps the underlying error and records the phase and operation for
-// diagnostics.
+// diagnostics. When the error originates from a parallel-review reviewer,
+// Reviewer is set to identify which reviewer's prompt failed.
 type PromptError struct {
 	Phase     string
+	Reviewer  string // reviewer name when error originates from a parallel-review reviewer; empty for regular phases
 	Operation string // "load" or "render"
 	Err       error
 }
 
 func (e *PromptError) Error() string {
+	if e.Reviewer != "" {
+		return fmt.Sprintf("engine: prompt %s for phase %s (reviewer %s): %s",
+			e.Operation, e.Phase, e.Reviewer, e.Err)
+	}
 	return fmt.Sprintf("engine: prompt %s for phase %s: %s",
 		e.Operation, e.Phase, e.Err)
 }

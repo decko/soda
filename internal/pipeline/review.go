@@ -420,7 +420,7 @@ func (e *Engine) runReviewer(ctx context.Context, phase PhaseConfig, reviewer Re
 			Kind:  EventReviewerFailed,
 			Data:  map[string]any{"reviewer": reviewer.Name, "error": err.Error()},
 		})
-		sendResult(reviewerResult{Name: reviewer.Name, Err: &PromptError{Phase: phase.Name, Operation: "load", Err: err}})
+		sendResult(reviewerResult{Name: reviewer.Name, Err: &PromptError{Phase: phase.Name, Reviewer: reviewer.Name, Operation: "load", Err: err}})
 		return
 	}
 
@@ -431,7 +431,7 @@ func (e *Engine) runReviewer(ctx context.Context, phase PhaseConfig, reviewer Re
 			Kind:  EventReviewerFailed,
 			Data:  map[string]any{"reviewer": reviewer.Name, "error": err.Error()},
 		})
-		sendResult(reviewerResult{Name: reviewer.Name, Err: &PromptError{Phase: phase.Name, Operation: "render", Err: err}})
+		sendResult(reviewerResult{Name: reviewer.Name, Err: &PromptError{Phase: phase.Name, Reviewer: reviewer.Name, Operation: "render", Err: err}})
 		return
 	}
 

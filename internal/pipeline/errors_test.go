@@ -361,6 +361,9 @@ func TestPromptError(t *testing.T) {
 		if !strings.Contains(msg, "template not found") {
 			t.Errorf("Error() should contain inner error, got: %s", msg)
 		}
+		if strings.Contains(msg, "reviewer") {
+			t.Errorf("Error() should NOT contain reviewer when Reviewer is empty, got: %s", msg)
+		}
 		if !errors.Is(err, inner) {
 			t.Error("Unwrap should return inner error")
 		}
@@ -374,6 +377,9 @@ func TestPromptError(t *testing.T) {
 		}
 		if target.Operation != "load" {
 			t.Errorf("Operation = %q, want %q", target.Operation, "load")
+		}
+		if target.Reviewer != "" {
+			t.Errorf("Reviewer = %q, want empty", target.Reviewer)
 		}
 	})
 
@@ -390,6 +396,36 @@ func TestPromptError(t *testing.T) {
 		}
 		if !strings.Contains(msg, "plan") {
 			t.Errorf("Error() should contain phase name, got: %s", msg)
+		}
+	})
+
+	t.Run("with_reviewer", func(t *testing.T) {
+		err := &PromptError{
+			Phase:     "review",
+			Reviewer:  "go-specialist",
+			Operation: "load",
+			Err:       inner,
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "review") {
+			t.Errorf("Error() should contain phase name, got: %s", msg)
+		}
+		if !strings.Contains(msg, "go-specialist") {
+			t.Errorf("Error() should contain reviewer name, got: %s", msg)
+		}
+		if !strings.Contains(msg, "load") {
+			t.Errorf("Error() should contain operation, got: %s", msg)
+		}
+
+		var target *PromptError
+		if !errors.As(err, &target) {
+			t.Error("errors.As should match PromptError")
+		}
+		if target.Reviewer != "go-specialist" {
+			t.Errorf("Reviewer = %q, want %q", target.Reviewer, "go-specialist")
+		}
+		if target.Phase != "review" {
+			t.Errorf("Phase = %q, want %q", target.Phase, "review")
 		}
 	})
 }
