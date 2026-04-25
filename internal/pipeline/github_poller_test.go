@@ -323,48 +323,6 @@ func TestIntegration_GetNewComments(t *testing.T) {
 	}
 }
 
-// TestHelperProcess is not a real test — it is used by other tests that need
-// a fake "gh" binary. When GO_TEST_HELPER_PROCESS=1 is set, the test acts
-// as the fake gh binary, reading GH_HELPER_* env vars to decide what to output.
-func TestHelperProcess(t *testing.T) {
-	if os.Getenv("GO_TEST_HELPER_PROCESS") != "1" {
-		return
-	}
-	// Output the configured response and exit with the configured code.
-	stdout := os.Getenv("GH_HELPER_STDOUT")
-	stderr := os.Getenv("GH_HELPER_STDERR")
-	exitCode := 0
-	if ec := os.Getenv("GH_HELPER_EXIT_CODE"); ec != "" {
-		fmt.Sscanf(ec, "%d", &exitCode)
-	}
-	if stdout != "" {
-		fmt.Fprint(os.Stdout, stdout)
-	}
-	if stderr != "" {
-		fmt.Fprint(os.Stderr, stderr)
-	}
-	os.Exit(exitCode)
-}
-
-// helperCmd builds an os/exec-compatible command string that invokes the
-// test binary as a fake gh CLI. The caller sets GH_HELPER_* env vars to
-// control the fake's output.
-func helperCmd(t *testing.T) string {
-	t.Helper()
-	return os.Args[0] // the test binary itself
-}
-
-// helperEnv returns environment variables that configure the test helper
-// process to produce the given stdout/stderr and exit code.
-func helperEnv(stdout, stderr string, exitCode int) []string {
-	return []string{
-		"GO_TEST_HELPER_PROCESS=1",
-		fmt.Sprintf("GH_HELPER_STDOUT=%s", stdout),
-		fmt.Sprintf("GH_HELPER_STDERR=%s", stderr),
-		fmt.Sprintf("GH_HELPER_EXIT_CODE=%d", exitCode),
-	}
-}
-
 func TestMergePR_Success(t *testing.T) {
 	// Build a fake gh binary script that succeeds.
 	binPath := writeFakeGH(t, "", "", 0)
