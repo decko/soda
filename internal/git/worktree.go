@@ -13,8 +13,8 @@ import (
 // RepoRoot returns the absolute path of the main repository root,
 // even when called from inside a worktree. Uses --git-common-dir
 // which always points to the shared .git directory.
-func RepoRoot(dir string) (string, error) {
-	cmd := exec.Command("git", "rev-parse", "--git-common-dir")
+func RepoRoot(ctx context.Context, dir string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--git-common-dir")
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {

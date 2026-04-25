@@ -180,7 +180,7 @@ func runPipeline(cfg *config.Config, opts pipelineOpts) error {
 	// Resolve working directory to the main repo root so worktrees,
 	// state, and all paths are always relative to the root, even when
 	// soda is invoked from inside an existing worktree.
-	workDir, err := git.RepoRoot(".")
+	workDir, err := git.RepoRoot(ctx, ".")
 	if err != nil {
 		return fmt.Errorf("run: resolve repo root: %w", err)
 	}

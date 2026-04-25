@@ -33,7 +33,7 @@ func TestRepoRoot(t *testing.T) {
 	t.Run("returns_repo_root", func(t *testing.T) {
 		repoDir := initGitRepo(t)
 
-		got, err := RepoRoot(repoDir)
+		got, err := RepoRoot(context.Background(), repoDir)
 		if err != nil {
 			t.Fatalf("RepoRoot: %v", err)
 		}
@@ -50,7 +50,7 @@ func TestRepoRoot(t *testing.T) {
 			t.Fatalf("MkdirAll: %v", err)
 		}
 
-		got, err := RepoRoot(subDir)
+		got, err := RepoRoot(context.Background(), subDir)
 		if err != nil {
 			t.Fatalf("RepoRoot: %v", err)
 		}
@@ -68,7 +68,7 @@ func TestRepoRoot(t *testing.T) {
 			t.Fatalf("CreateWorktree: %v", err)
 		}
 
-		got, err := RepoRoot(wtPath)
+		got, err := RepoRoot(context.Background(), wtPath)
 		if err != nil {
 			t.Fatalf("RepoRoot: %v", err)
 		}
@@ -92,7 +92,7 @@ func TestRepoRoot(t *testing.T) {
 			t.Fatalf("Chdir: %v", err)
 		}
 
-		got, err := RepoRoot(".")
+		got, err := RepoRoot(context.Background(), ".")
 		if err != nil {
 			t.Fatalf("RepoRoot: %v", err)
 		}
@@ -106,9 +106,21 @@ func TestRepoRoot(t *testing.T) {
 
 	t.Run("errors_outside_git_repo", func(t *testing.T) {
 		dir := t.TempDir()
-		_, err := RepoRoot(dir)
+		_, err := RepoRoot(context.Background(), dir)
 		if err == nil {
 			t.Fatal("expected error outside git repo")
+		}
+	})
+
+	t.Run("respects_context_cancellation", func(t *testing.T) {
+		repoDir := initGitRepo(t)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		_, err := RepoRoot(ctx, repoDir)
+		if err == nil {
+			t.Fatal("expected error from cancelled context")
 		}
 	})
 }
