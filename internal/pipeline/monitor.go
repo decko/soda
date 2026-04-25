@@ -23,17 +23,19 @@ const (
 // MonitorState holds the persistent state of the monitor polling loop.
 // Stored as .soda/<ticket>/monitor.json.
 type MonitorState struct {
-	PRURL             string        `json:"pr_url"`
-	PollCount         int           `json:"poll_count"`
-	ResponseRounds    int           `json:"response_rounds"`
-	ReplyRounds       int           `json:"reply_rounds"`
-	MaxResponseRounds int           `json:"max_response_rounds"`
-	LastCommentID     string        `json:"last_comment_id,omitempty"`
-	LastCIStatus      string        `json:"last_ci_status,omitempty"`
-	MergePending      bool          `json:"merge_pending,omitempty"`
-	LastPolledAt      time.Time     `json:"last_polled_at"`
-	StartedAt         time.Time     `json:"started_at"`
-	Status            MonitorStatus `json:"status"`
+	PRURL             string `json:"pr_url"`
+	PollCount         int    `json:"poll_count"`
+	ResponseRounds    int    `json:"response_rounds"`
+	ReplyRounds       int    `json:"reply_rounds"`
+	MaxResponseRounds int    `json:"max_response_rounds"`
+	LastCommentID     string `json:"last_comment_id,omitempty"`
+	LastCIStatus      string `json:"last_ci_status,omitempty"`
+	// MergePending is reserved for auto-merge orchestration. It will be set
+	// when a merge has been requested but is waiting for CI or review gates.
+	MergePending bool          `json:"merge_pending,omitempty"`
+	LastPolledAt time.Time     `json:"last_polled_at"`
+	StartedAt    time.Time     `json:"started_at"`
+	Status       MonitorStatus `json:"status"`
 }
 
 // PRPoller polls a pull request for changes.
