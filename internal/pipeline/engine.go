@@ -1412,8 +1412,27 @@ func (e *Engine) buildPipelineResult(runErr error) PipelineResult {
 	status := "success"
 	var errMsg string
 	if runErr != nil {
-		status = "failed"
 		errMsg = runErr.Error()
+		var pte *PipelineTimeoutError
+		if errors.As(runErr, &pte) {
+			status = "timeout"
+		} else {
+			// Check for partial: some phases completed, some failed.
+			hasCompleted := false
+			hasFailed := false
+			for _, ps := range meta.Phases {
+				if ps.Status == PhaseCompleted {
+					hasCompleted = true
+				} else if ps.Status == PhaseFailed {
+					hasFailed = true
+				}
+			}
+			if hasCompleted && hasFailed {
+				status = "partial"
+			} else {
+				status = "failed"
+			}
+		}
 	}
 
 	var duration string
