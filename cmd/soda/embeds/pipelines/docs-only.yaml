@@ -1,9 +1,26 @@
 # SODA Docs-Only Pipeline
 #
-# A minimal pipeline for documentation-only changes that skip triage,
-# planning, and verification. Two phases: implement → submit.
+# A lightweight pipeline for documentation-only changes that skip triage
+# and verification. Three phases: plan → implement → submit.
 
 phases:
+  - name: plan
+    prompt: prompts/docs-plan.md
+    schema: |
+      {"type":"object","properties":{"ticket_key":{"type":"string"},"approach":{"type":"string"},"tasks":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"description":{"type":"string"},"files":{"type":"array","items":{"type":"string"}},"done_when":{"type":"string"},"depends_on":{"type":"array","items":{"type":"string"}}},"required":["id","description","files","done_when"]}},"verification":{"type":"object","properties":{"commands":{"type":"array","items":{"type":"string"}},"manual_steps":{"type":"array","items":{"type":"string"}}},"required":["commands"]},"deviations":{"type":"array","items":{"type":"string"}}},"required":["ticket_key","approach","tasks","verification"]}
+    tools:
+      - Read
+      - Glob
+      - Grep
+      - Bash(git:*)
+      - Bash(ls:*)
+    timeout: 5m
+    retry:
+      transient: 2
+      parse: 1
+      semantic: 1
+    depends_on: []
+
   - name: implement
     prompt: prompts/docs-implement.md
     schema: |
@@ -20,7 +37,8 @@ phases:
       transient: 2
       parse: 1
       semantic: 0
-    depends_on: []
+    depends_on:
+      - plan
 
   - name: submit
     prompt: prompts/submit.md
