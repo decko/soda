@@ -10,7 +10,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 
 	"github.com/decko/soda/internal/claude"
@@ -73,9 +72,7 @@ func (r *Runner) Run(ctx context.Context, opts runner.RunOpts) (*runner.RunResul
 	}
 
 	// Create sandbox temp dir first — used for system prompt file and HOME/TMPDIR.
-	// Sanitize phase name: replace slashes with dashes since MakeTmpDir uses
-	// the name in a path (e.g. "review/go-specialist" → "review-go-specialist").
-	tmpPhase := strings.ReplaceAll(opts.Phase, "/", "-")
+	tmpPhase := sanitizePhase(opts.Phase)
 	tmpDir, err := arapuca.MakeTmpDir(tmpPhase)
 	if err != nil {
 		return nil, fmt.Errorf("sandbox: create temp dir: %w", err)
@@ -118,22 +115,7 @@ func (r *Runner) Run(ctx context.Context, opts runner.RunOpts) (*runner.RunResul
 	args = append(args, "-p", opts.UserPrompt)
 
 	// Build sandbox profile.
-	readPaths := systemReadPaths()
-	readPaths = append(readPaths, r.claudeRead...)
-	readPaths = append(readPaths, opts.WorkDir)
-	readPaths = append(readPaths, r.config.ExtraReadPaths...)
-
-	// Allow SSH agent socket access for git push.
-	if sshSock := os.Getenv("SSH_AUTH_SOCK"); sshSock != "" {
-		readPaths = append(readPaths, filepath.Dir(sshSock))
-	}
-
-	writePaths := []string{opts.WorkDir}
-	writePaths = append(writePaths, r.config.ExtraWritePaths...)
-
-	// Temp dir needs both read and write access.
-	readPaths = append(readPaths, tmpDir)
-	writePaths = append(writePaths, tmpDir)
+	sp := buildSandboxPaths(opts.WorkDir, tmpDir, r.claudeRead, r.config.ExtraReadPaths, r.config.ExtraWritePaths)
 
 	useNetNS := r.config.UseNetNS
 	var llmProxy *proxy.Proxy
@@ -189,12 +171,12 @@ func (r *Runner) Run(ctx context.Context, opts runner.RunOpts) (*runner.RunResul
 		}
 		defer llmProxy.Close()
 
-		proxyBaseURL = fmt.Sprintf("http://%s", llmProxy.Addr().String())
+		proxyBaseURL = buildProxyURL(llmProxy.Addr().String())
 	}
 
 	profile := arapuca.Profile{
-		ReadPaths:     readPaths,
-		WritePaths:    writePaths,
+		ReadPaths:     sp.ReadPaths,
+		WritePaths:    sp.WritePaths,
 		MaxMemoryMB:   r.config.MemoryMB,
 		MaxCPUPct:     r.config.CPUPercent,
 		MaxPIDs:       r.config.MaxPIDs,
