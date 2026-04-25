@@ -91,6 +91,8 @@ const (
 	EventImplementNoChanges       = "implement_no_changes"
 	EventTokenBudgetWarning       = "token_budget_warning"
 	EventTokenBudgetCalibration   = "token_budget_calibration"
+	EventNotifySuccess            = "notify_success"
+	EventNotifyFailed             = "notify_failed"
 )
 
 // FormatEvent formats an event as a compact, human-readable line:

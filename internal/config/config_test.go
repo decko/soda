@@ -132,6 +132,22 @@ func TestLoad(t *testing.T) {
 				if cfg.Monitor.CODEOWNERS != ".github/CODEOWNERS" {
 					t.Errorf("Monitor.CODEOWNERS = %q, want %q", cfg.Monitor.CODEOWNERS, ".github/CODEOWNERS")
 				}
+				// Notify config
+				if cfg.Notify.Webhook == nil {
+					t.Fatal("Notify.Webhook is nil, want non-nil")
+				}
+				if cfg.Notify.Webhook.URL != "https://hooks.example.com/soda" {
+					t.Errorf("Notify.Webhook.URL = %q, want %q", cfg.Notify.Webhook.URL, "https://hooks.example.com/soda")
+				}
+				if cfg.Notify.Webhook.Headers["Authorization"] != "Bearer secret-token" {
+					t.Errorf("Notify.Webhook.Headers[Authorization] = %q, want %q", cfg.Notify.Webhook.Headers["Authorization"], "Bearer secret-token")
+				}
+				if cfg.Notify.Script == nil {
+					t.Fatal("Notify.Script is nil, want non-nil")
+				}
+				if cfg.Notify.Script.Command != "./scripts/on-complete.sh" {
+					t.Errorf("Notify.Script.Command = %q, want %q", cfg.Notify.Script.Command, "./scripts/on-complete.sh")
+				}
 			},
 		},
 		{
@@ -153,6 +169,13 @@ func TestLoad(t *testing.T) {
 				}
 				if len(cfg.Monitor.BotUsers) != 0 {
 					t.Errorf("len(Monitor.BotUsers) = %d, want 0", len(cfg.Monitor.BotUsers))
+				}
+				// Notify config should be zero-valued when not in file.
+				if cfg.Notify.Webhook != nil {
+					t.Errorf("Notify.Webhook = %v, want nil", cfg.Notify.Webhook)
+				}
+				if cfg.Notify.Script != nil {
+					t.Errorf("Notify.Script = %v, want nil", cfg.Notify.Script)
 				}
 			},
 		},

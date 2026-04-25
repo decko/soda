@@ -65,6 +65,7 @@ type EngineConfig struct {
 	BotUsers               []string          // known bot usernames to filter
 	Stderr                 io.Writer         // destination for warning messages; defaults to os.Stderr
 	TokenBudget            TokenBudgetConfig // prompt token budget estimation; zero value disables checks
+	Notify                 NotifyConfig      // notification hooks fired on pipeline completion; zero value disables
 }
 
 // TokenBudgetConfig configures the prompt-size estimation check.
@@ -108,6 +109,7 @@ type Engine struct {
 	inCheckpoint     bool      // true while blocked on <-confirmCh; guarded by pauseMu
 	pipelineStart    time.Time // wall-clock time when applyPipelineTimeout was called
 	pipelineDeadline time.Time // deadline set by applyPipelineTimeout; zero if no timeout
+	notifier         *Notifier // pipeline completion notifier; nil means no notifications
 }
 
 // NewEngine creates an Engine with sensible defaults for sleep and jitter.
@@ -125,10 +127,11 @@ func NewEngine(r runner.Runner, state *State, cfg EngineConfig) *Engine {
 	}
 
 	e := &Engine{
-		runner: r,
-		config: cfg,
-		state:  state,
-		apiSem: NewSemaphore(cfg.MaxAPIConcurrency),
+		runner:   r,
+		config:   cfg,
+		state:    state,
+		apiSem:   NewSemaphore(cfg.MaxAPIConcurrency),
+		notifier: NewNotifier(cfg.Notify),
 	}
 	e.pauseCond = sync.NewCond(&e.pauseMu)
 
@@ -328,10 +331,12 @@ func (e *Engine) Run(ctx context.Context) error {
 		if !errors.As(wrapped, &pte) {
 			e.emit(Event{Kind: EventEngineFailed, Data: map[string]any{"error": wrapped.Error()}})
 		}
+		e.sendNotification(wrapped)
 		return wrapped
 	}
 
 	e.emit(Event{Kind: EventEngineCompleted})
+	e.sendNotification(nil)
 	return nil
 }
 
@@ -404,10 +409,12 @@ func (e *Engine) Resume(ctx context.Context, fromPhase string) error {
 		if !errors.As(wrapped, &pte) {
 			e.emit(Event{Kind: EventEngineFailed, Data: map[string]any{"error": wrapped.Error()}})
 		}
+		e.sendNotification(wrapped)
 		return wrapped
 	}
 
 	e.emit(Event{Kind: EventEngineCompleted})
+	e.sendNotification(nil)
 	return nil
 }
 
@@ -1369,5 +1376,91 @@ func (e *Engine) recoverCrashedPhases() {
 		crashErr := fmt.Errorf("process crashed while phase was running (recovered on restart)")
 		_ = e.state.MarkFailed(phase.Name, crashErr)
 		e.emitPhaseFailed(phase.Name, crashErr)
+	}
+}
+
+// sendNotification fires the configured notification hooks with a summary of
+// the pipeline outcome. Notifications are best-effort: errors are emitted as
+// events but do not affect the pipeline's return value.
+func (e *Engine) sendNotification(runErr error) {
+	if e.notifier == nil {
+		return
+	}
+
+	result := e.buildPipelineResult(runErr)
+
+	// Use a detached context so notifications are not cancelled by the
+	// pipeline's context (which may already be done on failure/timeout).
+	ctx, cancel := context.WithTimeout(context.Background(), defaultNotifyTimeout)
+	defer cancel()
+
+	if err := e.notifier.Notify(ctx, result); err != nil {
+		e.emit(Event{
+			Kind: EventNotifyFailed,
+			Data: map[string]any{"error": err.Error()},
+		})
+		return
+	}
+
+	e.emit(Event{Kind: EventNotifySuccess})
+}
+
+// buildPipelineResult constructs a PipelineResult from the current engine state.
+func (e *Engine) buildPipelineResult(runErr error) PipelineResult {
+	meta := e.state.Meta()
+
+	status := "success"
+	var errMsg string
+	if runErr != nil {
+		errMsg = runErr.Error()
+		var pte *PipelineTimeoutError
+		if errors.As(runErr, &pte) {
+			status = "timeout"
+		} else {
+			// Check for partial: some phases completed, some failed.
+			hasCompleted := false
+			hasFailed := false
+			for _, ps := range meta.Phases {
+				if ps.Status == PhaseCompleted {
+					hasCompleted = true
+				} else if ps.Status == PhaseFailed {
+					hasFailed = true
+				}
+			}
+			if hasCompleted && hasFailed {
+				status = "partial"
+			} else {
+				status = "failed"
+			}
+		}
+	}
+
+	var duration string
+	if !e.pipelineStart.IsZero() {
+		duration = e.now().Sub(e.pipelineStart).Truncate(time.Second).String()
+	}
+
+	phases := make(map[string]any, len(meta.Phases))
+	for name, ps := range meta.Phases {
+		phases[name] = map[string]any{
+			"status":          string(ps.Status),
+			"cost":            ps.Cost,
+			"duration_ms":     ps.DurationMs,
+			"generation":      ps.Generation,
+			"tokens_in":       ps.TokensIn,
+			"tokens_out":      ps.TokensOut,
+			"cache_tokens_in": ps.CacheTokensIn,
+		}
+	}
+
+	return PipelineResult{
+		Ticket:    meta.Ticket,
+		Summary:   meta.Summary,
+		Branch:    meta.Branch,
+		Status:    status,
+		Error:     errMsg,
+		TotalCost: meta.TotalCost,
+		Duration:  duration,
+		Phases:    phases,
 	}
 }

@@ -102,6 +102,25 @@ Monitor requires `self_user` in config to distinguish self-authored comments fro
 
 Monitor profiles (`conservative`, `smart`, `aggressive`) control auto-rebase, nit auto-fix, and response to non-authoritative comments.
 
+### Notification hooks
+
+On pipeline completion (success or failure), the engine can fire webhook and/or script notifications. Both hooks are best-effort: failures are logged as events (`notify_success` / `notify_failed`) but do not affect the pipeline's exit status.
+
+**Configuration** (in `soda.yaml`):
+```yaml
+notify:
+  webhook:
+    url: https://hooks.example.com/soda
+    headers:
+      Authorization: "Bearer token"
+  script:
+    command: "./scripts/on-complete.sh"
+```
+
+The webhook receives an HTTP POST with a JSON `PipelineResult` payload containing ticket, status, error, total cost, duration, and per-phase details. The script receives the same JSON on stdin.
+
+`soda validate` checks notify config for obvious errors (empty URL, non-HTTP scheme, empty command).
+
 ### Spec/plan extraction
 
 Triage can detect existing specs and plans from ticket comments (GitHub) or structured fields (Jira). When a reviewed plan is found, triage sets `skip_plan: true` and the plan phase is skipped — the existing plan is injected as the plan artifact directly.
@@ -199,6 +218,7 @@ soda/
 │   │   ├── monitor_classifier.go  # Comment classification
 │   │   ├── monitor_authority.go   # CODEOWNERS authority resolution
 │   │   ├── monitor_profile.go     # Monitor behavior profiles
+│   │   ├── notify.go              # Webhook + script notification hooks
 │   │   ├── github_poller.go       # GitHub PR poller via gh CLI
 │   │   ├── history.go             # Session history queries
 │   │   ├── atomic.go              # Atomic file writes

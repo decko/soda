@@ -389,6 +389,7 @@ func runPipeline(cfg *config.Config, opts pipelineOpts) error {
 			WarnTokens:    cfg.Limits.TokenBudget.WarnTokens,
 			BytesPerToken: cfg.Limits.TokenBudget.BytesPerToken,
 		},
+		Notify:            convertNotifyConfig(cfg.Notify),
 		Mode:              mode,
 		PRPoller:          prPoller,
 		SelfUser:          selfUser,
@@ -849,6 +850,16 @@ func handleEvent(ctx context.Context, cancel context.CancelFunc, engine *pipelin
 			current = c
 		}
 		prog.Message(fmt.Sprintf("Warning: binary version changed since pipeline started (was %s, now %s)", stored, current))
+
+	case pipeline.EventNotifySuccess:
+		prog.Message("  📬 Notification sent")
+
+	case pipeline.EventNotifyFailed:
+		var errMsg string
+		if e, ok := event.Data["error"].(string); ok {
+			errMsg = e
+		}
+		prog.Message(fmt.Sprintf("  ⚠️  Notification failed: %s", errMsg))
 	}
 }
 
@@ -1334,6 +1345,49 @@ func buildPromptContext(cfg *config.Config) pipeline.ContextData {
 	}
 
 	return ctx
+}
+
+// convertNotifyConfig converts a config.NotifyConfig to a pipeline.NotifyConfig.
+func convertNotifyConfig(cfg config.NotifyConfig) pipeline.NotifyConfig {
+	var nc pipeline.NotifyConfig
+	if cfg.Webhook != nil {
+		nc.Webhook = &pipeline.WebhookNotifyConfig{
+			URL:     cfg.Webhook.URL,
+			Headers: cfg.Webhook.Headers,
+		}
+	}
+	if cfg.Script != nil {
+		nc.Script = &pipeline.ScriptNotifyConfig{
+			Command: cfg.Script.Command,
+		}
+	}
+	if cfg.OnFinish != nil {
+		nc.OnFinish = convertNotifyHookConfig(cfg.OnFinish)
+	}
+	if cfg.OnFailure != nil {
+		nc.OnFailure = convertNotifyHookConfig(cfg.OnFailure)
+	}
+	return nc
+}
+
+// convertNotifyHookConfig converts a config.NotifyHookConfig to a pipeline.NotifyHookConfig.
+func convertNotifyHookConfig(cfg *config.NotifyHookConfig) *pipeline.NotifyHookConfig {
+	if cfg == nil {
+		return nil
+	}
+	var hc pipeline.NotifyHookConfig
+	if cfg.Webhook != nil {
+		hc.Webhook = &pipeline.WebhookNotifyConfig{
+			URL:     cfg.Webhook.URL,
+			Headers: cfg.Webhook.Headers,
+		}
+	}
+	if cfg.Script != nil {
+		hc.Script = &pipeline.ScriptNotifyConfig{
+			Command: cfg.Script.Command,
+		}
+	}
+	return &hc
 }
 
 // resolveLastPhase finds the last running or failed phase in pipeline order.

@@ -376,3 +376,141 @@ func TestRunValidate_ErrorOutput(t *testing.T) {
 		t.Error("expected config valid on stdout")
 	}
 }
+
+func TestValidateNotify_NoHooksConfigured(t *testing.T) {
+	cfg := &config.Config{}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	validateNotify(&buf, result, cfg)
+
+	if result.hasErrors() {
+		t.Error("expected no errors")
+	}
+	if len(result.warnings) > 0 {
+		t.Errorf("expected no warnings, got: %v", result.warnings)
+	}
+	output := buf.String()
+	if !strings.Contains(output, "no hooks configured") {
+		t.Errorf("expected 'no hooks configured', got: %s", output)
+	}
+}
+
+func TestValidateNotify_ValidWebhook(t *testing.T) {
+	cfg := &config.Config{
+		Notify: config.NotifyConfig{
+			Webhook: &config.WebhookNotifyConfig{
+				URL: "https://hooks.example.com/soda",
+			},
+		},
+	}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	validateNotify(&buf, result, cfg)
+
+	if result.hasErrors() {
+		t.Error("expected no errors")
+	}
+	if len(result.warnings) > 0 {
+		t.Errorf("expected no warnings, got: %v", result.warnings)
+	}
+	output := buf.String()
+	if !strings.Contains(output, "1 hook(s) configured") {
+		t.Errorf("expected '1 hook(s) configured', got: %s", output)
+	}
+}
+
+func TestValidateNotify_EmptyWebhookURL(t *testing.T) {
+	cfg := &config.Config{
+		Notify: config.NotifyConfig{
+			Webhook: &config.WebhookNotifyConfig{URL: ""},
+		},
+	}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	validateNotify(&buf, result, cfg)
+
+	if len(result.warnings) != 1 {
+		t.Fatalf("expected 1 warning, got %d: %v", len(result.warnings), result.warnings)
+	}
+	if !strings.Contains(result.warnings[0], "URL is empty") {
+		t.Errorf("warning should mention empty URL, got: %s", result.warnings[0])
+	}
+}
+
+func TestValidateNotify_BadWebhookScheme(t *testing.T) {
+	cfg := &config.Config{
+		Notify: config.NotifyConfig{
+			Webhook: &config.WebhookNotifyConfig{URL: "ftp://example.com"},
+		},
+	}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	validateNotify(&buf, result, cfg)
+
+	if len(result.warnings) != 1 {
+		t.Fatalf("expected 1 warning, got %d: %v", len(result.warnings), result.warnings)
+	}
+	if !strings.Contains(result.warnings[0], "does not start with http") {
+		t.Errorf("warning should mention scheme, got: %s", result.warnings[0])
+	}
+}
+
+func TestValidateNotify_EmptyScriptCommand(t *testing.T) {
+	cfg := &config.Config{
+		Notify: config.NotifyConfig{
+			Script: &config.ScriptNotifyConfig{Command: ""},
+		},
+	}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	validateNotify(&buf, result, cfg)
+
+	if len(result.warnings) != 1 {
+		t.Fatalf("expected 1 warning, got %d: %v", len(result.warnings), result.warnings)
+	}
+	if !strings.Contains(result.warnings[0], "command is empty") {
+		t.Errorf("warning should mention empty command, got: %s", result.warnings[0])
+	}
+}
+
+func TestValidateNotify_BothHooks(t *testing.T) {
+	cfg := &config.Config{
+		Notify: config.NotifyConfig{
+			Webhook: &config.WebhookNotifyConfig{URL: "https://example.com"},
+			Script:  &config.ScriptNotifyConfig{Command: "echo done"},
+		},
+	}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	validateNotify(&buf, result, cfg)
+
+	if len(result.warnings) > 0 {
+		t.Errorf("expected no warnings, got: %v", result.warnings)
+	}
+	output := buf.String()
+	if !strings.Contains(output, "2 hook(s) configured") {
+		t.Errorf("expected '2 hook(s) configured', got: %s", output)
+	}
+}
+
+func TestRunValidate_WithNotifyHooks(t *testing.T) {
+	cfg := &config.Config{
+		TicketSource: "github",
+		Mode:         "autonomous",
+		Model:        "claude-sonnet-4-20250514",
+		Notify: config.NotifyConfig{
+			Webhook: &config.WebhookNotifyConfig{URL: "https://example.com/hook"},
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := runValidate(&stdout, &stderr, cfg, "")
+	if err != nil {
+		t.Fatalf("runValidate() error: %v", err)
+	}
+
+	output := stdout.String()
+	if !strings.Contains(output, "✓ notify: 1 hook(s) configured") {
+		t.Errorf("expected notify valid message, got: %s", output)
+	}
+}
