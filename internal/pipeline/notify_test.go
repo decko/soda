@@ -263,6 +263,20 @@ func TestNotifier_EmptyCommandSkipsScript(t *testing.T) {
 	}
 }
 
+func TestNotifier_MissingScriptBinary(t *testing.T) {
+	n := NewNotifier(NotifyConfig{
+		Script: &ScriptNotifyConfig{Command: "/nonexistent/binary/path-that-does-not-exist"},
+	})
+
+	err := n.Notify(context.Background(), PipelineResult{Ticket: "X-1", Status: "success"})
+	if err == nil {
+		t.Fatal("expected error for nonexistent script binary")
+	}
+	if !strings.Contains(err.Error(), "script") {
+		t.Errorf("error should mention script, got: %v", err)
+	}
+}
+
 func TestPipelineResult_JSONRoundTrip(t *testing.T) {
 	result := PipelineResult{
 		Ticket:    "RT-1",
