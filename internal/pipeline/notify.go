@@ -129,6 +129,7 @@ func (e *Engine) buildWebhookPayload(status NotifyStatus, runErr error) webhookP
 
 // runScriptAt executes the script at scriptPath with status information passed
 // as arguments. The script is invoked directly (no shell) via exec.CommandContext.
+// stderr is captured separately and logged even on success.
 func (e *Engine) runScriptAt(ctx context.Context, scriptPath string, status NotifyStatus, runErr error) error {
 	meta := e.state.Meta()
 
@@ -143,9 +144,15 @@ func (e *Engine) runScriptAt(ctx context.Context, scriptPath string, status Noti
 	cmd := exec.CommandContext(ctx, scriptPath, args...)
 	cmd.Dir = e.config.WorkDir
 
-	output, err := cmd.CombinedOutput()
+	var stderrBuf bytes.Buffer
+	cmd.Stderr = &stderrBuf
+
+	err := cmd.Run()
+	if stderrOut := stderrBuf.String(); stderrOut != "" {
+		fmt.Fprintf(e.config.Stderr, "notify script %s stderr: %s", scriptPath, stderrOut)
+	}
 	if err != nil {
-		return fmt.Errorf("notify script %s: %w (output: %s)", scriptPath, err, string(output))
+		return fmt.Errorf("notify script %s: %w", scriptPath, err)
 	}
 	return nil
 }
