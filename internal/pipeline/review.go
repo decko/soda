@@ -556,15 +556,19 @@ func (e *Engine) runReviewerWithRetry(ctx context.Context, phase PhaseConfig, re
 		switch category {
 		case "transient":
 			delay := backoff(attempt, e.config.JitterFunc)
+			retryData := map[string]any{
+				"reviewer": reviewer.Name,
+				"category": category,
+				"attempt":  attempt + 1,
+				"delay":    delay.String(),
+			}
+			if suggestion := transientSuggestion(err); suggestion != "" {
+				retryData["suggestion"] = suggestion
+			}
 			sendEvent(Event{
 				Phase: phase.Name,
 				Kind:  EventReviewerRetrying,
-				Data: map[string]any{
-					"reviewer": reviewer.Name,
-					"category": category,
-					"attempt":  attempt + 1,
-					"delay":    delay.String(),
-				},
+				Data:  retryData,
 			})
 			if err := e.sleepWithContext(ctx, delay); err != nil {
 				return nil, fmt.Errorf("reviewer %s retry interrupted: %w", reviewer.Name, err)

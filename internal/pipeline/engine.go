@@ -816,10 +816,14 @@ func (e *Engine) runWithRetry(ctx context.Context, phase PhaseConfig, opts runne
 		case "transient":
 			delay := backoff(attempt, e.config.JitterFunc)
 			e.config.SleepFunc(delay)
+			retryData := map[string]any{"category": category, "attempt": attempt + 1, "delay": delay.String()}
+			if suggestion := transientSuggestion(err); suggestion != "" {
+				retryData["suggestion"] = suggestion
+			}
 			e.emit(Event{
 				Phase: phase.Name,
 				Kind:  EventPhaseRetrying,
-				Data:  map[string]any{"category": category, "attempt": attempt + 1, "delay": delay.String()},
+				Data:  retryData,
 			})
 
 		case "parse":
