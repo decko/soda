@@ -6599,6 +6599,67 @@ func TestEngine_NotificationOnResume(t *testing.T) {
 	}
 }
 
+func TestEngine_NotificationPartialStatus(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 0, Parse: 0, Semantic: 0},
+		},
+		{
+			Name:      "plan",
+			Prompt:    "plan.md",
+			DependsOn: []string{"triage"},
+			Retry:     RetryConfig{Transient: 0, Parse: 0, Semantic: 0},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage: automatable",
+					CostUSD: 0.10,
+				},
+			}},
+			"plan": {{
+				result: nil,
+				err:    fmt.Errorf("plan phase error"),
+			}},
+		},
+	}
+
+	var webhookPayload []byte
+	srv := newTestWebhookServer(t, func(body []byte) {
+		webhookPayload = body
+	})
+	defer srv.Close()
+
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.Notify = NotifyConfig{
+			Webhook: &WebhookNotifyConfig{URL: srv.URL},
+		}
+	})
+
+	err := engine.Run(context.Background())
+	if err == nil {
+		t.Fatal("expected Run() to return an error")
+	}
+
+	if webhookPayload == nil {
+		t.Fatal("expected webhook to be called")
+	}
+
+	var result PipelineResult
+	if err := json.Unmarshal(webhookPayload, &result); err != nil {
+		t.Fatalf("unmarshal webhook payload: %v", err)
+	}
+	if result.Status != "partial" {
+		t.Errorf("Status = %q, want %q", result.Status, "partial")
+	}
+}
+
 // newTestWebhookServer creates a test HTTP server that calls onBody with the
 // request body for each POST request.
 func newTestWebhookServer(t *testing.T, onBody func([]byte)) *httpTestServer {
