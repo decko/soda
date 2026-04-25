@@ -195,6 +195,12 @@ func claudeEnv(tmpDir string, opts runner.RunOpts, claudeBin, proxyURL string) [
 	return env
 }
 
+// sanitizePhase replaces slashes with dashes so the phase name is safe
+// for use in filesystem paths (e.g. "review/go-specialist" → "review-go-specialist").
+func sanitizePhase(phase string) string {
+	return strings.ReplaceAll(phase, "/", "-")
+}
+
 func envOrDefault(key, fallback string) string {
 	if val := os.Getenv(key); val != "" {
 		return val
