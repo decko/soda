@@ -1,7 +1,6 @@
 package sandbox
 
 import (
-	"os/exec"
 	"strings"
 	"testing"
 
@@ -39,10 +38,9 @@ func TestClaudeEnvGHTokenAbsentNoFallback(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "")
 	t.Setenv("ANTHROPIC_API_KEY", "test-key")
 
-	// Only run the no-fallback assertion when `gh` is not on PATH.
-	if _, err := exec.LookPath("gh"); err == nil {
-		t.Skip("gh CLI is installed; cannot test absent-fallback path")
-	}
+	// Hide `gh` from exec.LookPath by pointing PATH at an empty directory.
+	// This makes the test deterministic regardless of host tooling.
+	t.Setenv("PATH", t.TempDir())
 
 	opts := runner.RunOpts{Phase: "submit", WorkDir: "/work"}
 	env := claudeEnv("/tmp/sb", opts, "/usr/bin/claude", "")
