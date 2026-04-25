@@ -431,3 +431,153 @@ func TestSmoke_ReworkLoop(t *testing.T) {
 		t.Errorf("submit pr_url = %q, want %q", submitData.PRURL, "https://github.com/test/repo/pull/1")
 	}
 }
+
+// TestSmoke_CorrectiveLoop tests the verify FAIL → patch → verify gen 2 PASS
+// corrective cycle via the CorrectiveConfig on the verify phase.
+func TestSmoke_CorrectiveLoop(t *testing.T) {
+	phases := smokePipelinePhases()
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{result: smokeFixtures()["triage"]}},
+			"plan":   {{result: smokeFixtures()["plan"]}},
+			"implement": {{result: &runner.RunResult{
+				Output:  json.RawMessage(`{"tests_passed":true,"commits":[{"hash":"aaa"}],"files_changed":[{"path":"main.go","action":"modified"}],"task_results":[{"task_id":"T1","status":"completed"}]}`),
+				RawText: "Implemented T1",
+				CostUSD: 0.50,
+			}}},
+			"verify": {
+				// Gen 1: FAIL triggers corrective routing to patch.
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"verdict":"FAIL","fixes_required":["fix broken test"]}`),
+					RawText: "Verify FAIL: broken test",
+					CostUSD: 0.10,
+				}},
+				// Gen 2: PASS after patch.
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"verdict":"PASS"}`),
+					RawText: "Verify PASS after patch",
+					CostUSD: 0.12,
+				}},
+			},
+			"patch": {{result: &runner.RunResult{
+				Output:  json.RawMessage(`{"patched":true}`),
+				RawText: "Patch applied",
+				CostUSD: 0.20,
+			}}},
+			"review": {{result: &runner.RunResult{
+				Output:  json.RawMessage(`{"findings":[],"verdict":"pass"}`),
+				RawText: "Review: pass",
+				CostUSD: 0.05,
+			}}},
+			"submit": {{result: smokeFixtures()["submit"]}},
+		},
+	}
+
+	stateDir := t.TempDir()
+	promptDir := t.TempDir()
+	workDir := t.TempDir()
+
+	writeSmokePrompts(t, promptDir)
+
+	state, err := LoadOrCreate(stateDir, "CORRECTIVE-1")
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+
+	var events []Event
+	cfg := EngineConfig{
+		Pipeline:   &PhasePipeline{Phases: phases},
+		Loader:     NewPromptLoader(promptDir),
+		Ticket:     TicketData{Key: "CORRECTIVE-1", Summary: "Corrective loop test"},
+		Model:      "test-model",
+		WorkDir:    workDir,
+		MaxCostUSD: 10.0,
+		Mode:       Autonomous,
+		SleepFunc:  func(time.Duration) {},
+		JitterFunc: func(time.Duration) time.Duration { return 0 },
+		OnEvent:    func(e Event) { events = append(events, e) },
+	}
+
+	engine := NewEngine(mock, state, cfg)
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// --- All phases completed ---
+	for _, name := range []string{"triage", "plan", "implement", "patch", "verify", "review", "submit"} {
+		if !state.IsCompleted(name) {
+			t.Errorf("phase %q should be completed", name)
+		}
+	}
+
+	// --- PatchCycles incremented ---
+	if state.Meta().PatchCycles != 1 {
+		t.Errorf("PatchCycles = %d, want 1", state.Meta().PatchCycles)
+	}
+
+	// --- ReworkCycles unchanged ---
+	if state.Meta().ReworkCycles != 0 {
+		t.Errorf("ReworkCycles = %d, want 0", state.Meta().ReworkCycles)
+	}
+
+	// --- Verify generation increments ---
+	verifyPS := state.Meta().Phases["verify"]
+	if verifyPS == nil {
+		t.Fatal("verify phase state missing")
+	}
+	if verifyPS.Generation != 2 {
+		t.Errorf("verify generation = %d, want 2", verifyPS.Generation)
+	}
+
+	patchPS := state.Meta().Phases["patch"]
+	if patchPS == nil {
+		t.Fatal("patch phase state missing")
+	}
+	if patchPS.Generation != 1 {
+		t.Errorf("patch generation = %d, want 1", patchPS.Generation)
+	}
+
+	// --- Cost accumulation ---
+	// triage(0.01) + plan(0.02) + implement(0.50) + verify1(0.10) +
+	// patch(0.20) + verify2(0.12) + review(0.05) + submit(0.03) = 1.03
+	expectedCost := 0.01 + 0.02 + 0.50 + 0.10 + 0.20 + 0.12 + 0.05 + 0.03
+	if !approxEqual(state.Meta().TotalCost, expectedCost) {
+		t.Errorf("TotalCost = %v, want %v", state.Meta().TotalCost, expectedCost)
+	}
+
+	// --- Runner call count ---
+	// triage, plan, implement, verify(FAIL), patch, verify(PASS), review, submit = 8
+	if len(mock.calls) != 8 {
+		t.Errorf("runner called %d times, want 8; phases: %v",
+			len(mock.calls), phaseNames(mock.calls))
+	}
+
+	// --- Phase ordering in runner calls ---
+	wantOrder := []string{"triage", "plan", "implement", "verify", "patch", "verify", "review", "submit"}
+	gotOrder := phaseNames(mock.calls)
+	if len(gotOrder) != len(wantOrder) {
+		t.Fatalf("call count mismatch: got %v, want %v", gotOrder, wantOrder)
+	}
+	for i, want := range wantOrder {
+		if gotOrder[i] != want {
+			t.Errorf("runner call[%d] = %q, want %q", i, gotOrder[i], want)
+		}
+	}
+
+	// --- Verify rework_routed event ---
+	eventKinds := make(map[string]int)
+	for _, e := range events {
+		eventKinds[e.Kind]++
+	}
+	if eventKinds[EventReworkRouted] != 1 {
+		t.Errorf("rework_routed events = %d, want 1", eventKinds[EventReworkRouted])
+	}
+	// Corrective skip should NOT appear because patch was actually run.
+	// The initial forward pass skips it (1 event), but after corrective
+	// routing it runs. So we expect exactly 1 corrective_skipped event.
+	if eventKinds[EventCorrectiveSkipped] != 1 {
+		t.Errorf("corrective_skipped events = %d, want 1", eventKinds[EventCorrectiveSkipped])
+	}
+}
