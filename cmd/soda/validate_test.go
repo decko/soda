@@ -498,6 +498,150 @@ func TestValidateNotifications_ScriptNotExecutable(t *testing.T) {
 	}
 }
 
+func TestValidateNotifications_OnFailureWebhookValid(t *testing.T) {
+	cfg := &config.Config{
+		Notifications: config.NotificationsConfig{
+			OnFailureWebhookURL: "https://alerts.example.com/fail",
+		},
+	}
+
+	result := &validationResult{}
+	var buf bytes.Buffer
+	validateNotifications(&buf, result, cfg)
+
+	if result.hasErrors() {
+		t.Errorf("expected no errors, got: %v", result.errors)
+	}
+	if !strings.Contains(buf.String(), "on_failure webhook configured") {
+		t.Errorf("expected 'on_failure webhook configured' message, got: %s", buf.String())
+	}
+}
+
+func TestValidateNotifications_OnFailureWebhookInvalidScheme(t *testing.T) {
+	cfg := &config.Config{
+		Notifications: config.NotificationsConfig{
+			OnFailureWebhookURL: "ftp://alerts.example.com/fail",
+		},
+	}
+
+	result := &validationResult{}
+	var buf bytes.Buffer
+	validateNotifications(&buf, result, cfg)
+
+	if !result.hasErrors() {
+		t.Error("expected error for non-HTTP scheme in on_failure webhook")
+	}
+	if !strings.Contains(result.errors[0], "http or https") {
+		t.Errorf("error should mention http/https, got: %s", result.errors[0])
+	}
+}
+
+func TestValidateNotifications_OnFailureScriptNotFound(t *testing.T) {
+	cfg := &config.Config{
+		Notifications: config.NotificationsConfig{
+			OnFailureScript: "/nonexistent/fail-notify.sh",
+		},
+	}
+
+	result := &validationResult{}
+	var buf bytes.Buffer
+	validateNotifications(&buf, result, cfg)
+
+	if !result.hasErrors() {
+		t.Error("expected error for missing on_failure script")
+	}
+	if !strings.Contains(result.errors[0], "not found") {
+		t.Errorf("error should mention 'not found', got: %s", result.errors[0])
+	}
+}
+
+func TestValidateNotifications_OnFailureScriptExists(t *testing.T) {
+	dir := t.TempDir()
+	scriptPath := filepath.Join(dir, "fail-notify.sh")
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\necho fail\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{
+		Notifications: config.NotificationsConfig{
+			OnFailureScript: scriptPath,
+		},
+	}
+
+	result := &validationResult{}
+	var buf bytes.Buffer
+	validateNotifications(&buf, result, cfg)
+
+	if result.hasErrors() {
+		t.Errorf("expected no errors, got: %v", result.errors)
+	}
+	if !strings.Contains(buf.String(), "on_failure script configured") {
+		t.Errorf("expected 'on_failure script configured' message, got: %s", buf.String())
+	}
+}
+
+func TestValidateNotifications_OnFailureScriptNotExecutable(t *testing.T) {
+	dir := t.TempDir()
+	scriptPath := filepath.Join(dir, "fail-notify.sh")
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\necho fail\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{
+		Notifications: config.NotificationsConfig{
+			OnFailureScript: scriptPath,
+		},
+	}
+
+	result := &validationResult{}
+	var buf bytes.Buffer
+	validateNotifications(&buf, result, cfg)
+
+	if result.hasErrors() {
+		t.Errorf("not-executable should be a warning, not error: %v", result.errors)
+	}
+	if len(result.warnings) == 0 {
+		t.Error("expected warning for non-executable on_failure script")
+	}
+	if len(result.warnings) > 0 && !strings.Contains(result.warnings[0], "not executable") {
+		t.Errorf("warning should mention 'not executable', got: %s", result.warnings[0])
+	}
+}
+
+func TestValidateNotifications_AllHandlersConfigured(t *testing.T) {
+	dir := t.TempDir()
+	finishScript := filepath.Join(dir, "notify.sh")
+	failScript := filepath.Join(dir, "fail-notify.sh")
+	for _, p := range []string{finishScript, failScript} {
+		if err := os.WriteFile(p, []byte("#!/bin/sh\necho ok\n"), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cfg := &config.Config{
+		Notifications: config.NotificationsConfig{
+			WebhookURL:          "https://hooks.example.com/finish",
+			Script:              finishScript,
+			OnFailureWebhookURL: "https://hooks.example.com/fail",
+			OnFailureScript:     failScript,
+		},
+	}
+
+	result := &validationResult{}
+	var buf bytes.Buffer
+	validateNotifications(&buf, result, cfg)
+
+	if result.hasErrors() {
+		t.Errorf("expected no errors, got: %v", result.errors)
+	}
+	output := buf.String()
+	for _, want := range []string{"webhook", "script", "on_failure webhook", "on_failure script"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("expected output to contain %q, got: %s", want, output)
+		}
+	}
+}
+
 func TestRunValidate_ErrorOutput(t *testing.T) {
 	// Test that errors go to stderr and success markers go to stdout.
 	cfg := &config.Config{

@@ -207,9 +207,46 @@ func validateSchemas(w io.Writer, result *validationResult, pl *pipeline.PhasePi
 	}
 }
 
+// validateWebhookURL validates a single webhook URL and records errors.
+// Returns true if an error was found.
+func validateWebhookURL(result *validationResult, label, rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		result.addError("notifications: invalid %s URL: %v", label, err)
+		return true
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		result.addError("notifications: %s URL must use http or https scheme, got %q", label, u.Scheme)
+		return true
+	}
+	if u.Host == "" {
+		result.addError("notifications: %s URL has no host", label)
+		return true
+	}
+	return false
+}
+
+// validateScriptPath validates a single script path and records errors/warnings.
+// Returns true if an error was found.
+func validateScriptPath(result *validationResult, label, scriptPath string) bool {
+	info, err := os.Stat(scriptPath)
+	if err != nil {
+		result.addError("notifications: %s %q not found", label, scriptPath)
+		return true
+	}
+	if info.IsDir() {
+		result.addError("notifications: %s %q is a directory", label, scriptPath)
+		return true
+	}
+	if info.Mode()&0111 == 0 {
+		result.addWarning("notifications: %s %q is not executable", label, scriptPath)
+	}
+	return false
+}
+
 // validateNotifications checks the notifications config for common errors:
-// script path must exist and be executable, webhook URL must be a valid
-// HTTP(S) URL.
+// script paths must exist and be executable, webhook URLs must be valid
+// HTTP(S) URLs. Validates both on_finish and on_failure handlers.
 func validateNotifications(w io.Writer, result *validationResult, cfg *config.Config) {
 	nc := cfg.Notifications
 	if nc.WebhookURL == "" && nc.Script == "" && nc.OnFailureWebhookURL == "" && nc.OnFailureScript == "" {
@@ -220,29 +257,26 @@ func validateNotifications(w io.Writer, result *validationResult, cfg *config.Co
 	notifyErrors := 0
 
 	if nc.WebhookURL != "" {
-		u, err := url.Parse(nc.WebhookURL)
-		if err != nil {
-			result.addError("notifications: invalid webhook URL: %v", err)
-			notifyErrors++
-		} else if u.Scheme != "http" && u.Scheme != "https" {
-			result.addError("notifications: webhook URL must use http or https scheme, got %q", u.Scheme)
-			notifyErrors++
-		} else if u.Host == "" {
-			result.addError("notifications: webhook URL has no host")
+		if validateWebhookURL(result, "webhook", nc.WebhookURL) {
 			notifyErrors++
 		}
 	}
 
 	if nc.Script != "" {
-		info, err := os.Stat(nc.Script)
-		if err != nil {
-			result.addError("notifications: script %q not found", nc.Script)
+		if validateScriptPath(result, "script", nc.Script) {
 			notifyErrors++
-		} else if info.IsDir() {
-			result.addError("notifications: script %q is a directory", nc.Script)
+		}
+	}
+
+	if nc.OnFailureWebhookURL != "" {
+		if validateWebhookURL(result, "on_failure webhook", nc.OnFailureWebhookURL) {
 			notifyErrors++
-		} else if info.Mode()&0111 == 0 {
-			result.addWarning("notifications: script %q is not executable", nc.Script)
+		}
+	}
+
+	if nc.OnFailureScript != "" {
+		if validateScriptPath(result, "on_failure script", nc.OnFailureScript) {
+			notifyErrors++
 		}
 	}
 
@@ -253,6 +287,12 @@ func validateNotifications(w io.Writer, result *validationResult, cfg *config.Co
 		}
 		if nc.Script != "" {
 			parts = append(parts, "script")
+		}
+		if nc.OnFailureWebhookURL != "" {
+			parts = append(parts, "on_failure webhook")
+		}
+		if nc.OnFailureScript != "" {
+			parts = append(parts, "on_failure script")
 		}
 		fmt.Fprintf(w, "✓ notifications: %s configured\n", strings.Join(parts, " + "))
 	}
