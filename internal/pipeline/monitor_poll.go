@@ -720,12 +720,12 @@ func (e *Engine) respondToComments(ctx context.Context, phase PhaseConfig, class
 	// Load and render the monitor prompt template.
 	loadResult, err := e.config.Loader.LoadWithSource(phase.Prompt)
 	if err != nil {
-		return nil, fmt.Errorf("engine: load monitor prompt: %w", err)
+		return nil, &PromptError{Phase: phase.Name, Operation: "load", Err: err}
 	}
 
 	rendered, err := RenderPrompt(loadResult.Content, promptData)
 	if err != nil {
-		return nil, fmt.Errorf("engine: render monitor prompt: %w", err)
+		return nil, &PromptError{Phase: phase.Name, Operation: "render", Err: err}
 	}
 
 	// Use separate naming for reply-only vs fix sessions to avoid collisions.
