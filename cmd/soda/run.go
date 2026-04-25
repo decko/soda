@@ -846,6 +846,14 @@ func handleEvent(ctx context.Context, cancel context.CancelFunc, engine *pipelin
 			current = c
 		}
 		prog.Message(fmt.Sprintf("Warning: binary version changed since pipeline started (was %s, now %s)", stored, current))
+
+	case pipeline.EventNotifyFailed:
+		handlerType, _ := event.Data["type"].(string)
+		errMsg, _ := event.Data["error"].(string)
+		prog.Message(fmt.Sprintf("  ⚠️  Notification %s failed: %s", handlerType, errMsg))
+
+	case pipeline.EventNotifySuccess:
+		// Notification succeeded — no user-facing output needed.
 	}
 }
 
