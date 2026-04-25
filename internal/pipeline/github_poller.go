@@ -326,6 +326,7 @@ func (p *GitHubPRPoller) MergePR(ctx context.Context, prURL string, method strin
 		"pr", "merge", number,
 		"--repo", nwoRef,
 		flag,
+		"--yes",
 	)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
