@@ -434,9 +434,36 @@ func TestCheckConfig_NoConfigDir(t *testing.T) {
 	env.UserConfigDir = func() (string, error) {
 		return "", errors.New("no config dir")
 	}
+	env.UserHomeDir = func() (string, error) {
+		return "", errors.New("no home dir")
+	}
 	r := checkConfig(env)
 	if r.passed {
-		t.Error("expected config check to fail when no local config and no config dir")
+		t.Error("expected config check to fail when no local config and no config/home dir")
+	}
+}
+
+func TestCheckConfig_UserHomeDirFallback(t *testing.T) {
+	env := allPassEnv()
+	env.Stat = func(name string) (os.FileInfo, error) {
+		// Only the UserHomeDir-based path exists.
+		if name == "/home/testuser/.config/soda/config.yaml" {
+			return mockFileInfo{name: name}, nil
+		}
+		return nil, os.ErrNotExist
+	}
+	env.UserConfigDir = func() (string, error) {
+		return "", errors.New("no config dir")
+	}
+	r := checkConfig(env)
+	if !r.passed {
+		t.Error("expected config check to pass via UserHomeDir fallback")
+	}
+	if !strings.Contains(r.detail, "global") {
+		t.Errorf("expected detail to mention global, got: %q", r.detail)
+	}
+	if !strings.Contains(r.detail, "/home/testuser/.config/soda/config.yaml") {
+		t.Errorf("expected detail to include fallback path, got: %q", r.detail)
 	}
 }
 
@@ -748,6 +775,126 @@ func TestRunDoctor_GhOptionalWhenJiraSource(t *testing.T) {
 	out := buf.String()
 	if !strings.Contains(out, "⚠ gh:") {
 		t.Errorf("expected ⚠ marker for gh, got:\n%s", out)
+	}
+}
+
+func TestCheckConfigValid_UserHomeDirFallback(t *testing.T) {
+	env := allPassEnv()
+	homePath := "/home/testuser/.config/soda/config.yaml"
+	env.Stat = func(name string) (os.FileInfo, error) {
+		if name == homePath {
+			return mockFileInfo{name: name}, nil
+		}
+		return nil, os.ErrNotExist
+	}
+	env.UserConfigDir = func() (string, error) {
+		return "", errors.New("no config dir")
+	}
+	r := checkConfigValid(env)
+	if !r.passed {
+		t.Error("expected config-valid check to pass via UserHomeDir fallback")
+	}
+	if !strings.Contains(r.detail, homePath) {
+		t.Errorf("expected detail to mention fallback path, got: %q", r.detail)
+	}
+}
+
+// --- resolveConfigPath tests ---
+
+func TestResolveConfigPath_Local(t *testing.T) {
+	env := allPassEnv()
+	loc := resolveConfigPath(env)
+	if loc == nil {
+		t.Fatal("expected non-nil location")
+	}
+	if loc.path != "soda.yaml" {
+		t.Errorf("expected path 'soda.yaml', got %q", loc.path)
+	}
+	if loc.label != "local" {
+		t.Errorf("expected label 'local', got %q", loc.label)
+	}
+}
+
+func TestResolveConfigPath_GlobalViaUserConfigDir(t *testing.T) {
+	env := allPassEnv()
+	env.Stat = func(name string) (os.FileInfo, error) {
+		if name == "soda.yaml" {
+			return nil, os.ErrNotExist
+		}
+		return mockFileInfo{name: name}, nil
+	}
+	loc := resolveConfigPath(env)
+	if loc == nil {
+		t.Fatal("expected non-nil location")
+	}
+	if loc.label != "global" {
+		t.Errorf("expected label 'global', got %q", loc.label)
+	}
+	if !strings.Contains(loc.path, ".config/soda/config.yaml") {
+		t.Errorf("expected global config path, got %q", loc.path)
+	}
+}
+
+func TestResolveConfigPath_GlobalViaUserHomeDir(t *testing.T) {
+	env := allPassEnv()
+	homePath := "/home/testuser/.config/soda/config.yaml"
+	env.Stat = func(name string) (os.FileInfo, error) {
+		if name == homePath {
+			return mockFileInfo{name: name}, nil
+		}
+		return nil, os.ErrNotExist
+	}
+	env.UserConfigDir = func() (string, error) {
+		return "", errors.New("no config dir")
+	}
+	loc := resolveConfigPath(env)
+	if loc == nil {
+		t.Fatal("expected non-nil location via UserHomeDir fallback")
+	}
+	if loc.path != homePath {
+		t.Errorf("expected path %q, got %q", homePath, loc.path)
+	}
+	if loc.label != "global" {
+		t.Errorf("expected label 'global', got %q", loc.label)
+	}
+}
+
+func TestResolveConfigPath_NoneFound(t *testing.T) {
+	env := allPassEnv()
+	env.Stat = func(name string) (os.FileInfo, error) {
+		return nil, os.ErrNotExist
+	}
+	env.UserConfigDir = func() (string, error) {
+		return "", errors.New("no config dir")
+	}
+	env.UserHomeDir = func() (string, error) {
+		return "", errors.New("no home dir")
+	}
+	loc := resolveConfigPath(env)
+	if loc != nil {
+		t.Errorf("expected nil location, got %+v", loc)
+	}
+}
+
+func TestResolveConfigPath_UserHomeDirNotCalled_WhenUserConfigDirSucceeds(t *testing.T) {
+	env := allPassEnv()
+	env.Stat = func(name string) (os.FileInfo, error) {
+		if name == "soda.yaml" {
+			return nil, os.ErrNotExist
+		}
+		return mockFileInfo{name: name}, nil
+	}
+	homeDirCalled := false
+	env.UserHomeDir = func() (string, error) {
+		homeDirCalled = true
+		return "/home/testuser", nil
+	}
+	loc := resolveConfigPath(env)
+	if loc == nil {
+		t.Fatal("expected non-nil location")
+	}
+	if homeDirCalled {
+		t.Error("UserHomeDir should not be called when UserConfigDir succeeds")
 	}
 }
 
