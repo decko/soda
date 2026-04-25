@@ -213,7 +213,7 @@ func TestRunStatus_CumulativeCostFooter(t *testing.T) {
 	}
 	os.Stdout = writePipe
 
-	runErr := runStatus(dir)
+	runErr := runStatus(dir, 0)
 
 	writePipe.Close()
 	os.Stdout = oldStdout
@@ -290,7 +290,7 @@ func TestRunStatus_ReworkAndTrendColumns(t *testing.T) {
 	}
 	os.Stdout = writePipe
 
-	runErr := runStatus(dir)
+	runErr := runStatus(dir, 0)
 
 	writePipe.Close()
 	os.Stdout = oldStdout
@@ -323,7 +323,7 @@ func TestRunStatus_ReworkAndTrendColumns(t *testing.T) {
 	}
 
 	// Verify the TICKET-10 row has rework=3 and trend=▲ in the correct columns.
-	// REWORK and TREND are the last two columns, so we anchor to end-of-line.
+	// BUDGET, REWORK and TREND are the last three columns, so we anchor to end-of-line.
 	reworkTrendRe := regexp.MustCompile(`(?m)^TICKET-10\s+.*\s+3\s+▲\s*$`)
 	if !reworkTrendRe.MatchString(output) {
 		t.Errorf("TICKET-10 row missing rework=3 and trend=▲ in correct columns.\ngot:\n%s", output)
@@ -351,7 +351,7 @@ func TestRunStatus_DefaultTrendWhenNoLedger(t *testing.T) {
 	}
 	os.Stdout = writePipe
 
-	runErr := runStatus(dir)
+	runErr := runStatus(dir, 0)
 
 	writePipe.Close()
 	os.Stdout = oldStdout
@@ -451,7 +451,7 @@ func TestRunStatus_ColumnAlignment(t *testing.T) {
 	}
 	os.Stdout = writePipe
 
-	runErr := runStatus(dir)
+	runErr := runStatus(dir, 0)
 
 	writePipe.Close()
 	os.Stdout = oldStdout
@@ -497,7 +497,7 @@ func TestRunStatus_ColumnAlignment(t *testing.T) {
 
 	// Parse column start positions from the header.
 	header := tableLines[0]
-	columns := []string{"TICKET", "PHASE", "STATUS", "SUBMITTED", "ELAPSED", "COST", "REWORK", "TREND"}
+	columns := []string{"TICKET", "PHASE", "STATUS", "SUBMITTED", "ELAPSED", "COST", "BUDGET", "REWORK", "TREND"}
 	colPositions := make([]int, len(columns))
 	for idx, col := range columns {
 		pos := strings.Index(header, col)
@@ -523,5 +523,131 @@ func TestRunStatus_ColumnAlignment(t *testing.T) {
 				t.Errorf("column %s (pos %d) missing separator in line: %q", columns[idx], pos, line)
 			}
 		}
+	}
+}
+
+func TestFormatBudget(t *testing.T) {
+	tests := []struct {
+		name             string
+		maxCostPerTicket float64
+		want             string
+	}{
+		{"positive budget", 25.00, "$25.00"},
+		{"fractional budget", 12.50, "$12.50"},
+		{"zero budget → infinity", 0, "∞"},
+		{"negative budget → infinity", -1, "∞"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := formatBudget(tc.maxCostPerTicket)
+			if got != tc.want {
+				t.Errorf("formatBudget(%f) = %q, want %q", tc.maxCostPerTicket, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRunStatus_BudgetColumn(t *testing.T) {
+	dir := t.TempDir()
+
+	writeStatusMeta(t, filepath.Join(dir, "TICKET-30"), &pipeline.PipelineMeta{
+		Ticket:    "TICKET-30",
+		StartedAt: time.Now().Add(-1 * time.Hour),
+		TotalCost: 5.00,
+		Phases: map[string]*pipeline.PhaseState{
+			"triage": {Status: pipeline.PhaseCompleted, DurationMs: 5000, Cost: 5.00},
+		},
+	})
+
+	// Capture stdout.
+	oldStdout := os.Stdout
+	readPipe, writePipe, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = writePipe
+
+	runErr := runStatus(dir, 25.00)
+
+	writePipe.Close()
+	os.Stdout = oldStdout
+
+	var buf strings.Builder
+	data := make([]byte, 4096)
+	for {
+		n, readErr := readPipe.Read(data)
+		if n > 0 {
+			buf.Write(data[:n])
+		}
+		if readErr != nil {
+			break
+		}
+	}
+	readPipe.Close()
+
+	if runErr != nil {
+		t.Fatalf("runStatus error: %v", runErr)
+	}
+
+	output := buf.String()
+
+	// Verify header contains BUDGET column.
+	if !strings.Contains(output, "BUDGET") {
+		t.Errorf("output missing BUDGET column header.\ngot:\n%s", output)
+	}
+
+	// Verify the data row contains the formatted budget.
+	if !strings.Contains(output, "$25.00") {
+		t.Errorf("output missing budget value $25.00.\ngot:\n%s", output)
+	}
+}
+
+func TestRunStatus_BudgetInfinity(t *testing.T) {
+	dir := t.TempDir()
+
+	writeStatusMeta(t, filepath.Join(dir, "TICKET-31"), &pipeline.PipelineMeta{
+		Ticket:    "TICKET-31",
+		StartedAt: time.Now().Add(-1 * time.Hour),
+		TotalCost: 2.00,
+		Phases: map[string]*pipeline.PhaseState{
+			"triage": {Status: pipeline.PhaseCompleted, DurationMs: 3000, Cost: 2.00},
+		},
+	})
+
+	// Capture stdout.
+	oldStdout := os.Stdout
+	readPipe, writePipe, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = writePipe
+
+	runErr := runStatus(dir, 0)
+
+	writePipe.Close()
+	os.Stdout = oldStdout
+
+	var buf strings.Builder
+	data := make([]byte, 4096)
+	for {
+		n, readErr := readPipe.Read(data)
+		if n > 0 {
+			buf.Write(data[:n])
+		}
+		if readErr != nil {
+			break
+		}
+	}
+	readPipe.Close()
+
+	if runErr != nil {
+		t.Fatalf("runStatus error: %v", runErr)
+	}
+
+	output := buf.String()
+
+	// Verify the data row contains ∞ for unconfigured budget.
+	if !strings.Contains(output, "∞") {
+		t.Errorf("output missing ∞ for unconfigured budget.\ngot:\n%s", output)
 	}
 }

@@ -30,6 +30,7 @@ type pipelineEntry struct {
 	status    string
 	elapsed   string
 	cost      string
+	budget    string
 	submitted string
 	startedAt time.Time
 	rework    int
@@ -45,12 +46,12 @@ func newStatusCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return runStatus(cfg.StateDir)
+			return runStatus(cfg.StateDir, cfg.Limits.MaxCostPerTicket)
 		},
 	}
 }
 
-func runStatus(stateDir string) error {
+func runStatus(stateDir string, maxCostPerTicket float64) error {
 	entries, err := os.ReadDir(stateDir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -139,6 +140,7 @@ func runStatus(stateDir string) error {
 			status:    status,
 			elapsed:   elapsed,
 			cost:      cost,
+			budget:    formatBudget(maxCostPerTicket),
 			submitted: formatSubmitted(meta.StartedAt, time.Now()),
 			startedAt: meta.StartedAt,
 			rework:    meta.ReworkCycles,
@@ -159,14 +161,14 @@ func runStatus(stateDir string) error {
 	isTTY := isatty.IsTerminal(os.Stdout.Fd()) || isatty.IsCygwinTerminal(os.Stdout.Fd())
 
 	// Compute column widths from data (ANSI-free).
-	headers := []string{"TICKET", "PHASE", "STATUS", "SUBMITTED", "ELAPSED", "COST", "REWORK", "TREND"}
+	headers := []string{"TICKET", "PHASE", "STATUS", "SUBMITTED", "ELAPSED", "COST", "BUDGET", "REWORK", "TREND"}
 	widths := make([]int, len(headers))
 	for idx, header := range headers {
 		widths[idx] = len(header)
 	}
 	for _, r := range rows {
 		reworkStr := fmt.Sprintf("%d", r.rework)
-		vals := []string{r.ticket, r.phase, r.status, r.submitted, r.elapsed, r.cost, reworkStr, r.costTrend}
+		vals := []string{r.ticket, r.phase, r.status, r.submitted, r.elapsed, r.cost, r.budget, reworkStr, r.costTrend}
 		for idx, val := range vals {
 			if len(val) > widths[idx] {
 				widths[idx] = len(val)
@@ -198,14 +200,15 @@ func runStatus(stateDir string) error {
 		}
 
 		// Format all other columns normally.
-		line := fmt.Sprintf("%-*s  %-*s  %s  %-*s  %-*s  %-*s  %-*s  %s\n",
+		line := fmt.Sprintf("%-*s  %-*s  %s  %-*s  %-*s  %-*s  %-*s  %-*s  %s\n",
 			widths[0], r.ticket,
 			widths[1], r.phase,
 			paddedStatus,
 			widths[3], r.submitted,
 			widths[4], r.elapsed,
 			widths[5], r.cost,
-			widths[6], reworkStr,
+			widths[6], r.budget,
+			widths[7], reworkStr,
 			r.costTrend,
 		)
 		fmt.Fprint(os.Stdout, line)
@@ -364,6 +367,15 @@ func formatSubmitted(startedAt, now time.Time) string {
 		return startedAt.Format("15:04")
 	}
 	return startedAt.Format("Jan 02 15:04")
+}
+
+// formatBudget returns the configured max cost per ticket as "$X.XX",
+// or "∞" when no limit is set (zero or negative).
+func formatBudget(maxCostPerTicket float64) string {
+	if maxCostPerTicket <= 0 {
+		return "∞"
+	}
+	return fmt.Sprintf("$%.2f", maxCostPerTicket)
 }
 
 func formatElapsed(meta *pipeline.PipelineMeta) string {
