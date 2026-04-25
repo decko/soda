@@ -46,7 +46,7 @@ type PipelineResult struct {
 // defaultNotifyTimeout is the maximum time allowed for a single webhook or
 // script notification. Notifications are best-effort and must not block the
 // pipeline for extended periods.
-const defaultNotifyTimeout = 30 * time.Second
+const defaultNotifyTimeout = 10 * time.Second
 
 // Notifier sends pipeline completion notifications via webhook and/or script.
 type Notifier struct {
