@@ -164,8 +164,8 @@ func FetchBranch(ctx context.Context, repoDir, remote, branch string) error {
 
 // DeleteBranch deletes a local git branch. It runs "git branch -D <branch>"
 // from the given repoDir. Returns nil if the branch was deleted or did not exist.
-func DeleteBranch(repoDir, branch string) error {
-	cmd := exec.Command("git", "branch", "-D", branch)
+func DeleteBranch(ctx context.Context, repoDir, branch string) error {
+	cmd := exec.CommandContext(ctx, "git", "branch", "-D", branch)
 	cmd.Dir = repoDir
 	output, err := cmd.CombinedOutput()
 	if err != nil {

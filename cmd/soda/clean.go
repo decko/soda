@@ -141,7 +141,7 @@ func cleanTicket(ctx context.Context, stateDir, ticketKey string, dryRun, force,
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: cannot resolve repo dir to delete branch %s: %v\n", meta.Branch, err)
 			} else {
-				if brErr := sodagit.DeleteBranch(repoDir, meta.Branch); brErr != nil {
+				if brErr := sodagit.DeleteBranch(ctx, repoDir, meta.Branch); brErr != nil {
 					fmt.Fprintf(os.Stderr, "Warning: git branch delete %s: %v\n", meta.Branch, brErr)
 				} else {
 					branchCleared = true

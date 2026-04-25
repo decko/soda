@@ -218,7 +218,7 @@ func TestDeleteBranch(t *testing.T) {
 		}
 
 		// Delete it
-		if err := DeleteBranch(repoDir, "feat/to-delete"); err != nil {
+		if err := DeleteBranch(context.Background(), repoDir, "feat/to-delete"); err != nil {
 			t.Fatalf("DeleteBranch: %v", err)
 		}
 
@@ -237,9 +237,28 @@ func TestDeleteBranch(t *testing.T) {
 	t.Run("no_error_for_nonexistent_branch", func(t *testing.T) {
 		repoDir := initGitRepo(t)
 
-		err := DeleteBranch(repoDir, "feat/does-not-exist")
+		err := DeleteBranch(context.Background(), repoDir, "feat/does-not-exist")
 		if err != nil {
 			t.Fatalf("DeleteBranch should not error for nonexistent branch: %v", err)
+		}
+	})
+
+	t.Run("respects_context_cancellation", func(t *testing.T) {
+		repoDir := initGitRepo(t)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		// Create a branch to attempt deleting with a cancelled context.
+		cmd := exec.Command("git", "branch", "feat/cancel-delete")
+		cmd.Dir = repoDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git branch: %s: %v", out, err)
+		}
+
+		err := DeleteBranch(ctx, repoDir, "feat/cancel-delete")
+		if err == nil {
+			t.Fatal("expected error from cancelled context")
 		}
 	})
 }
