@@ -195,10 +195,31 @@ func (e *Engine) postWebhook(ctx context.Context, payload webhookPayload) error 
 	return e.postWebhookTo(ctx, e.config.Notify.WebhookURL, payload)
 }
 
+// notifyWithTimeout runs fn with a fresh per-handler timeout. It is a helper
+// for notifyOnFinish to ensure each handler gets its own independent timeout
+// rather than sharing a single deadline across sequential handlers.
+func (e *Engine) notifyWithTimeout(timeout time.Duration, handlerType string, fn func(ctx context.Context) error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	if err := fn(ctx); err != nil {
+		e.emit(Event{
+			Kind: EventNotifyFailed,
+			Data: map[string]any{"type": handlerType, "error": err.Error()},
+		})
+	} else {
+		e.emit(Event{
+			Kind: EventNotifySuccess,
+			Data: map[string]any{"type": handlerType},
+		})
+	}
+}
+
 // notifyOnFinish is the best-effort notification orchestrator. It derives the
 // pipeline status, runs the configured script and/or webhook, and emits events
-// on success or failure. Errors are captured via EventNotifyFailed and never
-// propagated to the caller.
+// on success or failure. Each handler gets its own independent timeout so that
+// a slow handler cannot starve subsequent ones. Errors are captured via
+// EventNotifyFailed and never propagated to the caller.
 func (e *Engine) notifyOnFinish(runErr error) {
 	cfg := e.config.Notify
 	if cfg.WebhookURL == "" && cfg.Script == "" && cfg.FailureWebhookURL == "" && cfg.FailureScript == "" {
@@ -207,68 +228,34 @@ func (e *Engine) notifyOnFinish(runErr error) {
 
 	status := e.deriveStatus(runErr)
 	timeout := cfg.notifyTimeout()
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
 
 	// on_finish handlers: fire on every completion (success or failure).
 	if cfg.Script != "" {
-		if err := e.runScript(ctx, status, runErr); err != nil {
-			e.emit(Event{
-				Kind: EventNotifyFailed,
-				Data: map[string]any{"type": "script", "error": err.Error()},
-			})
-		} else {
-			e.emit(Event{
-				Kind: EventNotifySuccess,
-				Data: map[string]any{"type": "script"},
-			})
-		}
+		e.notifyWithTimeout(timeout, "script", func(ctx context.Context) error {
+			return e.runScript(ctx, status, runErr)
+		})
 	}
 
 	if cfg.WebhookURL != "" {
 		payload := e.buildWebhookPayload(status, runErr)
-		if err := e.postWebhook(ctx, payload); err != nil {
-			e.emit(Event{
-				Kind: EventNotifyFailed,
-				Data: map[string]any{"type": "webhook", "error": err.Error()},
-			})
-		} else {
-			e.emit(Event{
-				Kind: EventNotifySuccess,
-				Data: map[string]any{"type": "webhook"},
-			})
-		}
+		e.notifyWithTimeout(timeout, "webhook", func(ctx context.Context) error {
+			return e.postWebhook(ctx, payload)
+		})
 	}
 
 	// on_failure handlers: fire only when the pipeline encountered an error.
 	if runErr != nil {
 		if cfg.FailureScript != "" {
-			if err := e.runScriptAt(ctx, cfg.FailureScript, status, runErr); err != nil {
-				e.emit(Event{
-					Kind: EventNotifyFailed,
-					Data: map[string]any{"type": "script", "error": err.Error()},
-				})
-			} else {
-				e.emit(Event{
-					Kind: EventNotifySuccess,
-					Data: map[string]any{"type": "script"},
-				})
-			}
+			e.notifyWithTimeout(timeout, "script", func(ctx context.Context) error {
+				return e.runScriptAt(ctx, cfg.FailureScript, status, runErr)
+			})
 		}
 
 		if cfg.FailureWebhookURL != "" {
 			payload := e.buildWebhookPayload(status, runErr)
-			if err := e.postWebhookTo(ctx, cfg.FailureWebhookURL, payload); err != nil {
-				e.emit(Event{
-					Kind: EventNotifyFailed,
-					Data: map[string]any{"type": "webhook", "error": err.Error()},
-				})
-			} else {
-				e.emit(Event{
-					Kind: EventNotifySuccess,
-					Data: map[string]any{"type": "webhook"},
-				})
-			}
+			e.notifyWithTimeout(timeout, "webhook", func(ctx context.Context) error {
+				return e.postWebhookTo(ctx, cfg.FailureWebhookURL, payload)
+			})
 		}
 	}
 }
