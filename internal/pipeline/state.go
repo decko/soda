@@ -138,6 +138,7 @@ func (s *State) MarkRunning(phase string) error {
 	ps.CacheTokensIn = 0
 	ps.Error = ""
 	ps.PlanHash = ""
+	ps.PromptHash = ""
 	ps.startedAt = time.Now()
 
 	return s.flushMeta()

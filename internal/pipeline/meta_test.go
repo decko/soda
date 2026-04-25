@@ -455,6 +455,74 @@ func TestMetaPipelineNameOmitEmpty(t *testing.T) {
 	}
 }
 
+func TestMetaPromptHashRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "meta.json")
+
+	original := &PipelineMeta{
+		Ticket:    "PROJ-383",
+		StartedAt: time.Now().Truncate(time.Second),
+		Phases: map[string]*PhaseState{
+			"triage": {
+				Status:     PhaseCompleted,
+				Cost:       0.10,
+				DurationMs: 5000,
+				Generation: 1,
+				PromptHash: "abc123def456789012345678901234567890123456789012345678901234abcd",
+			},
+		},
+	}
+
+	if err := WriteMeta(path, original); err != nil {
+		t.Fatalf("writeMeta: %v", err)
+	}
+
+	loaded, err := ReadMeta(path)
+	if err != nil {
+		t.Fatalf("ReadMeta: %v", err)
+	}
+
+	ps := loaded.Phases["triage"]
+	if ps == nil {
+		t.Fatal("triage phase missing")
+	}
+	if ps.PromptHash != original.Phases["triage"].PromptHash {
+		t.Errorf("PromptHash = %q, want %q", ps.PromptHash, original.Phases["triage"].PromptHash)
+	}
+}
+
+func TestMetaPromptHashOmitEmpty(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "meta.json")
+
+	original := &PipelineMeta{
+		Ticket:    "PROJ-383",
+		StartedAt: time.Now().Truncate(time.Second),
+		Phases: map[string]*PhaseState{
+			"triage": {
+				Status:     PhaseCompleted,
+				Cost:       0.10,
+				DurationMs: 5000,
+				Generation: 1,
+			},
+		},
+	}
+
+	if err := WriteMeta(path, original); err != nil {
+		t.Fatalf("writeMeta: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+
+	// When PromptHash is empty, it should be omitted from JSON.
+	if strings.Contains(string(data), "prompt_hash") {
+		t.Errorf("meta.json should omit prompt_hash when empty, got:\n%s", data)
+	}
+}
+
 func TestPhaseStatusConstants(t *testing.T) {
 	// Verify JSON serialization matches expected strings
 	tests := []struct {

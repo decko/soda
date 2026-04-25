@@ -99,6 +99,137 @@ func TestEngine_HappyPathAllPhasesComplete(t *testing.T) {
 	}
 }
 
+func TestEngine_PromptHashPersistedToMeta(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "plan",
+			Prompt:    "plan.md",
+			DependsOn: []string{"triage"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage: automatable",
+					CostUSD: 0.10,
+				},
+			}},
+			"plan": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tasks":["task1"]}`),
+					RawText: "Plan: one task",
+					CostUSD: 0.20,
+				},
+			}},
+		},
+	}
+
+	engine, state := setupEngine(t, phases, mock)
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Both phases should have a non-empty PromptHash.
+	for _, name := range []string{"triage", "plan"} {
+		ps := state.Meta().Phases[name]
+		if ps == nil {
+			t.Fatalf("phase %q not found in meta", name)
+		}
+		if ps.PromptHash == "" {
+			t.Errorf("phase %q: PromptHash should be set after completion", name)
+		}
+		// SHA-256 hex digest is 64 characters.
+		if len(ps.PromptHash) != 64 {
+			t.Errorf("phase %q: PromptHash length = %d, want 64 (SHA-256 hex)", name, len(ps.PromptHash))
+		}
+	}
+
+	// Different prompts should produce different hashes.
+	triageHash := state.Meta().Phases["triage"].PromptHash
+	planHash := state.Meta().Phases["plan"].PromptHash
+	if triageHash == planHash {
+		t.Errorf("triage and plan should have different PromptHashes (both = %q)", triageHash)
+	}
+
+	// Verify the hash matches the rendered prompt content.
+	// The setupEngine helper writes "Phase: <name>\nTicket: {{.Ticket.Key}}\n"
+	// which renders to "Phase: triage\nTicket: TEST-1\n".
+	expectedContent := "Phase: triage\nTicket: TEST-1\n"
+	expectedHash := fmt.Sprintf("%x", sha256.Sum256([]byte(expectedContent)))
+	if triageHash != expectedHash {
+		t.Errorf("triage PromptHash = %q, want %q (sha256 of %q)", triageHash, expectedHash, expectedContent)
+	}
+}
+
+func TestEngine_PromptHashClearedOnRerun(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {
+				{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"automatable":true}`),
+						RawText: "Triage: gen1",
+						CostUSD: 0.10,
+					},
+				},
+				{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"automatable":true}`),
+						RawText: "Triage: gen2",
+						CostUSD: 0.10,
+					},
+				},
+			},
+		},
+	}
+
+	engine, state := setupEngine(t, phases, mock)
+
+	// First run.
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run 1: %v", err)
+	}
+
+	hash1 := state.Meta().Phases["triage"].PromptHash
+	if hash1 == "" {
+		t.Fatal("PromptHash should be set after first run")
+	}
+
+	// Resume (re-run triage). MarkRunning should clear the hash before
+	// the new hash is computed.
+	if err := engine.Resume(context.Background(), "triage"); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+
+	hash2 := state.Meta().Phases["triage"].PromptHash
+	if hash2 == "" {
+		t.Fatal("PromptHash should be set after re-run")
+	}
+
+	// Same prompt template + same data → same hash.
+	if hash1 != hash2 {
+		t.Errorf("PromptHash should be deterministic: run1=%q, run2=%q", hash1, hash2)
+	}
+}
+
 func TestEngine_TokenCountsPersistedToMeta(t *testing.T) {
 	phases := []PhaseConfig{
 		{

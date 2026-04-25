@@ -2,8 +2,10 @@ package pipeline
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
@@ -33,9 +35,10 @@ type reviewerMsg struct {
 
 // reviewerLog holds data for a deferred WriteLog call.
 type reviewerLog struct {
-	Phase   string
-	Name    string
-	Content []byte
+	Phase    string
+	Name     string
+	Content  []byte
+	IsPrompt bool // true when this log carries a rendered prompt (used for PromptHash)
 }
 
 // loadPriorReview reads and parses the archived review result from the
@@ -233,6 +236,8 @@ func (e *Engine) runParallelReview(ctx context.Context, phase PhaseConfig) error
 	}()
 
 	// Drain channel in the parent goroutine — all State access is serialized here.
+	// Collect rendered prompts keyed by reviewer name for composite PromptHash.
+	renderedPrompts := make(map[string][]byte)
 	for msg := range msgCh {
 		if msg.Event != nil {
 			if msg.Event.Kind == EventOutputChunk {
@@ -243,6 +248,9 @@ func (e *Engine) runParallelReview(ctx context.Context, phase PhaseConfig) error
 		}
 		if msg.Log != nil {
 			_ = e.state.WriteLog(msg.Log.Phase, "prompt_"+msg.Log.Name, msg.Log.Content)
+			if msg.Log.IsPrompt {
+				renderedPrompts[msg.Log.Name] = msg.Log.Content
+			}
 		}
 		if msg.Result != nil {
 			results[msg.Index] = *msg.Result
@@ -340,6 +348,22 @@ func (e *Engine) runParallelReview(ctx context.Context, phase PhaseConfig) error
 		return err
 	}
 
+	// Compute composite PromptHash from all reviewer rendered prompts.
+	// Sort by reviewer name for deterministic ordering.
+	if len(renderedPrompts) > 0 {
+		names := make([]string, 0, len(renderedPrompts))
+		for name := range renderedPrompts {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+
+		h := sha256.New()
+		for _, name := range names {
+			h.Write(renderedPrompts[name])
+		}
+		e.state.Meta().Phases[phase.Name].PromptHash = fmt.Sprintf("%x", h.Sum(nil))
+	}
+
 	// Mark completed.
 	if err := e.state.MarkCompleted(phase.Name); err != nil {
 		return fmt.Errorf("engine: mark completed %s: %w", phase.Name, err)
@@ -412,7 +436,7 @@ func (e *Engine) runReviewer(ctx context.Context, phase PhaseConfig, reviewer Re
 	}
 
 	// Send log to parent for serialized WriteLog.
-	msgCh <- reviewerMsg{Log: &reviewerLog{Phase: phase.Name, Name: reviewer.Name, Content: []byte(rendered)}, Index: idx}
+	msgCh <- reviewerMsg{Log: &reviewerLog{Phase: phase.Name, Name: reviewer.Name, Content: []byte(rendered), IsPrompt: true}, Index: idx}
 
 	// Use a reviewer-specific OnChunk that routes events through msgCh
 	// to maintain the serialization contract — all events flow through
