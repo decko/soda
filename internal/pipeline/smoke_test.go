@@ -266,3 +266,168 @@ func TestSmoke_HappyPath(t *testing.T) {
 		t.Error("events.jsonl should not be empty")
 	}
 }
+
+// TestSmoke_ReworkLoop tests the review→implement rework cycle:
+// review returns "rework" → implement gen 2 → verify gen 2 → review gen 2
+// passes → submit. Uses flexMockRunner's multi-response capability to return
+// different results on the same phase's 2nd call.
+func TestSmoke_ReworkLoop(t *testing.T) {
+	phases := smokePipelinePhases()
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{result: smokeFixtures()["triage"]}},
+			"plan":   {{result: smokeFixtures()["plan"]}},
+			"implement": {
+				// Gen 1: initial implementation.
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true,"commits":[{"hash":"aaa"}],"files_changed":[{"path":"main.go","action":"modified"}],"task_results":[{"task_id":"T1","status":"completed"}]}`),
+					RawText: "Impl v1",
+					CostUSD: 0.50,
+				}},
+				// Gen 2: rework with fixes.
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true,"commits":[{"hash":"bbb"}],"files_changed":[{"path":"main.go","action":"modified"}],"task_results":[{"task_id":"T1","status":"completed"}]}`),
+					RawText: "Impl v2 with error handling",
+					CostUSD: 0.60,
+				}},
+			},
+			"verify": {
+				// Gen 1: passes after initial implement.
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"verdict":"PASS"}`),
+					RawText: "Verify v1 pass",
+					CostUSD: 0.10,
+				}},
+				// Gen 2: passes after rework.
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"verdict":"PASS"}`),
+					RawText: "Verify v2 pass",
+					CostUSD: 0.12,
+				}},
+			},
+			"review": {
+				// Gen 1: rework verdict with a major finding.
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[{"severity":"major","issue":"missing error handling","file":"main.go","line":42,"suggestion":"add error check"}],"verdict":"rework"}`),
+					RawText: "Review v1: rework needed",
+					CostUSD: 0.05,
+				}},
+				// Gen 2: pass after rework.
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[],"verdict":"pass"}`),
+					RawText: "Review v2: pass",
+					CostUSD: 0.06,
+				}},
+			},
+			"submit": {{result: smokeFixtures()["submit"]}},
+		},
+	}
+
+	stateDir := t.TempDir()
+	promptDir := t.TempDir()
+	workDir := t.TempDir()
+
+	writeSmokePrompts(t, promptDir)
+
+	state, err := LoadOrCreate(stateDir, "REWORK-1")
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+
+	var events []Event
+	cfg := EngineConfig{
+		Pipeline:   &PhasePipeline{Phases: phases},
+		Loader:     NewPromptLoader(promptDir),
+		Ticket:     TicketData{Key: "REWORK-1", Summary: "Rework loop test"},
+		Model:      "test-model",
+		WorkDir:    workDir,
+		MaxCostUSD: 10.0,
+		Mode:       Autonomous,
+		SleepFunc:  func(time.Duration) {},
+		JitterFunc: func(time.Duration) time.Duration { return 0 },
+		OnEvent:    func(e Event) { events = append(events, e) },
+	}
+
+	engine := NewEngine(mock, state, cfg)
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// --- All phases completed ---
+	for _, name := range []string{"triage", "plan", "implement", "verify", "review", "submit"} {
+		if !state.IsCompleted(name) {
+			t.Errorf("phase %q should be completed", name)
+		}
+	}
+
+	// --- ReworkCycles incremented ---
+	if state.Meta().ReworkCycles != 1 {
+		t.Errorf("ReworkCycles = %d, want 1", state.Meta().ReworkCycles)
+	}
+
+	// --- Generation increments ---
+	implPS := state.Meta().Phases["implement"]
+	if implPS == nil {
+		t.Fatal("implement phase state missing")
+	}
+	if implPS.Generation != 2 {
+		t.Errorf("implement generation = %d, want 2", implPS.Generation)
+	}
+
+	verifyPS := state.Meta().Phases["verify"]
+	if verifyPS == nil {
+		t.Fatal("verify phase state missing")
+	}
+	if verifyPS.Generation != 2 {
+		t.Errorf("verify generation = %d, want 2", verifyPS.Generation)
+	}
+
+	reviewPS := state.Meta().Phases["review"]
+	if reviewPS == nil {
+		t.Fatal("review phase state missing")
+	}
+	if reviewPS.Generation != 2 {
+		t.Errorf("review generation = %d, want 2", reviewPS.Generation)
+	}
+
+	// --- Cost accumulation across both generations ---
+	// triage(0.01) + plan(0.02) + impl1(0.50) + verify1(0.10) + review1(0.05)
+	// + impl2(0.60) + verify2(0.12) + review2(0.06) + submit(0.03) = 1.49
+	expectedCost := 0.01 + 0.02 + 0.50 + 0.10 + 0.05 + 0.60 + 0.12 + 0.06 + 0.03
+	if !approxEqual(state.Meta().TotalCost, expectedCost) {
+		t.Errorf("TotalCost = %v, want %v", state.Meta().TotalCost, expectedCost)
+	}
+
+	// --- Runner call count: 6 initial + 3 rework (impl + verify + review) + 1 submit = 9 ---
+	// triage, plan, implement, verify, review, implement, verify, review, submit = 9
+	if len(mock.calls) != 9 {
+		t.Errorf("runner called %d times, want 9; phases: %v",
+			len(mock.calls), phaseNames(mock.calls))
+	}
+
+	// --- Verify rework_routed event ---
+	eventKinds := make(map[string]int)
+	for _, e := range events {
+		eventKinds[e.Kind]++
+	}
+	if eventKinds[EventReworkRouted] != 1 {
+		t.Errorf("rework_routed events = %d, want 1", eventKinds[EventReworkRouted])
+	}
+
+	// --- Submit result is correct ---
+	submitResult, err := state.ReadResult("submit")
+	if err != nil {
+		t.Fatalf("ReadResult(submit): %v", err)
+	}
+	var submitData struct {
+		PRURL string `json:"pr_url"`
+	}
+	if err := json.Unmarshal(submitResult, &submitData); err != nil {
+		t.Fatalf("unmarshal submit: %v", err)
+	}
+	if submitData.PRURL != "https://github.com/test/repo/pull/1" {
+		t.Errorf("submit pr_url = %q, want %q", submitData.PRURL, "https://github.com/test/repo/pull/1")
+	}
+}
