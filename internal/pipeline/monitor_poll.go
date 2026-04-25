@@ -615,11 +615,6 @@ func (e *Engine) checkNewCommentsPassive(ctx context.Context, phaseName string, 
 	})
 }
 
-// checkCIStatus polls CI status and emits events on status changes.
-func (e *Engine) checkCIStatus(ctx context.Context, phaseName string, monState *MonitorState) {
-	_ = e.checkCIStatusReturn(ctx, phaseName, monState)
-}
-
 // checkCIStatusReturn polls CI status, emits events on status changes,
 // and returns the latest CIStatus so callers (e.g., auto-merge) can inspect it.
 func (e *Engine) checkCIStatusReturn(ctx context.Context, phaseName string, monState *MonitorState) *CIStatus {
