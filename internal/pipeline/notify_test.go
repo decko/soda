@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNewNotifier_NilWhenEmpty(t *testing.T) {
@@ -260,6 +261,38 @@ func TestNotifier_EmptyCommandSkipsScript(t *testing.T) {
 	err := n.Notify(context.Background(), PipelineResult{Ticket: "X-1", Status: "success"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestNotifier_WebhookTimeout(t *testing.T) {
+	// Create a server that hangs until signalled to stop.
+	hangCh := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-hangCh:
+		case <-r.Context().Done():
+		}
+	}))
+	// Close hangCh first so handler unblocks, then close the server.
+	defer func() {
+		close(hangCh)
+		srv.Close()
+	}()
+
+	n := NewNotifier(NotifyConfig{
+		Webhook: &WebhookNotifyConfig{URL: srv.URL},
+	})
+
+	// Override timeout to something very short so the test completes quickly.
+	n.timeout = 50 * time.Millisecond
+	n.httpClient = &http.Client{Timeout: 50 * time.Millisecond}
+
+	err := n.Notify(context.Background(), PipelineResult{Ticket: "X-1", Status: "success"})
+	if err == nil {
+		t.Fatal("expected timeout error for hanging server")
+	}
+	if !strings.Contains(err.Error(), "webhook") {
+		t.Errorf("error should mention webhook, got: %v", err)
 	}
 }
 
