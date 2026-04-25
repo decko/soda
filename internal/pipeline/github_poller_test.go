@@ -393,8 +393,23 @@ func TestMergePR_ConflictError(t *testing.T) {
 	}
 }
 
-func TestMergePR_ClosedError(t *testing.T) {
+func TestMergePR_AlreadyMergedError(t *testing.T) {
 	binPath := writeFakeGH(t, "", "Pull request was already merged", 1)
+
+	poller := NewGitHubPRPoller(binPath)
+	ctx := context.Background()
+
+	err := poller.MergePR(ctx, "https://github.com/owner/repo/pull/1", "squash")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, ErrPRAlreadyMerged) {
+		t.Errorf("expected ErrPRAlreadyMerged, got: %v", err)
+	}
+}
+
+func TestMergePR_ClosedError(t *testing.T) {
+	binPath := writeFakeGH(t, "", "Pull request is closed", 1)
 
 	poller := NewGitHubPRPoller(binPath)
 	ctx := context.Background()

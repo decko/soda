@@ -51,8 +51,9 @@ type PRPoller interface {
 	PostComment(ctx context.Context, prURL string, body string) error
 	// MergePR merges the pull request using the specified method
 	// ("merge", "squash", or "rebase"). Returns ErrMergeConflict if the
-	// merge fails due to conflicts, or ErrPRClosed if the PR is already
-	// closed or merged.
+	// merge fails due to conflicts, ErrPRAlreadyMerged if the PR was
+	// already merged by someone else (a success condition), or ErrPRClosed
+	// if the PR is closed without merging.
 	MergePR(ctx context.Context, prURL string, method string) error
 }
 
@@ -70,9 +71,14 @@ type MergeValidator interface {
 // merge conflicts on the target branch.
 var ErrMergeConflict = errors.New("monitor: merge conflict")
 
-// ErrPRClosed is returned by MergePR when the pull request is already
-// closed or merged and cannot be merged.
+// ErrPRClosed is returned by MergePR when the pull request is closed
+// (not merged) and cannot be merged.
 var ErrPRClosed = errors.New("monitor: pull request is closed")
+
+// ErrPRAlreadyMerged is returned by MergePR when the pull request was
+// already merged by someone else. Callers can treat this as a success
+// condition (the desired end state was reached) unlike ErrPRClosed.
+var ErrPRAlreadyMerged = errors.New("monitor: pull request was already merged")
 
 // PRStatus holds the current state of a pull request.
 type PRStatus struct {

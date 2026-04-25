@@ -334,8 +334,9 @@ func (p *GitHubPRPoller) MergePR(ctx context.Context, prURL string, method strin
 		switch {
 		case strings.Contains(stderr, "merge conflict"):
 			return fmt.Errorf("%w: %s", ErrMergeConflict, stderr)
+		case strings.Contains(stderr, "was already merged"):
+			return fmt.Errorf("%w: %s", ErrPRAlreadyMerged, stderr)
 		case strings.Contains(stderr, "closed"),
-			strings.Contains(stderr, "was already merged"),
 			strings.Contains(stderr, "not mergeable"):
 			return fmt.Errorf("%w: %s", ErrPRClosed, stderr)
 		default:
