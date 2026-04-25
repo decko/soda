@@ -165,7 +165,7 @@ func TestTryAutoMerge_NotApproved(t *testing.T) {
 		PRURL:        "https://github.com/o/r/pull/1",
 		ApprovalTime: &now,
 	}
-	prStatus := &PRStatus{State: "open", Approved: false}
+	prStatus := &PRStatus{State: "open", Approved: false, Labels: []string{"auto-merge-ok"}}
 	ciStatus := &CIStatus{Overall: "success"}
 	polling := &PollingConfig{AutoMerge: true, AutoMergeTimeout: Duration{Duration: 30 * time.Minute}}
 
@@ -184,7 +184,7 @@ func TestTryAutoMerge_CINotGreen(t *testing.T) {
 		PRURL:        "https://github.com/o/r/pull/1",
 		ApprovalTime: &now,
 	}
-	prStatus := &PRStatus{State: "open", Approved: true, HeadSHA: "abc123"}
+	prStatus := &PRStatus{State: "open", Approved: true, HeadSHA: "abc123", Labels: []string{"auto-merge-ok"}}
 	ciStatus := &CIStatus{Overall: "pending", CommitSHA: "abc123"}
 	polling := &PollingConfig{AutoMerge: true, AutoMergeTimeout: Duration{Duration: 30 * time.Minute}}
 
@@ -206,7 +206,7 @@ func TestTryAutoMerge_CISHAStale(t *testing.T) {
 		PRURL:        "https://github.com/o/r/pull/1",
 		ApprovalTime: &now,
 	}
-	prStatus := &PRStatus{State: "open", Approved: true, HeadSHA: "abc123"}
+	prStatus := &PRStatus{State: "open", Approved: true, HeadSHA: "abc123", Labels: []string{"auto-merge-ok"}}
 	ciStatus := &CIStatus{Overall: "success", CommitSHA: "old999"}
 	polling := &PollingConfig{AutoMerge: true, AutoMergeTimeout: Duration{Duration: 30 * time.Minute}}
 
@@ -236,7 +236,7 @@ func TestTryAutoMerge_DryRun(t *testing.T) {
 		PRURL:        "https://github.com/o/r/pull/1",
 		ApprovalTime: &now,
 	}
-	prStatus := &PRStatus{State: "open", Approved: true, HeadSHA: "abc123"}
+	prStatus := &PRStatus{State: "open", Approved: true, HeadSHA: "abc123", Labels: []string{"auto-merge-ok"}}
 	ciStatus := &CIStatus{Overall: "success", CommitSHA: "abc123"}
 	polling := &PollingConfig{AutoMerge: false, AutoMergeTimeout: Duration{Duration: 30 * time.Minute}} // auto_merge disabled
 
@@ -262,7 +262,7 @@ func TestTryAutoMerge_DryRunNotDuplicated(t *testing.T) {
 		ApprovalTime: &now,
 		DryRunLogged: true, // already logged
 	}
-	prStatus := &PRStatus{State: "open", Approved: true, HeadSHA: "abc123"}
+	prStatus := &PRStatus{State: "open", Approved: true, HeadSHA: "abc123", Labels: []string{"auto-merge-ok"}}
 	ciStatus := &CIStatus{Overall: "success", CommitSHA: "abc123"}
 	polling := &PollingConfig{AutoMerge: false, AutoMergeTimeout: Duration{Duration: 30 * time.Minute}}
 
@@ -284,7 +284,7 @@ func TestTryAutoMerge_MergeSuccess(t *testing.T) {
 		PRURL:        "https://github.com/o/r/pull/1",
 		ApprovalTime: &now,
 	}
-	prStatus := &PRStatus{State: "open", Approved: true, HeadSHA: "abc123"}
+	prStatus := &PRStatus{State: "open", Approved: true, HeadSHA: "abc123", Labels: []string{"auto-merge-ok"}}
 	ciStatus := &CIStatus{Overall: "success", CommitSHA: "abc123"}
 	polling := &PollingConfig{AutoMerge: true, AutoMergeTimeout: Duration{Duration: 30 * time.Minute}}
 
@@ -315,7 +315,7 @@ func TestTryAutoMerge_AlreadyMerged(t *testing.T) {
 		PRURL:        "https://github.com/o/r/pull/1",
 		ApprovalTime: &now,
 	}
-	prStatus := &PRStatus{State: "open", Approved: true, HeadSHA: "abc123"}
+	prStatus := &PRStatus{State: "open", Approved: true, HeadSHA: "abc123", Labels: []string{"auto-merge-ok"}}
 	ciStatus := &CIStatus{Overall: "success", CommitSHA: "abc123"}
 	polling := &PollingConfig{AutoMerge: true, AutoMergeTimeout: Duration{Duration: 30 * time.Minute}}
 
@@ -339,7 +339,7 @@ func TestTryAutoMerge_MergeConflict(t *testing.T) {
 		PRURL:        "https://github.com/o/r/pull/1",
 		ApprovalTime: &now,
 	}
-	prStatus := &PRStatus{State: "open", Approved: true, HeadSHA: "abc123"}
+	prStatus := &PRStatus{State: "open", Approved: true, HeadSHA: "abc123", Labels: []string{"auto-merge-ok"}}
 	ciStatus := &CIStatus{Overall: "success", CommitSHA: "abc123"}
 	polling := &PollingConfig{AutoMerge: true, AutoMergeTimeout: Duration{Duration: 30 * time.Minute}}
 
@@ -363,7 +363,7 @@ func TestTryAutoMerge_PRClosed(t *testing.T) {
 		PRURL:        "https://github.com/o/r/pull/1",
 		ApprovalTime: &now,
 	}
-	prStatus := &PRStatus{State: "open", Approved: true, HeadSHA: "abc123"}
+	prStatus := &PRStatus{State: "open", Approved: true, HeadSHA: "abc123", Labels: []string{"auto-merge-ok"}}
 	ciStatus := &CIStatus{Overall: "success", CommitSHA: "abc123"}
 	polling := &PollingConfig{AutoMerge: true, AutoMergeTimeout: Duration{Duration: 30 * time.Minute}}
 
@@ -385,7 +385,7 @@ func TestTryAutoMerge_CustomMergeMethod(t *testing.T) {
 		PRURL:        "https://github.com/o/r/pull/1",
 		ApprovalTime: &now,
 	}
-	prStatus := &PRStatus{State: "open", Approved: true, HeadSHA: "abc123"}
+	prStatus := &PRStatus{State: "open", Approved: true, HeadSHA: "abc123", Labels: []string{"auto-merge-ok"}}
 	ciStatus := &CIStatus{Overall: "success", CommitSHA: "abc123"}
 	polling := &PollingConfig{
 		AutoMerge:        true,
@@ -442,7 +442,7 @@ func TestTryAutoMerge_NilCIStatus(t *testing.T) {
 		PRURL:        "https://github.com/o/r/pull/1",
 		ApprovalTime: &now,
 	}
-	prStatus := &PRStatus{State: "open", Approved: true}
+	prStatus := &PRStatus{State: "open", Approved: true, Labels: []string{"auto-merge-ok"}}
 	polling := &PollingConfig{AutoMerge: true, AutoMergeTimeout: Duration{Duration: 30 * time.Minute}}
 
 	result := engine.tryAutoMerge(context.Background(), "monitor", monState, prStatus, nil, polling)

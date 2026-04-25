@@ -64,7 +64,7 @@ func (e *Engine) tryAutoMerge(
 
 	// --- 2. Label check ---
 	requiredLabels := e.mergeLabels(polling)
-	if len(requiredLabels) > 0 && prStatus != nil {
+	if prStatus != nil {
 		missing := missingLabels(requiredLabels, prStatus.Labels)
 		if len(missing) > 0 {
 			e.emit(Event{
@@ -227,13 +227,21 @@ func (e *Engine) mergeMethod(polling *PollingConfig) string {
 	return "squash"
 }
 
+// defaultMergeLabels is the set of labels required for auto-merge when
+// merge_labels is not explicitly configured. There is no escape hatch:
+// setting merge_labels to an empty list still falls through to this default.
+var defaultMergeLabels = []string{"auto-merge-ok"}
+
 // mergeLabels returns the configured required merge labels.
-// Checks PollingConfig first, then EngineConfig.
+// Checks PollingConfig first, then EngineConfig, then defaultMergeLabels.
 func (e *Engine) mergeLabels(polling *PollingConfig) []string {
 	if polling != nil && len(polling.MergeLabels) > 0 {
 		return polling.MergeLabels
 	}
-	return e.config.MergeLabels
+	if len(e.config.MergeLabels) > 0 {
+		return e.config.MergeLabels
+	}
+	return defaultMergeLabels
 }
 
 // autoMergeTimeout returns the configured auto-merge timeout.

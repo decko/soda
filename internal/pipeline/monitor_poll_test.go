@@ -2574,7 +2574,7 @@ func TestMonitor_AutoMerge_Success(t *testing.T) {
 	// PR is approved, CI is green, auto_merge is enabled → merge succeeds.
 	poller := &mockPRPoller{
 		statusResponses: []mockPRStatusResponse{
-			{status: &PRStatus{State: "open", Approved: true, HeadSHA: "abc123"}},
+			{status: &PRStatus{State: "open", Approved: true, HeadSHA: "abc123", Labels: []string{"auto-merge-ok"}}},
 		},
 		ciResponses: []mockCIResponse{
 			{status: &CIStatus{Overall: "success", CommitSHA: "abc123"}},
@@ -2623,8 +2623,8 @@ func TestMonitor_AutoMerge_CIPending_ThenGreen(t *testing.T) {
 	// PR is approved, CI starts pending → next poll CI is green → merge.
 	poller := &mockPRPoller{
 		statusResponses: []mockPRStatusResponse{
-			{status: &PRStatus{State: "open", Approved: true, HeadSHA: "abc123"}},
-			{status: &PRStatus{State: "open", Approved: true, HeadSHA: "abc123"}},
+			{status: &PRStatus{State: "open", Approved: true, HeadSHA: "abc123", Labels: []string{"auto-merge-ok"}}},
+			{status: &PRStatus{State: "open", Approved: true, HeadSHA: "abc123", Labels: []string{"auto-merge-ok"}}},
 		},
 		ciResponses: []mockCIResponse{
 			{status: &CIStatus{Overall: "pending", CommitSHA: "abc123"}},
@@ -2701,7 +2701,7 @@ func TestMonitor_AutoMerge_RebaseConflict(t *testing.T) {
 	// PR is approved, CI green, merge returns conflict → phase fails.
 	poller := &mockPRPoller{
 		statusResponses: []mockPRStatusResponse{
-			{status: &PRStatus{State: "open", Approved: true, HeadSHA: "abc123"}},
+			{status: &PRStatus{State: "open", Approved: true, HeadSHA: "abc123", Labels: []string{"auto-merge-ok"}}},
 		},
 		ciResponses: []mockCIResponse{
 			{status: &CIStatus{Overall: "success", CommitSHA: "abc123"}},
@@ -2739,7 +2739,7 @@ func TestMonitor_AutoMerge_Disabled_DryRun(t *testing.T) {
 	// PR is approved, CI green, auto_merge=false → dry run event, phase completes.
 	poller := &mockPRPoller{
 		statusResponses: []mockPRStatusResponse{
-			{status: &PRStatus{State: "open", Approved: true, HeadSHA: "abc123"}},
+			{status: &PRStatus{State: "open", Approved: true, HeadSHA: "abc123", Labels: []string{"auto-merge-ok"}}},
 		},
 		ciResponses: []mockCIResponse{
 			{status: &CIStatus{Overall: "success", CommitSHA: "abc123"}},
@@ -2815,7 +2815,7 @@ func TestMonitor_AutoMerge_ApprovalTimeRecorded(t *testing.T) {
 	// Verify that ApprovalTime is set on first observation.
 	poller := &mockPRPoller{
 		statusResponses: []mockPRStatusResponse{
-			{status: &PRStatus{State: "open", Approved: true, HeadSHA: "abc123"}},
+			{status: &PRStatus{State: "open", Approved: true, HeadSHA: "abc123", Labels: []string{"auto-merge-ok"}}},
 		},
 		ciResponses: []mockCIResponse{
 			{status: &CIStatus{Overall: "success", CommitSHA: "abc123"}},
