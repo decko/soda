@@ -32,6 +32,7 @@ type doctorEnv struct {
 	Stat          func(name string) (os.FileInfo, error)
 	LoadConfig    func(path string) (*config.Config, error)
 	UserConfigDir func() (string, error)
+	UserHomeDir   func() (string, error)
 
 	// ParsedConfig is populated by checkConfigValid on success.
 	// Downstream checks use it to adjust their required status.
@@ -56,6 +57,7 @@ func defaultDoctorEnv() *doctorEnv {
 		Stat:          os.Stat,
 		LoadConfig:    config.Load,
 		UserConfigDir: os.UserConfigDir,
+		UserHomeDir:   os.UserHomeDir,
 	}
 }
 
@@ -369,31 +371,63 @@ func checkNode(env *doctorEnv) checkResult {
 	}
 }
 
-// checkConfig verifies that at least one config file exists.
-// SODA's loadConfig uses a fallback chain: soda.yaml in CWD → ~/.config/soda/config.yaml.
-// Either one is sufficient.
-func checkConfig(env *doctorEnv) checkResult {
-	// Check local config first.
+// configLocation holds the resolved path and label for a config file.
+type configLocation struct {
+	path  string // absolute or relative path to the config file
+	label string // human-readable label: "local" or "global"
+}
+
+// resolveConfigPath finds the best available config file using the same
+// fallback chain as loadConfig and config.DefaultPath:
+//
+//  1. soda.yaml in CWD (project-local)
+//  2. UserConfigDir()/soda/config.yaml
+//  3. UserHomeDir()/.config/soda/config.yaml (fallback when UserConfigDir fails)
+//
+// Returns nil when no config file is found.
+func resolveConfigPath(env *doctorEnv) *configLocation {
+	// 1. Local config.
 	if _, err := env.Stat("soda.yaml"); err == nil {
-		return checkResult{
-			name:     "config",
-			passed:   true,
-			required: true,
-			detail:   "soda.yaml (local)",
-		}
+		return &configLocation{path: "soda.yaml", label: "local"}
 	}
 
-	// Check global config.
+	// 2. Global config via UserConfigDir.
 	configDir, err := env.UserConfigDir()
 	if err == nil {
 		path := filepath.Join(configDir, "soda", "config.yaml")
 		if _, statErr := env.Stat(path); statErr == nil {
-			return checkResult{
-				name:     "config",
-				passed:   true,
-				required: true,
-				detail:   path + " (global)",
+			return &configLocation{path: path, label: "global"}
+		}
+		// UserConfigDir succeeded but file not found — do NOT fall through
+		// to UserHomeDir. This matches config.DefaultPath() which only uses
+		// UserHomeDir when UserConfigDir() itself returns an error.
+		return nil
+	}
+
+	// 3. Fallback: UserHomeDir + ".config" — only reached when UserConfigDir fails.
+	if env.UserHomeDir != nil {
+		home, homeErr := env.UserHomeDir()
+		if homeErr == nil {
+			path := filepath.Join(home, ".config", "soda", "config.yaml")
+			if _, statErr := env.Stat(path); statErr == nil {
+				return &configLocation{path: path, label: "global"}
 			}
+		}
+	}
+
+	return nil
+}
+
+// checkConfig verifies that at least one config file exists.
+// Uses the shared resolveConfigPath fallback chain.
+func checkConfig(env *doctorEnv) checkResult {
+	loc := resolveConfigPath(env)
+	if loc != nil {
+		return checkResult{
+			name:     "config",
+			passed:   true,
+			required: true,
+			detail:   fmt.Sprintf("%s (%s)", loc.path, loc.label),
 		}
 	}
 
@@ -407,55 +441,26 @@ func checkConfig(env *doctorEnv) checkResult {
 }
 
 // checkConfigValid attempts to parse the best available config file
-// (local soda.yaml first, then global config.yaml) and reports whether
-// it is valid. Skipped if no config file was found by checkConfig.
+// and reports whether it is valid. Skipped if no config file was
+// found by resolveConfigPath.
 func checkConfigValid(env *doctorEnv) checkResult {
-	// Try local config first.
-	if _, statErr := env.Stat("soda.yaml"); statErr == nil {
-		cfg, err := env.LoadConfig("soda.yaml")
-		if err != nil {
-			return checkResult{
-				name:     "config-valid",
-				passed:   false,
-				required: true,
-				detail:   fmt.Sprintf("soda.yaml: %v", err),
-				fix:      "fix syntax errors in soda.yaml",
-			}
-		}
-		env.ParsedConfig = cfg
+	loc := resolveConfigPath(env)
+	if loc == nil {
 		return checkResult{
-			name:     "config-valid",
-			passed:   true,
-			required: true,
-			detail:   "soda.yaml parses successfully",
+			name:    "config-valid",
+			skipped: true,
+			detail:  "skipped (no config file found)",
 		}
 	}
 
-	// Fall back to global config.
-	configDir, err := env.UserConfigDir()
-	if err != nil {
-		return checkResult{
-			name:    "config-valid",
-			skipped: true,
-			detail:  "skipped (no config file found)",
-		}
-	}
-	path := filepath.Join(configDir, "soda", "config.yaml")
-	if _, statErr := env.Stat(path); statErr != nil {
-		return checkResult{
-			name:    "config-valid",
-			skipped: true,
-			detail:  "skipped (no config file found)",
-		}
-	}
-	cfg, err := env.LoadConfig(path)
+	cfg, err := env.LoadConfig(loc.path)
 	if err != nil {
 		return checkResult{
 			name:     "config-valid",
 			passed:   false,
 			required: true,
-			detail:   fmt.Sprintf("%s: %v", path, err),
-			fix:      "fix syntax errors in config file",
+			detail:   fmt.Sprintf("%s: %v", loc.path, err),
+			fix:      "fix syntax errors in " + loc.path,
 		}
 	}
 	env.ParsedConfig = cfg
@@ -463,6 +468,6 @@ func checkConfigValid(env *doctorEnv) checkResult {
 		name:     "config-valid",
 		passed:   true,
 		required: true,
-		detail:   fmt.Sprintf("%s parses successfully", path),
+		detail:   fmt.Sprintf("%s parses successfully", loc.path),
 	}
 }
