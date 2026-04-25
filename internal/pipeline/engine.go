@@ -1443,10 +1443,13 @@ func (e *Engine) buildPipelineResult(runErr error) PipelineResult {
 	phases := make(map[string]any, len(meta.Phases))
 	for name, ps := range meta.Phases {
 		phases[name] = map[string]any{
-			"status":      string(ps.Status),
-			"cost":        ps.Cost,
-			"duration_ms": ps.DurationMs,
-			"generation":  ps.Generation,
+			"status":          string(ps.Status),
+			"cost":            ps.Cost,
+			"duration_ms":     ps.DurationMs,
+			"generation":      ps.Generation,
+			"tokens_in":       ps.TokensIn,
+			"tokens_out":      ps.TokensOut,
+			"cache_tokens_in": ps.CacheTokensIn,
 		}
 	}
 
