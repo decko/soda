@@ -243,7 +243,7 @@ func (e *Engine) ensureWorktree(ctx context.Context) error {
 
 	wtPath, err := git.CreateWorktree(ctx, e.config.WorkDir, e.config.WorktreeBase, branch, baseBranch)
 	if err != nil {
-		return fmt.Errorf("engine: create worktree: %w", err)
+		return &WorktreeError{Branch: branch, Err: err}
 	}
 
 	e.state.Meta().Worktree = wtPath
@@ -337,7 +337,11 @@ func (e *Engine) Resume(ctx context.Context, fromPhase string) error {
 		}
 	}
 	if startIdx < 0 {
-		return fmt.Errorf("engine: phase %q not found in pipeline", fromPhase)
+		names := make([]string, len(e.config.Pipeline.Phases))
+		for i, p := range e.config.Pipeline.Phases {
+			names[i] = p.Name
+		}
+		return &PhaseNotFoundError{Phase: fromPhase, Pipeline: names}
 	}
 
 	if err := e.state.AcquireLock(); err != nil {
@@ -634,9 +638,10 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 
 	loadResult, err := e.config.Loader.LoadWithSource(phase.Prompt)
 	if err != nil {
-		_ = e.state.MarkFailed(phase.Name, err)
-		e.emitPhaseFailed(phase.Name, err)
-		return fmt.Errorf("engine: load template for %s: %w", phase.Name, err)
+		promptErr := &PromptError{Phase: phase.Name, Operation: "load", Err: err}
+		_ = e.state.MarkFailed(phase.Name, promptErr)
+		e.emitPhaseFailed(phase.Name, promptErr)
+		return promptErr
 	}
 
 	// Emit source info so operators can see which template was used.
@@ -656,9 +661,10 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 
 	rendered, err := RenderPrompt(loadResult.Content, promptData)
 	if err != nil {
-		_ = e.state.MarkFailed(phase.Name, err)
-		e.emitPhaseFailed(phase.Name, err)
-		return fmt.Errorf("engine: render prompt for %s: %w", phase.Name, err)
+		promptErr := &PromptError{Phase: phase.Name, Operation: "render", Err: err}
+		_ = e.state.MarkFailed(phase.Name, promptErr)
+		e.emitPhaseFailed(phase.Name, promptErr)
+		return promptErr
 	}
 
 	// Persist prompt content hash for traceability so operators can verify
@@ -797,7 +803,12 @@ func (e *Engine) runWithRetry(ctx context.Context, phase PhaseConfig, opts runne
 
 		left, tracked := remaining[category]
 		if !tracked || left <= 0 {
-			return nil, fmt.Errorf("engine: phase %s failed (%s, no retries left): %w", phase.Name, category, err)
+			return nil, &RetriesExhaustedError{
+				Phase:    phase.Name,
+				Category: category,
+				Attempts: attempt + 1,
+				Err:      err,
+			}
 		}
 		remaining[category]--
 
