@@ -39,6 +39,7 @@ limits:
   max_pipeline_duration: "2h"
   token_budget:
     warn_tokens: 100000
+    bytes_per_token: 3.5
 worktree_dir: .worktrees
 state_dir: .soda
 context:

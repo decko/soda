@@ -5890,7 +5890,8 @@ func TestEngine_TokenBudgetEstimationPersisted(t *testing.T) {
 		t.Errorf("EstimatedPromptTokens = %d, want > 0", ps.EstimatedPromptTokens)
 	}
 
-	// Verify the estimate matches the formula: int64(float64(len(rendered)) / 3.3).
+	// Verify the estimate matches the formula: int64(float64(len(rendered)) / ratio).
+	// When BytesPerToken is 0 (default), the ratio defaults to 3.3.
 	// The rendered prompt is "Phase: triage\nTicket: TEST-1\n"; read from log.
 	promptLog, err := os.ReadFile(filepath.Join(state.Dir(), "logs", "triage_prompt.md"))
 	if err != nil {
@@ -5899,6 +5900,54 @@ func TestEngine_TokenBudgetEstimationPersisted(t *testing.T) {
 	expectedTokens := int64(float64(len(promptLog)) / 3.3)
 	if ps.EstimatedPromptTokens != expectedTokens {
 		t.Errorf("EstimatedPromptTokens = %d, want %d (from %d bytes)", ps.EstimatedPromptTokens, expectedTokens, len(promptLog))
+	}
+}
+
+// TestEngine_TokenBudgetCustomBytesPerToken verifies that a custom BytesPerToken
+// ratio is used for estimation instead of the default 3.3.
+func TestEngine_TokenBudgetCustomBytesPerToken(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage: automatable",
+					CostUSD: 0.10,
+				},
+			}},
+		},
+	}
+
+	customRatio := 4.0
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.TokenBudget = TokenBudgetConfig{BytesPerToken: customRatio}
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	ps := state.Meta().Phases["triage"]
+	if ps == nil {
+		t.Fatal("triage phase not found in meta")
+	}
+
+	promptLog, err := os.ReadFile(filepath.Join(state.Dir(), "logs", "triage_prompt.md"))
+	if err != nil {
+		t.Fatalf("read prompt log: %v", err)
+	}
+	expectedTokens := int64(float64(len(promptLog)) / customRatio)
+	if ps.EstimatedPromptTokens != expectedTokens {
+		t.Errorf("EstimatedPromptTokens = %d, want %d (custom ratio %.1f, %d bytes)",
+			ps.EstimatedPromptTokens, expectedTokens, customRatio, len(promptLog))
 	}
 }
 

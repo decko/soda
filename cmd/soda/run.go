@@ -386,7 +386,8 @@ func runPipeline(cfg *config.Config, opts pipelineOpts) error {
 		MaxAPIConcurrency:      cfg.Limits.MaxAPIConcurrency,
 		MaxSiblingContextBytes: cfg.Limits.MaxSiblingContextBytes,
 		TokenBudget: pipeline.TokenBudgetConfig{
-			WarnTokens: cfg.Limits.TokenBudget.WarnTokens,
+			WarnTokens:    cfg.Limits.TokenBudget.WarnTokens,
+			BytesPerToken: cfg.Limits.TokenBudget.BytesPerToken,
 		},
 		Mode:              mode,
 		PRPoller:          prPoller,

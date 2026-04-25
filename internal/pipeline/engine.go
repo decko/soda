@@ -70,7 +70,8 @@ type EngineConfig struct {
 // TokenBudgetConfig configures the prompt-size estimation check.
 // Mirrors config.TokenBudgetConfig — kept separate to avoid cross-package imports.
 type TokenBudgetConfig struct {
-	WarnTokens int // emit warning when estimated prompt tokens exceed this; 0 disables
+	WarnTokens    int     // emit warning when estimated prompt tokens exceed this; 0 disables
+	BytesPerToken float64 // bytes-per-token ratio for estimation; 0 defaults to 3.3
 }
 
 // maxReworkCycles returns the configured max rework cycles, defaulting to DefaultMaxReworkCycles.
@@ -674,9 +675,13 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 	e.state.Meta().Phases[phase.Name].PromptHash = fmt.Sprintf("%x", promptDigest)
 
 	// Token budget estimation: estimate prompt tokens from rendered byte
-	// length (bytes / 3.3) and warn if above the configured threshold.
+	// length (bytes / ratio) and warn if above the configured threshold.
 	// This is a warn-only check — it never blocks execution.
-	estimatedTokens := int64(float64(len(rendered)) / 3.3)
+	bytesPerToken := e.config.TokenBudget.BytesPerToken
+	if bytesPerToken <= 0 {
+		bytesPerToken = 3.3
+	}
+	estimatedTokens := int64(float64(len(rendered)) / bytesPerToken)
 	e.state.Meta().Phases[phase.Name].EstimatedPromptTokens = estimatedTokens
 	if warnLimit := e.config.TokenBudget.WarnTokens; warnLimit > 0 && estimatedTokens > int64(warnLimit) {
 		e.emit(Event{

@@ -114,11 +114,12 @@ type LimitsConfig struct {
 
 // TokenBudgetConfig configures the prompt-size estimation check that runs
 // before each CLI invocation. When WarnTokens > 0, the engine estimates
-// the rendered prompt's token count (bytes / 3.3) and emits a warning
-// event if the estimate exceeds the threshold. This is a warn-only check;
-// it never blocks execution.
+// the rendered prompt's token count (bytes / BytesPerToken) and emits a
+// warning event if the estimate exceeds the threshold. This is a warn-only
+// check; it never blocks execution.
 type TokenBudgetConfig struct {
-	WarnTokens int `yaml:"warn_tokens,omitempty"` // emit warning when estimated prompt tokens exceed this; 0 disables
+	WarnTokens    int     `yaml:"warn_tokens,omitempty"`     // emit warning when estimated prompt tokens exceed this; 0 disables
+	BytesPerToken float64 `yaml:"bytes_per_token,omitempty"` // bytes-per-token ratio for estimation; 0 defaults to 3.3
 }
 
 // RepoConfig holds per-repo configuration.
