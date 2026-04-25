@@ -74,16 +74,17 @@ func runHistory(stateDir, ticketKey string, detail bool, phaseFilter string) err
 func renderEventsHistory(meta *pipeline.PipelineMeta, events []pipeline.Event, stateDir string, detail bool, phaseFilter string) error {
 	h := pipeline.BuildHistory(events, stateDir)
 
-	// Populate PromptHash on non-superseded entries only. The PhaseState in
-	// meta stores the hash for the latest generation; applying it to
-	// superseded entries would show a misleading hash that doesn't match the
-	// prompt actually sent for that generation.
+	// Populate PromptHash and EstimatedPromptTokens on non-superseded entries
+	// only. The PhaseState in meta stores the values for the latest generation;
+	// applying them to superseded entries would show misleading data that
+	// doesn't match the prompt actually sent for that generation.
 	for i := range h.Entries {
 		if h.Entries[i].Superseded {
 			continue
 		}
 		if ps, ok := meta.Phases[h.Entries[i].Phase]; ok {
 			h.Entries[i].PromptHash = ps.PromptHash
+			h.Entries[i].EstimatedPromptTokens = ps.EstimatedPromptTokens
 		}
 	}
 
@@ -116,10 +117,11 @@ func renderEventsHistory(meta *pipeline.PipelineMeta, events []pipeline.Event, s
 	// Collect full outputs and prompt hashes to print after the table (to avoid
 	// breaking tabwriter alignment).
 	type outputBlock struct {
-		phase      string
-		generation int
-		promptHash string
-		data       json.RawMessage
+		phase                 string
+		generation            int
+		promptHash            string
+		estimatedPromptTokens int64
+		data                  json.RawMessage
 	}
 	var outputs []outputBlock
 
@@ -146,12 +148,13 @@ func renderEventsHistory(meta *pipeline.PipelineMeta, events []pipeline.Event, s
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
 			entry.Phase, gen, sym, dur, cost, details)
 
-		if (detail || phaseFilter != "") && (len(entry.FullOutput) > 0 || entry.PromptHash != "") {
+		if (detail || phaseFilter != "") && (len(entry.FullOutput) > 0 || entry.PromptHash != "" || entry.EstimatedPromptTokens > 0) {
 			outputs = append(outputs, outputBlock{
-				phase:      entry.Phase,
-				generation: entry.Generation,
-				promptHash: entry.PromptHash,
-				data:       entry.FullOutput,
+				phase:                 entry.Phase,
+				generation:            entry.Generation,
+				promptHash:            entry.PromptHash,
+				estimatedPromptTokens: entry.EstimatedPromptTokens,
+				data:                  entry.FullOutput,
 			})
 		}
 
@@ -182,6 +185,9 @@ func renderEventsHistory(meta *pipeline.PipelineMeta, events []pipeline.Event, s
 		fmt.Printf("\n--- %s (gen %d) ---\n", ob.phase, ob.generation)
 		if ob.promptHash != "" {
 			fmt.Printf("Prompt Hash: %s\n", ob.promptHash)
+		}
+		if ob.estimatedPromptTokens > 0 {
+			fmt.Printf("Estimated Prompt Tokens: %d\n", ob.estimatedPromptTokens)
 		}
 		if len(ob.data) > 0 {
 			fmt.Println(prettyJSON(ob.data))

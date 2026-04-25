@@ -12,19 +12,20 @@ import (
 
 // PhaseGeneration represents a single generation (attempt) of a phase.
 type PhaseGeneration struct {
-	Phase         string
-	Generation    int
-	Status        PhaseStatus
-	Cost          float64
-	DurationMs    int64
-	TokensIn      int64
-	TokensOut     int64
-	CacheTokensIn int64
-	Error         string
-	Details       string          // one-line summary from result JSON
-	FullOutput    json.RawMessage // full structured output JSON (populated by LoadFullOutputs)
-	Superseded    bool            // true if a later generation exists
-	PromptHash    string          // SHA-256 hex digest of the rendered prompt (from PhaseState)
+	Phase                 string
+	Generation            int
+	Status                PhaseStatus
+	Cost                  float64
+	DurationMs            int64
+	TokensIn              int64
+	TokensOut             int64
+	CacheTokensIn         int64
+	Error                 string
+	Details               string          // one-line summary from result JSON
+	FullOutput            json.RawMessage // full structured output JSON (populated by LoadFullOutputs)
+	Superseded            bool            // true if a later generation exists
+	PromptHash            string          // SHA-256 hex digest of the rendered prompt (from PhaseState)
+	EstimatedPromptTokens int64           // pre-invocation token estimate (from PhaseState)
 }
 
 // History holds the reconstructed multi-generation history for a ticket.
