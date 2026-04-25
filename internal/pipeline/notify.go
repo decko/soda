@@ -18,7 +18,7 @@ const (
 	// NotifyStatusSuccess indicates the pipeline completed all phases.
 	NotifyStatusSuccess NotifyStatus = "success"
 	// NotifyStatusFailure indicates the pipeline failed.
-	NotifyStatusFailure NotifyStatus = "failure"
+	NotifyStatusFailure NotifyStatus = "failed"
 	// NotifyStatusTimeout indicates the pipeline exceeded its time limit.
 	NotifyStatusTimeout NotifyStatus = "timeout"
 	// NotifyStatusPartial indicates submit succeeded but monitor failed.
