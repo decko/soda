@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -737,4 +738,272 @@ func TestSmoke_Resume(t *testing.T) {
 	if !hasCompleted {
 		t.Error("engine_completed event not emitted on resume")
 	}
+}
+
+// TestSmoke_EventsOrdering verifies events.jsonl completeness and ordering
+// after a happy-path run: monotonic timestamps, matching started/completed
+// pairs, and no gaps in the lifecycle.
+func TestSmoke_EventsOrdering(t *testing.T) {
+	phases := smokePipelinePhases()
+	fixtures := smokeFixtures()
+
+	responses := make(map[string][]flexResponse)
+	for name, result := range fixtures {
+		responses[name] = []flexResponse{{result: result}}
+	}
+	mock := &flexMockRunner{responses: responses}
+
+	stateDir := t.TempDir()
+	promptDir := t.TempDir()
+	workDir := t.TempDir()
+
+	writeSmokePrompts(t, promptDir)
+
+	state, err := LoadOrCreate(stateDir, "EVENTS-1")
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+
+	cfg := EngineConfig{
+		Pipeline:   &PhasePipeline{Phases: phases},
+		Loader:     NewPromptLoader(promptDir),
+		Ticket:     TicketData{Key: "EVENTS-1", Summary: "Events ordering test"},
+		Model:      "test-model",
+		WorkDir:    workDir,
+		MaxCostUSD: 5.0,
+		Mode:       Autonomous,
+		SleepFunc:  func(time.Duration) {},
+		JitterFunc: func(time.Duration) time.Duration { return 0 },
+	}
+
+	engine := NewEngine(mock, state, cfg)
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Read events.jsonl.
+	events, err := ReadEvents(state.Dir())
+	if err != nil {
+		t.Fatalf("ReadEvents: %v", err)
+	}
+	if len(events) == 0 {
+		t.Fatal("events.jsonl should not be empty")
+	}
+
+	// --- Monotonic timestamps ---
+	for i := 1; i < len(events); i++ {
+		if events[i].Timestamp.Before(events[i-1].Timestamp) {
+			t.Errorf("events[%d].Timestamp (%v) before events[%d].Timestamp (%v)",
+				i, events[i].Timestamp, i-1, events[i-1].Timestamp)
+		}
+	}
+
+	// --- Matching started/completed pairs ---
+	// Track phase_started and phase_completed events by phase name.
+	startedPhases := make(map[string]int)
+	completedPhases := make(map[string]int)
+	for _, e := range events {
+		switch e.Kind {
+		case EventPhaseStarted:
+			startedPhases[e.Phase]++
+		case EventPhaseCompleted:
+			completedPhases[e.Phase]++
+		}
+	}
+
+	// Every completed phase should have a matching started event.
+	for phase, count := range completedPhases {
+		if startedPhases[phase] != count {
+			t.Errorf("phase %q: %d started, %d completed — mismatch",
+				phase, startedPhases[phase], count)
+		}
+	}
+
+	// --- Engine lifecycle: exactly one started and one completed ---
+	engineStarted := 0
+	engineCompleted := 0
+	for _, e := range events {
+		switch e.Kind {
+		case EventEngineStarted:
+			engineStarted++
+		case EventEngineCompleted:
+			engineCompleted++
+		}
+	}
+	if engineStarted != 1 {
+		t.Errorf("engine_started events = %d, want 1", engineStarted)
+	}
+	if engineCompleted != 1 {
+		t.Errorf("engine_completed events = %d, want 1", engineCompleted)
+	}
+
+	// --- Engine started is first lifecycle event, completed is last ---
+	firstLifecycle := ""
+	lastLifecycle := ""
+	for _, e := range events {
+		switch e.Kind {
+		case EventEngineStarted, EventEngineCompleted, EventPhaseStarted, EventPhaseCompleted:
+			if firstLifecycle == "" {
+				firstLifecycle = e.Kind
+			}
+			lastLifecycle = e.Kind
+		}
+	}
+	if firstLifecycle != EventEngineStarted {
+		t.Errorf("first lifecycle event = %q, want %q", firstLifecycle, EventEngineStarted)
+	}
+	if lastLifecycle != EventEngineCompleted {
+		t.Errorf("last lifecycle event = %q, want %q", lastLifecycle, EventEngineCompleted)
+	}
+
+	// --- No phase_failed events in happy path ---
+	for _, e := range events {
+		if e.Kind == EventPhaseFailed {
+			t.Errorf("unexpected phase_failed event for phase %q", e.Phase)
+		}
+	}
+}
+
+// TestSmoke_StateFileValidity verifies that the state files written during a
+// happy-path run are valid: meta.json is well-formed JSON with expected
+// fields, result files (<phase>.json) contain valid JSON, and artifact files
+// (<phase>.md) are non-empty.
+func TestSmoke_StateFileValidity(t *testing.T) {
+	phases := smokePipelinePhases()
+	fixtures := smokeFixtures()
+
+	responses := make(map[string][]flexResponse)
+	for name, result := range fixtures {
+		responses[name] = []flexResponse{{result: result}}
+	}
+	mock := &flexMockRunner{responses: responses}
+
+	stateDir := t.TempDir()
+	promptDir := t.TempDir()
+	workDir := t.TempDir()
+
+	writeSmokePrompts(t, promptDir)
+
+	state, err := LoadOrCreate(stateDir, "STATE-1")
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+
+	cfg := EngineConfig{
+		Pipeline:   &PhasePipeline{Phases: phases},
+		Loader:     NewPromptLoader(promptDir),
+		Ticket:     TicketData{Key: "STATE-1", Summary: "State file validity test"},
+		Model:      "test-model",
+		WorkDir:    workDir,
+		MaxCostUSD: 5.0,
+		Mode:       Autonomous,
+		SleepFunc:  func(time.Duration) {},
+		JitterFunc: func(time.Duration) time.Duration { return 0 },
+	}
+
+	engine := NewEngine(mock, state, cfg)
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// --- meta.json is valid JSON with expected structure ---
+	metaPath := filepath.Join(state.Dir(), "meta.json")
+	metaData, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatalf("read meta.json: %v", err)
+	}
+
+	var meta PipelineMeta
+	if err := json.Unmarshal(metaData, &meta); err != nil {
+		t.Fatalf("unmarshal meta.json: %v", err)
+	}
+
+	if meta.Ticket != "STATE-1" {
+		t.Errorf("meta.Ticket = %q, want %q", meta.Ticket, "STATE-1")
+	}
+	if meta.Summary != "State file validity test" {
+		t.Errorf("meta.Summary = %q, want %q", meta.Summary, "State file validity test")
+	}
+	if meta.TotalCost <= 0 {
+		t.Error("meta.TotalCost should be positive")
+	}
+	if meta.StartedAt.IsZero() {
+		t.Error("meta.StartedAt should not be zero")
+	}
+	if len(meta.Phases) == 0 {
+		t.Error("meta.Phases should not be empty")
+	}
+
+	// Each completed phase should have status "completed" and generation >= 1.
+	for _, name := range []string{"triage", "plan", "implement", "verify", "review", "submit"} {
+		ps := meta.Phases[name]
+		if ps == nil {
+			t.Errorf("meta.Phases[%q] missing", name)
+			continue
+		}
+		if ps.Status != PhaseCompleted {
+			t.Errorf("meta.Phases[%q].Status = %q, want %q", name, ps.Status, PhaseCompleted)
+		}
+		if ps.Generation < 1 {
+			t.Errorf("meta.Phases[%q].Generation = %d, want >= 1", name, ps.Generation)
+		}
+	}
+
+	// --- Result files (<phase>.json) contain valid JSON ---
+	for _, name := range []string{"triage", "plan", "implement", "verify", "review", "submit"} {
+		resultPath := filepath.Join(state.Dir(), name+".json")
+		resultData, err := os.ReadFile(resultPath)
+		if err != nil {
+			t.Errorf("read %s.json: %v", name, err)
+			continue
+		}
+		if !json.Valid(resultData) {
+			t.Errorf("%s.json is not valid JSON: %s", name, string(resultData))
+		}
+	}
+
+	// --- Artifact files (<phase>.md) are non-empty ---
+	for _, name := range []string{"triage", "plan", "implement", "verify", "review", "submit"} {
+		artifactPath := filepath.Join(state.Dir(), name+".md")
+		artifactData, err := os.ReadFile(artifactPath)
+		if err != nil {
+			t.Errorf("read %s.md: %v", name, err)
+			continue
+		}
+		if len(artifactData) == 0 {
+			t.Errorf("%s.md should not be empty", name)
+		}
+	}
+
+	// --- events.jsonl each line is valid JSON ---
+	eventsPath := filepath.Join(state.Dir(), "events.jsonl")
+	eventsData, err := os.ReadFile(eventsPath)
+	if err != nil {
+		t.Fatalf("read events.jsonl: %v", err)
+	}
+
+	lines := 0
+	for _, line := range splitNonEmpty(string(eventsData)) {
+		if !json.Valid([]byte(line)) {
+			t.Errorf("events.jsonl line %d is not valid JSON: %s", lines+1, line)
+		}
+		lines++
+	}
+	if lines == 0 {
+		t.Error("events.jsonl should have at least one line")
+	}
+}
+
+// splitNonEmpty splits s by newline and returns non-empty trimmed lines.
+func splitNonEmpty(s string) []string {
+	var result []string
+	for _, line := range strings.Split(strings.TrimRight(s, "\n"), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			result = append(result, line)
+		}
+	}
+	return result
 }
