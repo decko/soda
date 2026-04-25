@@ -1,9 +1,12 @@
 package pipeline
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/decko/soda/internal/runner"
 )
 
 // BudgetExceededError is returned when accumulated cost exceeds the configured limit.
@@ -152,6 +155,29 @@ func (e *PromptError) Error() string {
 }
 
 func (e *PromptError) Unwrap() error { return e.Err }
+
+// transientSuggestionCatalog maps runner.TransientError.Reason values to
+// user-facing suggestions that help operators remediate common failures.
+var transientSuggestionCatalog = map[string]string{
+	"oom":        "Reduce context size or increase memory limits.",
+	"signal":     "Process was killed by a signal. Check system resource limits (ulimits) and OOM killer logs.",
+	"rate_limit": "API rate limit hit. Increase retry delays, reduce concurrency (max_api_concurrency), or check provider quota.",
+	"timeout":    "Request timed out. Increase phase timeout or reduce prompt size.",
+	"overloaded": "API is overloaded. Retry later or switch to a less loaded model/region.",
+	"connection": "Network connection failed. Check connectivity, DNS resolution, and firewall rules.",
+	"unknown":    "Unexpected transient failure. Check runner logs for details.",
+}
+
+// transientSuggestion returns a user-facing suggestion for the given error
+// by unwrapping it to find a runner.TransientError and looking up its Reason
+// in the suggestion catalog. Returns empty string if no suggestion applies.
+func transientSuggestion(err error) string {
+	var te *runner.TransientError
+	if !errors.As(err, &te) {
+		return ""
+	}
+	return transientSuggestionCatalog[te.Reason]
+}
 
 // reworkFinding is a minimal finding type used by reworkSignal for error
 // message context. It carries only the fields needed to describe rework

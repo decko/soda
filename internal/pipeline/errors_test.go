@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/decko/soda/internal/runner"
 )
 
 func TestPipelineTimeoutError(t *testing.T) {
@@ -426,6 +428,245 @@ func TestPromptError(t *testing.T) {
 		}
 		if target.Phase != "review" {
 			t.Errorf("Phase = %q, want %q", target.Phase, "review")
+		}
+	})
+}
+
+func TestTransientSuggestionCatalog(t *testing.T) {
+	// All 7 known reasons must have suggestions.
+	knownReasons := []string{"oom", "signal", "rate_limit", "timeout", "overloaded", "connection", "unknown"}
+	for _, reason := range knownReasons {
+		te := &runner.TransientError{Reason: reason, Err: fmt.Errorf("test")}
+		suggestion := transientSuggestion(te)
+		if suggestion == "" {
+			t.Errorf("transientSuggestion(%q) returned empty, want non-empty suggestion", reason)
+		}
+	}
+
+	// Unknown reason not in catalog should return empty.
+	te := &runner.TransientError{Reason: "never_seen_before", Err: fmt.Errorf("test")}
+	if suggestion := transientSuggestion(te); suggestion != "" {
+		t.Errorf("transientSuggestion for unknown reason returned %q, want empty", suggestion)
+	}
+
+	// Non-transient error should return empty.
+	if suggestion := transientSuggestion(fmt.Errorf("plain error")); suggestion != "" {
+		t.Errorf("transientSuggestion for non-transient error returned %q, want empty", suggestion)
+	}
+}
+
+func TestEmitPhaseFailedEnrichment(t *testing.T) {
+	t.Run("retries_exhausted_with_suggestion", func(t *testing.T) {
+		var captured []Event
+		phases := []PhaseConfig{{Name: "triage", Prompt: "triage.md"}}
+		engine, _ := setupEngine(t, phases, &flexMockRunner{}, func(cfg *EngineConfig) {
+			cfg.OnEvent = func(e Event) { captured = append(captured, e) }
+		})
+
+		// Mark running so MarkFailed has valid state.
+		_ = engine.state.MarkRunning("triage")
+
+		transientErr := &runner.TransientError{Reason: "rate_limit", Err: fmt.Errorf("429 too many requests")}
+		reErr := &RetriesExhaustedError{Phase: "triage", Category: "transient", Attempts: 3, Err: transientErr}
+		_ = engine.state.MarkFailed("triage", reErr)
+		engine.emitPhaseFailed("triage", reErr)
+
+		var found *Event
+		for i := range captured {
+			if captured[i].Kind == EventPhaseFailed {
+				found = &captured[i]
+				break
+			}
+		}
+		if found == nil {
+			t.Fatal("no phase_failed event emitted")
+		}
+		if found.Data["error_type"] != "retries_exhausted" {
+			t.Errorf("error_type = %v, want retries_exhausted", found.Data["error_type"])
+		}
+		if found.Data["category"] != "transient" {
+			t.Errorf("category = %v, want transient", found.Data["category"])
+		}
+		if found.Data["attempts"] != 3 {
+			t.Errorf("attempts = %v, want 3", found.Data["attempts"])
+		}
+		suggestion, ok := found.Data["suggestion"].(string)
+		if !ok || suggestion == "" {
+			t.Error("suggestion should be a non-empty string for rate_limit transient errors")
+		}
+	})
+
+	t.Run("retries_exhausted_with_reviewer", func(t *testing.T) {
+		var captured []Event
+		phases := []PhaseConfig{{Name: "review", Prompt: "review.md"}}
+		engine, _ := setupEngine(t, phases, &flexMockRunner{}, func(cfg *EngineConfig) {
+			cfg.OnEvent = func(e Event) { captured = append(captured, e) }
+		})
+
+		_ = engine.state.MarkRunning("review")
+		reErr := &RetriesExhaustedError{Phase: "review", Reviewer: "go-specialist", Category: "transient", Attempts: 2, Err: fmt.Errorf("timeout")}
+		_ = engine.state.MarkFailed("review", reErr)
+		engine.emitPhaseFailed("review", reErr)
+
+		var found *Event
+		for i := range captured {
+			if captured[i].Kind == EventPhaseFailed {
+				found = &captured[i]
+				break
+			}
+		}
+		if found == nil {
+			t.Fatal("no phase_failed event emitted")
+		}
+		if found.Data["reviewer"] != "go-specialist" {
+			t.Errorf("reviewer = %v, want go-specialist", found.Data["reviewer"])
+		}
+	})
+
+	t.Run("prompt_error", func(t *testing.T) {
+		var captured []Event
+		phases := []PhaseConfig{{Name: "triage", Prompt: "triage.md"}}
+		engine, _ := setupEngine(t, phases, &flexMockRunner{}, func(cfg *EngineConfig) {
+			cfg.OnEvent = func(e Event) { captured = append(captured, e) }
+		})
+
+		_ = engine.state.MarkRunning("triage")
+		pErr := &PromptError{Phase: "triage", Operation: "load", Err: fmt.Errorf("not found")}
+		_ = engine.state.MarkFailed("triage", pErr)
+		engine.emitPhaseFailed("triage", pErr)
+
+		var found *Event
+		for i := range captured {
+			if captured[i].Kind == EventPhaseFailed {
+				found = &captured[i]
+				break
+			}
+		}
+		if found == nil {
+			t.Fatal("no phase_failed event emitted")
+		}
+		if found.Data["error_type"] != "prompt_error" {
+			t.Errorf("error_type = %v, want prompt_error", found.Data["error_type"])
+		}
+		if found.Data["operation"] != "load" {
+			t.Errorf("operation = %v, want load", found.Data["operation"])
+		}
+	})
+
+	t.Run("prompt_error_with_reviewer", func(t *testing.T) {
+		var captured []Event
+		phases := []PhaseConfig{{Name: "review", Prompt: "review.md"}}
+		engine, _ := setupEngine(t, phases, &flexMockRunner{}, func(cfg *EngineConfig) {
+			cfg.OnEvent = func(e Event) { captured = append(captured, e) }
+		})
+
+		_ = engine.state.MarkRunning("review")
+		pErr := &PromptError{Phase: "review", Reviewer: "ai-harness", Operation: "render", Err: fmt.Errorf("template error")}
+		_ = engine.state.MarkFailed("review", pErr)
+		engine.emitPhaseFailed("review", pErr)
+
+		var found *Event
+		for i := range captured {
+			if captured[i].Kind == EventPhaseFailed {
+				found = &captured[i]
+				break
+			}
+		}
+		if found == nil {
+			t.Fatal("no phase_failed event emitted")
+		}
+		if found.Data["reviewer"] != "ai-harness" {
+			t.Errorf("reviewer = %v, want ai-harness", found.Data["reviewer"])
+		}
+		if found.Data["operation"] != "render" {
+			t.Errorf("operation = %v, want render", found.Data["operation"])
+		}
+	})
+
+	t.Run("budget_exceeded", func(t *testing.T) {
+		var captured []Event
+		phases := []PhaseConfig{{Name: "implement", Prompt: "implement.md"}}
+		engine, _ := setupEngine(t, phases, &flexMockRunner{}, func(cfg *EngineConfig) {
+			cfg.OnEvent = func(e Event) { captured = append(captured, e) }
+		})
+
+		_ = engine.state.MarkRunning("implement")
+		bErr := &BudgetExceededError{Phase: "implement", Limit: 15.00, Actual: 16.50}
+		_ = engine.state.MarkFailed("implement", bErr)
+		engine.emitPhaseFailed("implement", bErr)
+
+		var found *Event
+		for i := range captured {
+			if captured[i].Kind == EventPhaseFailed {
+				found = &captured[i]
+				break
+			}
+		}
+		if found == nil {
+			t.Fatal("no phase_failed event emitted")
+		}
+		if found.Data["error_type"] != "budget_exceeded" {
+			t.Errorf("error_type = %v, want budget_exceeded", found.Data["error_type"])
+		}
+		if found.Data["limit"] != 15.0 {
+			t.Errorf("limit = %v, want 15.0", found.Data["limit"])
+		}
+	})
+
+	t.Run("dependency_not_met", func(t *testing.T) {
+		var captured []Event
+		phases := []PhaseConfig{{Name: "implement", Prompt: "implement.md"}}
+		engine, _ := setupEngine(t, phases, &flexMockRunner{}, func(cfg *EngineConfig) {
+			cfg.OnEvent = func(e Event) { captured = append(captured, e) }
+		})
+
+		_ = engine.state.MarkRunning("implement")
+		dErr := &DependencyNotMetError{Phase: "implement", Dependency: "plan"}
+		_ = engine.state.MarkFailed("implement", dErr)
+		engine.emitPhaseFailed("implement", dErr)
+
+		var found *Event
+		for i := range captured {
+			if captured[i].Kind == EventPhaseFailed {
+				found = &captured[i]
+				break
+			}
+		}
+		if found == nil {
+			t.Fatal("no phase_failed event emitted")
+		}
+		if found.Data["error_type"] != "dependency_not_met" {
+			t.Errorf("error_type = %v, want dependency_not_met", found.Data["error_type"])
+		}
+		if found.Data["dependency"] != "plan" {
+			t.Errorf("dependency = %v, want plan", found.Data["dependency"])
+		}
+	})
+
+	t.Run("plain_error_no_enrichment", func(t *testing.T) {
+		var captured []Event
+		phases := []PhaseConfig{{Name: "triage", Prompt: "triage.md"}}
+		engine, _ := setupEngine(t, phases, &flexMockRunner{}, func(cfg *EngineConfig) {
+			cfg.OnEvent = func(e Event) { captured = append(captured, e) }
+		})
+
+		_ = engine.state.MarkRunning("triage")
+		plainErr := fmt.Errorf("something went wrong")
+		_ = engine.state.MarkFailed("triage", plainErr)
+		engine.emitPhaseFailed("triage", plainErr)
+
+		var found *Event
+		for i := range captured {
+			if captured[i].Kind == EventPhaseFailed {
+				found = &captured[i]
+				break
+			}
+		}
+		if found == nil {
+			t.Fatal("no phase_failed event emitted")
+		}
+		if _, ok := found.Data["error_type"]; ok {
+			t.Error("plain errors should not have error_type in event data")
 		}
 	})
 }
