@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os/exec"
 	"sort"
 	"strings"
@@ -379,7 +380,8 @@ func (p *GitHubPRPoller) ValidateMergePrerequisites(ctx context.Context, prURL s
 	}
 
 	// Step 2: Fetch branch protection rules for the base branch.
-	endpoint := fmt.Sprintf("repos/%s/%s/branches/%s/protection", owner, repo, prInfo.BaseRefName)
+	// URL-encode the branch name to handle branches with '/' (e.g., "feature/foo").
+	endpoint := fmt.Sprintf("repos/%s/%s/branches/%s/protection", owner, repo, url.PathEscape(prInfo.BaseRefName))
 	protOut, err := exec.CommandContext(ctx, p.command,
 		"api", endpoint,
 	).Output()
