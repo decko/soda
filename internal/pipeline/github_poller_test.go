@@ -2,7 +2,9 @@ package pipeline
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -146,6 +148,101 @@ func TestFilterCommentsAfterID_Empty(t *testing.T) {
 	result := filterCommentsAfterID(nil, "IC_1")
 	if result != nil {
 		t.Errorf("nil comments should return nil, got %v", result)
+	}
+}
+
+func TestDecodeGHComments(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    int // expected number of decoded comments
+		wantErr bool
+	}{
+		{
+			name: "single_page",
+			input: `{"id":1,"body":"first","user":{"login":"alice"}}
+{"id":2,"body":"second","user":{"login":"bob"}}
+{"id":3,"body":"third","user":{"login":"charlie"}}
+`,
+			want: 3,
+		},
+		{
+			name: "multi_page",
+			// Simulates gh --paginate --jq ".[]" output across two pages.
+			// Each page's array is unwrapped into individual objects, then
+			// concatenated. The old json.Unmarshal approach would fail here
+			// because the result is not a single JSON array.
+			input: `{"id":1,"body":"page1-a","user":{"login":"alice"}}
+{"id":2,"body":"page1-b","user":{"login":"bob"}}
+{"id":3,"body":"page2-a","user":{"login":"charlie"}}
+{"id":4,"body":"page2-b","user":{"login":"dave"}}
+`,
+			want: 4,
+		},
+		{
+			name:  "empty",
+			input: "",
+			want:  0,
+		},
+		{
+			name:  "single_comment",
+			input: `{"id":42,"body":"only one","user":{"login":"eve"}}`,
+			want:  1,
+		},
+		{
+			name:    "invalid_json",
+			input:   `{"id":1,"body":"ok"}\n{not json`,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := decodeGHComments([]byte(tt.input))
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(got) != tt.want {
+				t.Fatalf("got %d comments, want %d", len(got), tt.want)
+			}
+		})
+	}
+}
+
+func TestDecodeGHComments_LargePageSimulation(t *testing.T) {
+	// Simulate 3+ pages of 25 comments each (typical GitHub page size is 30).
+	// This produces 75 newline-delimited JSON objects, which the old
+	// json.Unmarshal approach could not decode.
+	var buf strings.Builder
+	const total = 75
+	for i := 1; i <= total; i++ {
+		fmt.Fprintf(&buf, `{"id":%d,"body":"comment %d","user":{"login":"user%d"}}`, i, i, i%5)
+		buf.WriteByte('\n')
+	}
+
+	got, err := decodeGHComments([]byte(buf.String()))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != total {
+		t.Fatalf("got %d comments, want %d", len(got), total)
+	}
+
+	// Spot-check first and last.
+	if got[0].ID != 1 {
+		t.Errorf("first comment ID = %d, want 1", got[0].ID)
+	}
+	if got[total-1].ID != total {
+		t.Errorf("last comment ID = %d, want %d", got[total-1].ID, total)
+	}
+	if got[0].Body != "comment 1" {
+		t.Errorf("first comment Body = %q, want %q", got[0].Body, "comment 1")
 	}
 }
 
