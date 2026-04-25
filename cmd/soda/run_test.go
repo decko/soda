@@ -980,3 +980,104 @@ func TestHandleEventPatchExhaustedCycles(t *testing.T) {
 		})
 	}
 }
+
+func TestConvertNotifyConfig_Empty(t *testing.T) {
+	nc := convertNotifyConfig(config.NotifyConfig{})
+	if nc.Webhook != nil {
+		t.Error("expected nil Webhook for empty config")
+	}
+	if nc.Script != nil {
+		t.Error("expected nil Script for empty config")
+	}
+}
+
+func TestConvertNotifyConfig_WebhookOnly(t *testing.T) {
+	nc := convertNotifyConfig(config.NotifyConfig{
+		Webhook: &config.WebhookNotifyConfig{
+			URL:     "https://hooks.example.com/soda",
+			Headers: map[string]string{"Authorization": "Bearer tok"},
+		},
+	})
+	if nc.Webhook == nil {
+		t.Fatal("expected non-nil Webhook")
+	}
+	if nc.Webhook.URL != "https://hooks.example.com/soda" {
+		t.Errorf("URL = %q, want %q", nc.Webhook.URL, "https://hooks.example.com/soda")
+	}
+	if nc.Webhook.Headers["Authorization"] != "Bearer tok" {
+		t.Errorf("Authorization header = %q, want %q", nc.Webhook.Headers["Authorization"], "Bearer tok")
+	}
+	if nc.Script != nil {
+		t.Error("expected nil Script")
+	}
+}
+
+func TestConvertNotifyConfig_ScriptOnly(t *testing.T) {
+	nc := convertNotifyConfig(config.NotifyConfig{
+		Script: &config.ScriptNotifyConfig{
+			Command: "notify-send 'done'",
+		},
+	})
+	if nc.Script == nil {
+		t.Fatal("expected non-nil Script")
+	}
+	if nc.Script.Command != "notify-send 'done'" {
+		t.Errorf("Command = %q, want %q", nc.Script.Command, "notify-send 'done'")
+	}
+	if nc.Webhook != nil {
+		t.Error("expected nil Webhook")
+	}
+}
+
+func TestConvertNotifyConfig_Both(t *testing.T) {
+	nc := convertNotifyConfig(config.NotifyConfig{
+		Webhook: &config.WebhookNotifyConfig{URL: "https://example.com"},
+		Script:  &config.ScriptNotifyConfig{Command: "echo done"},
+	})
+	if nc.Webhook == nil {
+		t.Fatal("expected non-nil Webhook")
+	}
+	if nc.Script == nil {
+		t.Fatal("expected non-nil Script")
+	}
+}
+
+func TestHandleEvent_NotifySuccess(t *testing.T) {
+	var buf bytes.Buffer
+	prog := progress.New(&buf, false)
+	state, err := pipeline.LoadOrCreate(t.TempDir(), "NOTIFY-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	event := pipeline.Event{Kind: pipeline.EventNotifySuccess}
+	handleEvent(context.Background(), nil, nil, state, prog, event)
+
+	output := buf.String()
+	if !strings.Contains(output, "Notification sent") {
+		t.Errorf("expected output to contain 'Notification sent', got %q", output)
+	}
+}
+
+func TestHandleEvent_NotifyFailed(t *testing.T) {
+	var buf bytes.Buffer
+	prog := progress.New(&buf, false)
+	state, err := pipeline.LoadOrCreate(t.TempDir(), "NOTIFY-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	event := pipeline.Event{
+		Kind: pipeline.EventNotifyFailed,
+		Data: map[string]any{"error": "connection refused"},
+	}
+	handleEvent(context.Background(), nil, nil, state, prog, event)
+
+	output := buf.String()
+	if !strings.Contains(output, "Notification failed") {
+		t.Errorf("expected output to contain 'Notification failed', got %q", output)
+	}
+	if !strings.Contains(output, "connection refused") {
+		t.Errorf("expected output to contain error message, got %q", output)
+	}
+}
