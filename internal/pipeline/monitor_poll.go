@@ -170,7 +170,7 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 		})
 
 		// 1. Check PR status (approved, closed, merged).
-		terminal, err := e.checkPRStatus(ctx, phase.Name, monState)
+		prResult, err := e.checkPRStatus(ctx, phase.Name, monState)
 		if err != nil {
 			e.emit(Event{
 				Phase: phase.Name,
@@ -179,7 +179,7 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 			})
 			// Non-fatal — continue polling.
 		}
-		if terminal {
+		if prResult.Terminal {
 			_ = e.state.WriteMonitorState(monState)
 			if monState.Status == MonitorCompleted {
 				if err := e.state.MarkCompleted(phase.Name); err != nil {
@@ -327,12 +327,21 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 	}
 }
 
+// checkPRStatusResult holds the outcome of a PR status check.
+type checkPRStatusResult struct {
+	// Terminal indicates whether the polling loop should stop.
+	Terminal bool
+	// Status is the PRStatus returned by the poller (nil on error).
+	Status *PRStatus
+}
+
 // checkPRStatus checks the PR for terminal states (approved, closed, merged).
-// Returns true if the polling should stop.
-func (e *Engine) checkPRStatus(ctx context.Context, phaseName string, monState *MonitorState) (bool, error) {
+// Returns a result struct indicating whether polling should stop and the
+// latest PRStatus for downstream use (e.g., auto-merge label checks).
+func (e *Engine) checkPRStatus(ctx context.Context, phaseName string, monState *MonitorState) (checkPRStatusResult, error) {
 	status, err := e.config.PRPoller.GetPRStatus(ctx, monState.PRURL)
 	if err != nil {
-		return false, err
+		return checkPRStatusResult{}, err
 	}
 
 	switch status.State {
@@ -343,7 +352,7 @@ func (e *Engine) checkPRStatus(ctx context.Context, phaseName string, monState *
 			Kind:  EventMonitorPRApproved,
 			Data:  map[string]any{"state": "merged"},
 		})
-		return true, nil
+		return checkPRStatusResult{Terminal: true, Status: status}, nil
 
 	case "closed":
 		monState.Status = MonitorFailed
@@ -352,7 +361,7 @@ func (e *Engine) checkPRStatus(ctx context.Context, phaseName string, monState *
 			Kind:  EventMonitorPRClosed,
 			Data:  map[string]any{"state": "closed"},
 		})
-		return true, nil
+		return checkPRStatusResult{Terminal: true, Status: status}, nil
 	}
 
 	if status.Approved {
@@ -362,10 +371,10 @@ func (e *Engine) checkPRStatus(ctx context.Context, phaseName string, monState *
 			Kind:  EventMonitorPRApproved,
 			Data:  map[string]any{"state": "approved"},
 		})
-		return true, nil
+		return checkPRStatusResult{Terminal: true, Status: status}, nil
 	}
 
-	return false, nil
+	return checkPRStatusResult{Terminal: false, Status: status}, nil
 }
 
 // checkNewComments polls for new review comments and classifies them.
