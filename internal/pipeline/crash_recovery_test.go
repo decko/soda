@@ -184,14 +184,26 @@ func phaseCost(phase string) float64 {
 
 // populateCompletedPhases writes state entries for phases that completed before
 // the crash: marks them running, writes result/artifact, accumulates cost,
-// and marks them completed.
-func populateCompletedPhases(state *State, phases []string) {
+// and marks them completed. It fails the test immediately if any state
+// operation returns an error.
+func populateCompletedPhases(t testing.TB, state *State, phases []string) {
+	t.Helper()
 	for _, p := range phases {
-		_ = state.MarkRunning(p)
-		_ = state.WriteResult(p, phaseResult(p))
-		_ = state.WriteArtifact(p, phaseArtifact(p))
-		_ = state.AccumulateCost(p, phaseCost(p))
-		_ = state.MarkCompleted(p)
+		if err := state.MarkRunning(p); err != nil {
+			t.Fatalf("populateCompletedPhases: MarkRunning(%s): %v", p, err)
+		}
+		if err := state.WriteResult(p, phaseResult(p)); err != nil {
+			t.Fatalf("populateCompletedPhases: WriteResult(%s): %v", p, err)
+		}
+		if err := state.WriteArtifact(p, phaseArtifact(p)); err != nil {
+			t.Fatalf("populateCompletedPhases: WriteArtifact(%s): %v", p, err)
+		}
+		if err := state.AccumulateCost(p, phaseCost(p)); err != nil {
+			t.Fatalf("populateCompletedPhases: AccumulateCost(%s): %v", p, err)
+		}
+		if err := state.MarkCompleted(p); err != nil {
+			t.Fatalf("populateCompletedPhases: MarkCompleted(%s): %v", p, err)
+		}
 	}
 }
 
@@ -218,7 +230,7 @@ func TestCrashRecovery_AllBoundaries_Run(t *testing.T) {
 			})
 
 			// Populate completed phases.
-			populateCompletedPhases(state, tc.completed)
+			populateCompletedPhases(t, state, tc.completed)
 
 			// Simulate crash: mark the target phase as running but don't complete it.
 			_ = state.MarkRunning(tc.crashed)
@@ -331,7 +343,7 @@ func TestCrashRecovery_AllBoundaries_Resume(t *testing.T) {
 			})
 
 			// Populate completed phases.
-			populateCompletedPhases(state, tc.completed)
+			populateCompletedPhases(t, state, tc.completed)
 
 			// Simulate crash: mark the target phase as running.
 			_ = state.MarkRunning(tc.crashed)
@@ -386,7 +398,7 @@ func TestCrashRecovery_StatePreservation(t *testing.T) {
 			engine, state := setupEngine(t, phases, mock)
 
 			// Populate completed phases with known artifacts/results.
-			populateCompletedPhases(state, tc.completed)
+			populateCompletedPhases(t, state, tc.completed)
 
 			// Simulate crash.
 			_ = state.MarkRunning(tc.crashed)
@@ -447,7 +459,7 @@ func TestCrashRecovery_NoCrashNoRecoveryEvent(t *testing.T) {
 				cfg.OnEvent = func(ev Event) { events = append(events, ev) }
 			})
 
-			populateCompletedPhases(state, tc.completed)
+			populateCompletedPhases(t, state, tc.completed)
 
 			if err := engine.Run(context.Background()); err != nil {
 				t.Fatalf("Run: %v", err)
@@ -496,7 +508,7 @@ func TestCrashRecovery_MultiplePhasesCrashed(t *testing.T) {
 				cfg.OnEvent = func(ev Event) { events = append(events, ev) }
 			})
 
-			populateCompletedPhases(state, tc.completed)
+			populateCompletedPhases(t, state, tc.completed)
 
 			// Mark multiple phases as crashed.
 			for _, p := range tc.crashed {
@@ -547,7 +559,7 @@ func TestCrashRecovery_FailedPhaseIsNotRecovered(t *testing.T) {
 				cfg.OnEvent = func(ev Event) { events = append(events, ev) }
 			})
 
-			populateCompletedPhases(state, tc.completed)
+			populateCompletedPhases(t, state, tc.completed)
 
 			// Mark phase as running then explicitly failed (normal failure, not crash).
 			_ = state.MarkRunning(tc.crashed)
@@ -595,7 +607,7 @@ func TestCrashRecovery_PhaseStatusTransitions(t *testing.T) {
 				}
 			})
 
-			populateCompletedPhases(state, tc.completed)
+			populateCompletedPhases(t, state, tc.completed)
 			_ = state.MarkRunning(tc.crashed)
 
 			if err := engine.Run(context.Background()); err != nil {
@@ -627,7 +639,7 @@ func TestCrashRecovery_DiskPersistence(t *testing.T) {
 
 			engine, state := setupEngine(t, phases, mock)
 
-			populateCompletedPhases(state, tc.completed)
+			populateCompletedPhases(t, state, tc.completed)
 			_ = state.MarkRunning(tc.crashed)
 
 			if err := engine.Run(context.Background()); err != nil {
