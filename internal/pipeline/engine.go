@@ -66,6 +66,9 @@ type EngineConfig struct {
 	Stderr                 io.Writer         // destination for warning messages; defaults to os.Stderr
 	TokenBudget            TokenBudgetConfig // prompt token budget estimation; zero value disables checks
 	Notify                 NotifyConfig      // notification hooks fired on pipeline completion; zero value disables
+	MergeMethod            string            // merge method: "merge", "squash", "rebase"; defaults to "squash"
+	MergeLabels            []string          // required PR labels before auto-merge proceeds
+	AutoMergeTimeout       time.Duration     // max wait after approval before giving up; defaults to 30m
 }
 
 // TokenBudgetConfig configures the prompt-size estimation check.
