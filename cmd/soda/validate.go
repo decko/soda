@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -77,6 +78,9 @@ func runValidate(w io.Writer, errW io.Writer, cfg *config.Config, pipelineName s
 
 	// Stage 5: Context files
 	validateContextFiles(w, result, cfg)
+
+	// Stage 6: Notifications
+	validateNotifications(w, result, cfg)
 
 	// Print summary
 	fmt.Fprintln(w)
@@ -200,6 +204,57 @@ func validateSchemas(w io.Writer, result *validationResult, pl *pipeline.PhasePi
 		fmt.Fprintln(w, "✓ schemas: all phases have schemas")
 	} else {
 		fmt.Fprintf(w, "⚠ schemas: %d phase(s) missing schemas\n", missingSchemas)
+	}
+}
+
+// validateNotifications checks the notifications config for common errors:
+// script path must exist and be executable, webhook URL must be a valid
+// HTTP(S) URL.
+func validateNotifications(w io.Writer, result *validationResult, cfg *config.Config) {
+	nc := cfg.Notifications
+	if nc.WebhookURL == "" && nc.Script == "" {
+		fmt.Fprintln(w, "✓ notifications: not configured")
+		return
+	}
+
+	notifyErrors := 0
+
+	if nc.WebhookURL != "" {
+		u, err := url.Parse(nc.WebhookURL)
+		if err != nil {
+			result.addError("notifications: invalid webhook URL: %v", err)
+			notifyErrors++
+		} else if u.Scheme != "http" && u.Scheme != "https" {
+			result.addError("notifications: webhook URL must use http or https scheme, got %q", u.Scheme)
+			notifyErrors++
+		} else if u.Host == "" {
+			result.addError("notifications: webhook URL has no host")
+			notifyErrors++
+		}
+	}
+
+	if nc.Script != "" {
+		info, err := os.Stat(nc.Script)
+		if err != nil {
+			result.addError("notifications: script %q not found", nc.Script)
+			notifyErrors++
+		} else if info.IsDir() {
+			result.addError("notifications: script %q is a directory", nc.Script)
+			notifyErrors++
+		} else if info.Mode()&0111 == 0 {
+			result.addWarning("notifications: script %q is not executable", nc.Script)
+		}
+	}
+
+	if notifyErrors == 0 {
+		parts := []string{}
+		if nc.WebhookURL != "" {
+			parts = append(parts, "webhook")
+		}
+		if nc.Script != "" {
+			parts = append(parts, "script")
+		}
+		fmt.Fprintf(w, "✓ notifications: %s configured\n", strings.Join(parts, " + "))
 	}
 }
 
