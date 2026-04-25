@@ -5853,3 +5853,256 @@ func TestEngine_EmitLogsWarningOnEventLogFailure(t *testing.T) {
 		t.Error("triage should be completed")
 	}
 }
+
+func TestEngine_TokenBudgetEstimationPersisted(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage: automatable",
+					CostUSD: 0.10,
+				},
+			}},
+		},
+	}
+
+	engine, state := setupEngine(t, phases, mock)
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	ps := state.Meta().Phases["triage"]
+	if ps == nil {
+		t.Fatal("triage phase not found in meta")
+	}
+
+	if ps.EstimatedPromptTokens <= 0 {
+		t.Errorf("EstimatedPromptTokens = %d, want > 0", ps.EstimatedPromptTokens)
+	}
+
+	// Verify the estimate matches the formula: int64(float64(len(rendered)) / 3.3).
+	// The rendered prompt is "Phase: triage\nTicket: TEST-1\n"; read from log.
+	promptLog, err := os.ReadFile(filepath.Join(state.Dir(), "logs", "triage_prompt.md"))
+	if err != nil {
+		t.Fatalf("read prompt log: %v", err)
+	}
+	expectedTokens := int64(float64(len(promptLog)) / 3.3)
+	if ps.EstimatedPromptTokens != expectedTokens {
+		t.Errorf("EstimatedPromptTokens = %d, want %d (from %d bytes)", ps.EstimatedPromptTokens, expectedTokens, len(promptLog))
+	}
+}
+
+func TestEngine_TokenBudgetWarningEmitted(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage: automatable",
+					CostUSD: 0.10,
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		// Set WarnTokens very low (1) so the 26-byte prompt triggers a warning.
+		cfg.TokenBudget = TokenBudgetConfig{WarnTokens: 1}
+		cfg.OnEvent = func(e Event) {
+			events = append(events, e)
+		}
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Should have a token_budget_warning event.
+	var found bool
+	for _, ev := range events {
+		if ev.Kind == EventTokenBudgetWarning && ev.Phase == "triage" {
+			found = true
+			if est, ok := ev.Data["estimated_tokens"]; !ok {
+				t.Error("token_budget_warning missing estimated_tokens")
+			} else if toInt64(est) <= 0 {
+				t.Errorf("estimated_tokens = %v, want > 0", est)
+			}
+			if wl, ok := ev.Data["warn_limit"]; !ok {
+				t.Error("token_budget_warning missing warn_limit")
+			} else if toInt(wl) != 1 {
+				t.Errorf("warn_limit = %v, want 1", wl)
+			}
+			if pb, ok := ev.Data["prompt_bytes"]; !ok {
+				t.Error("token_budget_warning missing prompt_bytes")
+			} else if toInt(pb) <= 0 {
+				t.Errorf("prompt_bytes = %v, want > 0", pb)
+			}
+		}
+	}
+	if !found {
+		t.Error("expected token_budget_warning event, but none was emitted")
+	}
+}
+
+func TestEngine_TokenBudgetNoWarningBelowThreshold(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage: automatable",
+					CostUSD: 0.10,
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		// Set WarnTokens high (100000) so the small prompt does NOT trigger.
+		cfg.TokenBudget = TokenBudgetConfig{WarnTokens: 100000}
+		cfg.OnEvent = func(e Event) {
+			events = append(events, e)
+		}
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	for _, ev := range events {
+		if ev.Kind == EventTokenBudgetWarning {
+			t.Errorf("unexpected token_budget_warning event for small prompt")
+		}
+	}
+}
+
+func TestEngine_TokenBudgetCalibrationEmitted(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:        json.RawMessage(`{"automatable":true}`),
+					RawText:       "Triage: automatable",
+					CostUSD:       0.10,
+					TokensIn:      500,
+					TokensOut:     100,
+					CacheTokensIn: 0,
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(e Event) {
+			events = append(events, e)
+		}
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var found bool
+	for _, ev := range events {
+		if ev.Kind == EventTokenBudgetCalibration && ev.Phase == "triage" {
+			found = true
+			if pb, ok := ev.Data["prompt_bytes"]; !ok || toInt(pb) <= 0 {
+				t.Errorf("calibration event prompt_bytes = %v, want > 0", pb)
+			}
+			if est, ok := ev.Data["estimated_tokens"]; !ok || toInt64(est) <= 0 {
+				t.Errorf("calibration event estimated_tokens = %v, want > 0", est)
+			}
+			if actual, ok := ev.Data["actual_tokens_in"]; !ok || toInt64(actual) != 500 {
+				t.Errorf("calibration event actual_tokens_in = %v, want 500", actual)
+			}
+			if bpt, ok := ev.Data["bytes_per_token"]; !ok {
+				t.Error("calibration event missing bytes_per_token")
+			} else {
+				ratio := toFloat64(bpt)
+				if ratio <= 0 {
+					t.Errorf("bytes_per_token = %v, want > 0", ratio)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Error("expected token_budget_calibration event, but none was emitted")
+	}
+}
+
+func TestEngine_TokenBudgetCalibrationNotEmittedWhenZeroTokens(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage: automatable",
+					CostUSD: 0.10,
+					// TokensIn is 0 — no calibration event should be emitted
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(e Event) {
+			events = append(events, e)
+		}
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	for _, ev := range events {
+		if ev.Kind == EventTokenBudgetCalibration {
+			t.Error("unexpected token_budget_calibration event when TokensIn is zero")
+		}
+	}
+}
