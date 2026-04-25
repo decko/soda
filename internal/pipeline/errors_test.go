@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -168,6 +169,187 @@ func TestReworkSignal(t *testing.T) {
 		msg := err.Error()
 		if !strings.Contains(msg, "target plan") {
 			t.Errorf("Error() should contain target, got: %s", msg)
+		}
+	})
+}
+
+func TestPhaseNotFoundError(t *testing.T) {
+	err := &PhaseNotFoundError{
+		Phase:    "deploy",
+		Pipeline: []string{"triage", "plan", "implement", "verify"},
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "deploy") {
+		t.Errorf("Error() should contain phase name, got: %s", msg)
+	}
+	if !strings.Contains(msg, "not found in pipeline") {
+		t.Errorf("Error() should contain 'not found in pipeline', got: %s", msg)
+	}
+	if !strings.Contains(msg, "triage, plan, implement, verify") {
+		t.Errorf("Error() should list available phases, got: %s", msg)
+	}
+
+	var target *PhaseNotFoundError
+	if !errors.As(err, &target) {
+		t.Error("errors.As should match PhaseNotFoundError")
+	}
+	if target.Phase != "deploy" {
+		t.Errorf("Phase = %q, want %q", target.Phase, "deploy")
+	}
+	if len(target.Pipeline) != 4 {
+		t.Errorf("Pipeline length = %d, want 4", len(target.Pipeline))
+	}
+}
+
+func TestPhaseNotFoundError_EmptyPipeline(t *testing.T) {
+	err := &PhaseNotFoundError{Phase: "unknown", Pipeline: nil}
+	msg := err.Error()
+	if !strings.Contains(msg, "unknown") {
+		t.Errorf("Error() should contain phase name, got: %s", msg)
+	}
+	// With nil pipeline, available list should be empty string.
+	if !strings.Contains(msg, "(available: )") {
+		t.Errorf("Error() should handle nil pipeline, got: %s", msg)
+	}
+}
+
+func TestRetriesExhaustedError(t *testing.T) {
+	inner := fmt.Errorf("connection timeout")
+	err := &RetriesExhaustedError{
+		Phase:    "triage",
+		Category: "transient",
+		Attempts: 3,
+		Err:      inner,
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "triage") {
+		t.Errorf("Error() should contain phase name, got: %s", msg)
+	}
+	if !strings.Contains(msg, "3 attempts") {
+		t.Errorf("Error() should contain attempt count, got: %s", msg)
+	}
+	if !strings.Contains(msg, "transient") {
+		t.Errorf("Error() should contain category, got: %s", msg)
+	}
+	if !strings.Contains(msg, "connection timeout") {
+		t.Errorf("Error() should contain inner error, got: %s", msg)
+	}
+
+	// Unwrap should return the inner error.
+	if !errors.Is(err, inner) {
+		t.Error("Unwrap should return inner error")
+	}
+
+	var target *RetriesExhaustedError
+	if !errors.As(err, &target) {
+		t.Error("errors.As should match RetriesExhaustedError")
+	}
+	if target.Phase != "triage" {
+		t.Errorf("Phase = %q, want %q", target.Phase, "triage")
+	}
+	if target.Category != "transient" {
+		t.Errorf("Category = %q, want %q", target.Category, "transient")
+	}
+	if target.Attempts != 3 {
+		t.Errorf("Attempts = %d, want 3", target.Attempts)
+	}
+}
+
+func TestWorktreeError(t *testing.T) {
+	inner := fmt.Errorf("worktree already exists")
+
+	t.Run("with_path", func(t *testing.T) {
+		err := &WorktreeError{
+			Branch: "soda/42",
+			Path:   "/tmp/worktrees/soda/42",
+			Err:    inner,
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "soda/42") {
+			t.Errorf("Error() should contain branch, got: %s", msg)
+		}
+		if !strings.Contains(msg, "/tmp/worktrees/soda/42") {
+			t.Errorf("Error() should contain path, got: %s", msg)
+		}
+		if !strings.Contains(msg, "worktree already exists") {
+			t.Errorf("Error() should contain inner error, got: %s", msg)
+		}
+		if !errors.Is(err, inner) {
+			t.Error("Unwrap should return inner error")
+		}
+
+		var target *WorktreeError
+		if !errors.As(err, &target) {
+			t.Error("errors.As should match WorktreeError")
+		}
+		if target.Branch != "soda/42" {
+			t.Errorf("Branch = %q, want %q", target.Branch, "soda/42")
+		}
+	})
+
+	t.Run("without_path", func(t *testing.T) {
+		err := &WorktreeError{
+			Branch: "soda/99",
+			Err:    inner,
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "soda/99") {
+			t.Errorf("Error() should contain branch, got: %s", msg)
+		}
+		if strings.Contains(msg, " at ") {
+			t.Errorf("Error() should not contain 'at' when path is empty, got: %s", msg)
+		}
+	})
+}
+
+func TestPromptError(t *testing.T) {
+	inner := fmt.Errorf("template not found: triage.md")
+
+	t.Run("load", func(t *testing.T) {
+		err := &PromptError{
+			Phase:     "triage",
+			Operation: "load",
+			Err:       inner,
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "triage") {
+			t.Errorf("Error() should contain phase name, got: %s", msg)
+		}
+		if !strings.Contains(msg, "load") {
+			t.Errorf("Error() should contain operation, got: %s", msg)
+		}
+		if !strings.Contains(msg, "template not found") {
+			t.Errorf("Error() should contain inner error, got: %s", msg)
+		}
+		if !errors.Is(err, inner) {
+			t.Error("Unwrap should return inner error")
+		}
+
+		var target *PromptError
+		if !errors.As(err, &target) {
+			t.Error("errors.As should match PromptError")
+		}
+		if target.Phase != "triage" {
+			t.Errorf("Phase = %q, want %q", target.Phase, "triage")
+		}
+		if target.Operation != "load" {
+			t.Errorf("Operation = %q, want %q", target.Operation, "load")
+		}
+	})
+
+	t.Run("render", func(t *testing.T) {
+		renderErr := fmt.Errorf("invalid template syntax")
+		err := &PromptError{
+			Phase:     "plan",
+			Operation: "render",
+			Err:       renderErr,
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "render") {
+			t.Errorf("Error() should contain operation, got: %s", msg)
+		}
+		if !strings.Contains(msg, "plan") {
+			t.Errorf("Error() should contain phase name, got: %s", msg)
 		}
 	})
 }
