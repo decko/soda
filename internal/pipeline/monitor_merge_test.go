@@ -2,9 +2,20 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
+
+// mockPRPollerWithValidator extends mockPRPoller to also implement MergeValidator.
+type mockPRPollerWithValidator struct {
+	*mockPRPoller
+	validateErr error
+}
+
+func (m *mockPRPollerWithValidator) ValidateMergePrerequisites(ctx context.Context, prURL string) error {
+	return m.validateErr
+}
 
 // --- missingLabels tests ---
 
@@ -457,6 +468,73 @@ func TestTryAutoMerge_NilCIStatus(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected auto_merge_blocked with reason ci_not_green")
+	}
+}
+
+// --- Branch protection (MergeValidator) tests ---
+
+func TestTryAutoMerge_BranchProtection_Pass(t *testing.T) {
+	// When MergeValidator.ValidateMergePrerequisites returns nil, merge proceeds
+	// normally with no warning event.
+	basePoller := &mockPRPoller{}
+	poller := &mockPRPollerWithValidator{mockPRPoller: basePoller, validateErr: nil}
+	engine, events := setupMergeEngine(t, poller)
+
+	now := time.Now()
+	monState := &MonitorState{
+		PRURL:        "https://github.com/o/r/pull/1",
+		ApprovalTime: &now,
+	}
+	prStatus := &PRStatus{State: "open", Approved: true, HeadSHA: "abc123", Labels: []string{"auto-merge-ok"}}
+	ciStatus := &CIStatus{Overall: "success", CommitSHA: "abc123"}
+	polling := &PollingConfig{AutoMerge: true, AutoMergeTimeout: Duration{Duration: 30 * time.Minute}}
+
+	result := engine.tryAutoMerge(context.Background(), "monitor", monState, prStatus, ciStatus, polling)
+	if !result.Merged {
+		t.Error("expected merge success when branch protection passes")
+	}
+	if hasEventKind(*events, EventMonitorWarning) {
+		t.Error("expected no warning event when branch protection passes")
+	}
+}
+
+func TestTryAutoMerge_BranchProtection_Warn(t *testing.T) {
+	// When MergeValidator.ValidateMergePrerequisites returns an error, a warning
+	// is emitted but the merge is still attempted (branch protection is advisory).
+	basePoller := &mockPRPoller{}
+	poller := &mockPRPollerWithValidator{
+		mockPRPoller: basePoller,
+		validateErr:  errors.New("dismiss_stale_reviews is enabled"),
+	}
+	engine, events := setupMergeEngine(t, poller)
+
+	now := time.Now()
+	monState := &MonitorState{
+		PRURL:        "https://github.com/o/r/pull/1",
+		ApprovalTime: &now,
+	}
+	prStatus := &PRStatus{State: "open", Approved: true, HeadSHA: "abc123", Labels: []string{"auto-merge-ok"}}
+	ciStatus := &CIStatus{Overall: "success", CommitSHA: "abc123"}
+	polling := &PollingConfig{AutoMerge: true, AutoMergeTimeout: Duration{Duration: 30 * time.Minute}}
+
+	result := engine.tryAutoMerge(context.Background(), "monitor", monState, prStatus, ciStatus, polling)
+	if !result.Merged {
+		t.Error("expected merge to proceed despite branch protection warning")
+	}
+	if !hasEventKind(*events, EventMonitorWarning) {
+		t.Error("expected warning event for branch protection issue")
+	}
+	// Verify the warning contains branch protection context.
+	found := false
+	for _, ev := range *events {
+		if ev.Kind == EventMonitorWarning {
+			if w, ok := ev.Data["warning"].(string); ok && len(w) > 0 {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Error("expected warning event with non-empty warning message")
 	}
 }
 
