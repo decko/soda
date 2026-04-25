@@ -41,8 +41,16 @@ type MonitorConfig struct {
 // NotifyConfig holds notification hook settings for pipeline completion.
 // Both webhook and script may be configured; they fire independently.
 type NotifyConfig struct {
-	Webhook *WebhookNotifyConfig `yaml:"webhook,omitempty"` // HTTP POST notification
-	Script  *ScriptNotifyConfig  `yaml:"script,omitempty"`  // shell script callback
+	Webhook   *WebhookNotifyConfig `yaml:"webhook,omitempty"`    // HTTP POST notification (fires on any completion)
+	Script    *ScriptNotifyConfig  `yaml:"script,omitempty"`     // script callback (fires on any completion)
+	OnFinish  *NotifyHookConfig    `yaml:"on_finish,omitempty"`  // fires on any pipeline completion
+	OnFailure *NotifyHookConfig    `yaml:"on_failure,omitempty"` // fires only on failed or timeout
+}
+
+// NotifyHookConfig groups a webhook and script for a single trigger condition.
+type NotifyHookConfig struct {
+	Webhook *WebhookNotifyConfig `yaml:"webhook,omitempty"`
+	Script  *ScriptNotifyConfig  `yaml:"script,omitempty"`
 }
 
 // WebhookNotifyConfig configures an HTTP POST webhook fired on pipeline completion.
