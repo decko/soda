@@ -94,13 +94,18 @@ func (e *PhaseNotFoundError) Error() string {
 // retries for a given error category. It wraps the last error encountered
 // so callers can inspect the root cause.
 type RetriesExhaustedError struct {
-	Phase    string
+	Phase    string // pipeline phase name (e.g. "review")
+	Reviewer string // reviewer name when error originates from a parallel-review reviewer; empty for regular phases
 	Category string // "transient", "parse", "semantic", "unknown"
 	Attempts int    // total attempts (initial + retries)
 	Err      error  // last error encountered
 }
 
 func (e *RetriesExhaustedError) Error() string {
+	if e.Reviewer != "" {
+		return fmt.Sprintf("engine: phase %s (reviewer %s) failed after %d attempts (%s): %s",
+			e.Phase, e.Reviewer, e.Attempts, e.Category, e.Err)
+	}
 	return fmt.Sprintf("engine: phase %s failed after %d attempts (%s): %s",
 		e.Phase, e.Attempts, e.Category, e.Err)
 }

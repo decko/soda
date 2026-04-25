@@ -215,44 +215,84 @@ func TestPhaseNotFoundError_EmptyPipeline(t *testing.T) {
 
 func TestRetriesExhaustedError(t *testing.T) {
 	inner := fmt.Errorf("connection timeout")
-	err := &RetriesExhaustedError{
-		Phase:    "triage",
-		Category: "transient",
-		Attempts: 3,
-		Err:      inner,
-	}
-	msg := err.Error()
-	if !strings.Contains(msg, "triage") {
-		t.Errorf("Error() should contain phase name, got: %s", msg)
-	}
-	if !strings.Contains(msg, "3 attempts") {
-		t.Errorf("Error() should contain attempt count, got: %s", msg)
-	}
-	if !strings.Contains(msg, "transient") {
-		t.Errorf("Error() should contain category, got: %s", msg)
-	}
-	if !strings.Contains(msg, "connection timeout") {
-		t.Errorf("Error() should contain inner error, got: %s", msg)
-	}
 
-	// Unwrap should return the inner error.
-	if !errors.Is(err, inner) {
-		t.Error("Unwrap should return inner error")
-	}
+	t.Run("phase_only", func(t *testing.T) {
+		err := &RetriesExhaustedError{
+			Phase:    "triage",
+			Category: "transient",
+			Attempts: 3,
+			Err:      inner,
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "triage") {
+			t.Errorf("Error() should contain phase name, got: %s", msg)
+		}
+		if !strings.Contains(msg, "3 attempts") {
+			t.Errorf("Error() should contain attempt count, got: %s", msg)
+		}
+		if !strings.Contains(msg, "transient") {
+			t.Errorf("Error() should contain category, got: %s", msg)
+		}
+		if !strings.Contains(msg, "connection timeout") {
+			t.Errorf("Error() should contain inner error, got: %s", msg)
+		}
+		if strings.Contains(msg, "reviewer") {
+			t.Errorf("Error() should NOT contain reviewer when Reviewer is empty, got: %s", msg)
+		}
 
-	var target *RetriesExhaustedError
-	if !errors.As(err, &target) {
-		t.Error("errors.As should match RetriesExhaustedError")
-	}
-	if target.Phase != "triage" {
-		t.Errorf("Phase = %q, want %q", target.Phase, "triage")
-	}
-	if target.Category != "transient" {
-		t.Errorf("Category = %q, want %q", target.Category, "transient")
-	}
-	if target.Attempts != 3 {
-		t.Errorf("Attempts = %d, want 3", target.Attempts)
-	}
+		// Unwrap should return the inner error.
+		if !errors.Is(err, inner) {
+			t.Error("Unwrap should return inner error")
+		}
+
+		var target *RetriesExhaustedError
+		if !errors.As(err, &target) {
+			t.Error("errors.As should match RetriesExhaustedError")
+		}
+		if target.Phase != "triage" {
+			t.Errorf("Phase = %q, want %q", target.Phase, "triage")
+		}
+		if target.Reviewer != "" {
+			t.Errorf("Reviewer = %q, want empty", target.Reviewer)
+		}
+		if target.Category != "transient" {
+			t.Errorf("Category = %q, want %q", target.Category, "transient")
+		}
+		if target.Attempts != 3 {
+			t.Errorf("Attempts = %d, want 3", target.Attempts)
+		}
+	})
+
+	t.Run("with_reviewer", func(t *testing.T) {
+		err := &RetriesExhaustedError{
+			Phase:    "review",
+			Reviewer: "go-specialist",
+			Category: "transient",
+			Attempts: 2,
+			Err:      inner,
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "review") {
+			t.Errorf("Error() should contain phase name, got: %s", msg)
+		}
+		if !strings.Contains(msg, "go-specialist") {
+			t.Errorf("Error() should contain reviewer name, got: %s", msg)
+		}
+		if !strings.Contains(msg, "2 attempts") {
+			t.Errorf("Error() should contain attempt count, got: %s", msg)
+		}
+
+		var target *RetriesExhaustedError
+		if !errors.As(err, &target) {
+			t.Error("errors.As should match RetriesExhaustedError")
+		}
+		if target.Phase != "review" {
+			t.Errorf("Phase = %q, want %q", target.Phase, "review")
+		}
+		if target.Reviewer != "go-specialist" {
+			t.Errorf("Reviewer = %q, want %q", target.Reviewer, "go-specialist")
+		}
+	})
 }
 
 func TestWorktreeError(t *testing.T) {

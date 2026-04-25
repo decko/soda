@@ -549,7 +549,7 @@ func (e *Engine) runReviewerWithRetry(ctx context.Context, phase PhaseConfig, re
 
 		left, tracked := remaining[category]
 		if !tracked || left <= 0 {
-			return nil, &RetriesExhaustedError{Phase: reviewer.Name, Category: category, Attempts: attempt + 1, Err: err}
+			return nil, &RetriesExhaustedError{Phase: phase.Name, Reviewer: reviewer.Name, Category: category, Attempts: attempt + 1, Err: err}
 		}
 		remaining[category]--
 
