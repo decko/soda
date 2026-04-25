@@ -260,28 +260,27 @@ func TestCrashRecovery_AllBoundaries_Run(t *testing.T) {
 			}
 
 			// --- Assertion 2: crash-recovery event appears BEFORE phase_started ---
-			crashFailedIdx := -1
-			phaseStartedIdx := -1
+			// Search independently for both indices so the ordering check is
+			// not tautological.
+			crashIdx, startIdx := -1, -1
 			for i, ev := range events {
 				if ev.Kind == EventPhaseFailed && ev.Phase == tc.crashed {
-					if errMsg, ok := ev.Data["error"].(string); ok && strings.Contains(errMsg, "crashed") {
-						crashFailedIdx = i
+					if errMsg, _ := ev.Data["error"].(string); strings.Contains(errMsg, "crashed") {
+						crashIdx = i
 					}
 				}
-				if ev.Kind == EventPhaseStarted && ev.Phase == tc.crashed && i > crashFailedIdx && crashFailedIdx >= 0 {
-					if phaseStartedIdx < 0 {
-						phaseStartedIdx = i
-					}
+				if ev.Kind == EventPhaseStarted && ev.Phase == tc.crashed && startIdx < 0 {
+					startIdx = i
 				}
 			}
-			if crashFailedIdx < 0 {
-				t.Errorf("no crash-recovery phase_failed event found for %q", tc.crashed)
+			if crashIdx < 0 {
+				t.Fatal("no crash-recovery phase_failed event found")
 			}
-			if phaseStartedIdx < 0 {
-				t.Errorf("no phase_started event found for %q after crash recovery", tc.crashed)
+			if startIdx < 0 {
+				t.Fatal("no phase_started event found for crashed phase")
 			}
-			if crashFailedIdx >= 0 && phaseStartedIdx >= 0 && crashFailedIdx >= phaseStartedIdx {
-				t.Errorf("crash-recovery phase_failed (idx=%d) should appear before phase_started (idx=%d)", crashFailedIdx, phaseStartedIdx)
+			if crashIdx >= startIdx {
+				t.Errorf("crash-recovery phase_failed (idx=%d) must precede phase_started (idx=%d)", crashIdx, startIdx)
 			}
 
 			// --- Assertion 3: all phases completed ---
