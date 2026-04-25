@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -579,5 +580,161 @@ func TestSmoke_CorrectiveLoop(t *testing.T) {
 	// routing it runs. So we expect exactly 1 corrective_skipped event.
 	if eventKinds[EventCorrectiveSkipped] != 1 {
 		t.Errorf("corrective_skipped events = %d, want 1", eventKinds[EventCorrectiveSkipped])
+	}
+}
+
+// TestSmoke_Resume tests the resume workflow: first run fails at the verify
+// gate (no corrective config), second run uses Resume("verify"), validating
+// that earlier phases are skipped, generations increment, and cost
+// accumulates across both runs.
+func TestSmoke_Resume(t *testing.T) {
+	// Use smoke phases but remove corrective config from verify so that
+	// verify FAIL produces a PhaseGateError instead of routing to patch.
+	phases := smokePipelinePhases()
+	for i := range phases {
+		if phases[i].Name == "verify" {
+			phases[i].Corrective = nil
+		}
+	}
+
+	stateDir := t.TempDir()
+	promptDir := t.TempDir()
+	workDir := t.TempDir()
+
+	writeSmokePrompts(t, promptDir)
+
+	state, err := LoadOrCreate(stateDir, "RESUME-S1")
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+
+	// --- First run: triage → plan → implement → verify FAIL → gate error ---
+	mock1 := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage":    {{result: smokeFixtures()["triage"]}},
+			"plan":      {{result: smokeFixtures()["plan"]}},
+			"implement": {{result: smokeFixtures()["implement"]}},
+			"verify": {{result: &runner.RunResult{
+				Output:  json.RawMessage(`{"verdict":"FAIL","fixes_required":["missing edge case"]}`),
+				RawText: "Verify FAIL",
+				CostUSD: 0.15,
+			}}},
+		},
+	}
+
+	var events1 []Event
+	cfg := EngineConfig{
+		Pipeline:   &PhasePipeline{Phases: phases},
+		Loader:     NewPromptLoader(promptDir),
+		Ticket:     TicketData{Key: "RESUME-S1", Summary: "Resume smoke test"},
+		Model:      "test-model",
+		WorkDir:    workDir,
+		MaxCostUSD: 10.0,
+		Mode:       Autonomous,
+		SleepFunc:  func(time.Duration) {},
+		JitterFunc: func(time.Duration) time.Duration { return 0 },
+		OnEvent:    func(e Event) { events1 = append(events1, e) },
+	}
+
+	engine1 := NewEngine(mock1, state, cfg)
+
+	runErr := engine1.Run(context.Background())
+	if runErr == nil {
+		t.Fatal("expected PhaseGateError from verify FAIL")
+	}
+
+	// Verify the error is a PhaseGateError.
+	var gateErr *PhaseGateError
+	if !errors.As(runErr, &gateErr) {
+		t.Fatalf("expected PhaseGateError, got: %T: %v", runErr, runErr)
+	}
+
+	// Implement and verify should be completed after first run.
+	if !state.IsCompleted("implement") {
+		t.Error("implement should be completed after first run")
+	}
+	if !state.IsCompleted("verify") {
+		t.Error("verify should be completed (gate check happens after completion)")
+	}
+
+	costAfterFirstRun := state.Meta().TotalCost
+
+	// --- Second run: Resume("verify") → verify PASS → review → submit ---
+	mock2 := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"verify": {{result: &runner.RunResult{
+				Output:  json.RawMessage(`{"verdict":"PASS"}`),
+				RawText: "Verify PASS on resume",
+				CostUSD: 0.12,
+			}}},
+			"review": {{result: &runner.RunResult{
+				Output:  json.RawMessage(`{"findings":[],"verdict":"pass"}`),
+				RawText: "Review pass",
+				CostUSD: 0.05,
+			}}},
+			"submit": {{result: smokeFixtures()["submit"]}},
+		},
+	}
+
+	var events2 []Event
+	cfg.OnEvent = func(e Event) { events2 = append(events2, e) }
+
+	engine2 := NewEngine(mock2, state, cfg)
+
+	if err := engine2.Resume(context.Background(), "verify"); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+
+	// --- All phases completed ---
+	for _, name := range []string{"triage", "plan", "implement", "verify", "review", "submit"} {
+		if !state.IsCompleted(name) {
+			t.Errorf("phase %q should be completed after resume", name)
+		}
+	}
+
+	// --- Verify generation incremented ---
+	verifyPS := state.Meta().Phases["verify"]
+	if verifyPS == nil {
+		t.Fatal("verify phase state missing")
+	}
+	if verifyPS.Generation < 2 {
+		t.Errorf("verify generation = %d, want >= 2", verifyPS.Generation)
+	}
+
+	// --- Cost accumulated across runs ---
+	expectedAdditional := 0.12 + 0.05 + 0.03 // verify v2 + review + submit
+	expectedTotal := costAfterFirstRun + expectedAdditional
+	if !approxEqual(state.Meta().TotalCost, expectedTotal) {
+		t.Errorf("TotalCost = %v, want %v", state.Meta().TotalCost, expectedTotal)
+	}
+
+	// --- Runner call count on second run ---
+	// Only verify, review, submit should run (triage, plan, implement skipped).
+	if len(mock2.calls) != 3 {
+		t.Errorf("second run: runner called %d times, want 3; phases: %v",
+			len(mock2.calls), phaseNames(mock2.calls))
+	}
+
+	// --- Verify runner call ordering on resume ---
+	wantOrder := []string{"verify", "review", "submit"}
+	gotOrder := phaseNames(mock2.calls)
+	if len(gotOrder) != len(wantOrder) {
+		t.Fatalf("call count mismatch: got %v, want %v", gotOrder, wantOrder)
+	}
+	for i, want := range wantOrder {
+		if gotOrder[i] != want {
+			t.Errorf("resume call[%d] = %q, want %q", i, gotOrder[i], want)
+		}
+	}
+
+	// --- Engine completed event on resume ---
+	hasCompleted := false
+	for _, e := range events2 {
+		if e.Kind == EventEngineCompleted {
+			hasCompleted = true
+		}
+	}
+	if !hasCompleted {
+		t.Error("engine_completed event not emitted on resume")
 	}
 }
