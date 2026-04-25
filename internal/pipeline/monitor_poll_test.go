@@ -32,6 +32,15 @@ type mockPRPoller struct {
 	// postedComments records bodies passed to PostComment.
 	postedComments []string
 	postCommentErr error
+
+	// mergeCalls records (prURL, method) pairs passed to MergePR.
+	mergeCalls []mockMergeCall
+	mergeErr   error
+}
+
+type mockMergeCall struct {
+	PRURL  string
+	Method string
 }
 
 type mockPRStatusResponse struct {
@@ -91,6 +100,13 @@ func (m *mockPRPoller) PostComment(ctx context.Context, prURL string, body strin
 	defer m.mu.Unlock()
 	m.postedComments = append(m.postedComments, body)
 	return m.postCommentErr
+}
+
+func (m *mockPRPoller) MergePR(ctx context.Context, prURL string, method string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.mergeCalls = append(m.mergeCalls, mockMergeCall{PRURL: prURL, Method: method})
+	return m.mergeErr
 }
 
 // setupMonitorEngine creates an engine configured for monitor testing.

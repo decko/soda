@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -320,4 +321,211 @@ func TestIntegration_GetNewComments(t *testing.T) {
 			t.Errorf("filtered comments should not contain afterID %s", firstID)
 		}
 	}
+}
+
+func TestMergePR_Success(t *testing.T) {
+	// Build a fake gh binary script that succeeds.
+	binPath := writeFakeGH(t, "", "", 0)
+
+	poller := NewGitHubPRPoller(binPath)
+	ctx := context.Background()
+
+	err := poller.MergePR(ctx, "https://github.com/owner/repo/pull/1", "squash")
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+}
+
+func TestMergePR_ConflictError(t *testing.T) {
+	binPath := writeFakeGH(t, "", "Pull request merge conflict", 1)
+
+	poller := NewGitHubPRPoller(binPath)
+	ctx := context.Background()
+
+	err := poller.MergePR(ctx, "https://github.com/owner/repo/pull/1", "merge")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, ErrMergeConflict) {
+		t.Errorf("expected ErrMergeConflict, got: %v", err)
+	}
+}
+
+func TestMergePR_AlreadyMergedError(t *testing.T) {
+	binPath := writeFakeGH(t, "", "Pull request was already merged", 1)
+
+	poller := NewGitHubPRPoller(binPath)
+	ctx := context.Background()
+
+	err := poller.MergePR(ctx, "https://github.com/owner/repo/pull/1", "squash")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, ErrPRAlreadyMerged) {
+		t.Errorf("expected ErrPRAlreadyMerged, got: %v", err)
+	}
+}
+
+func TestMergePR_ClosedError(t *testing.T) {
+	binPath := writeFakeGH(t, "", "Pull request is closed", 1)
+
+	poller := NewGitHubPRPoller(binPath)
+	ctx := context.Background()
+
+	err := poller.MergePR(ctx, "https://github.com/owner/repo/pull/1", "squash")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, ErrPRClosed) {
+		t.Errorf("expected ErrPRClosed, got: %v", err)
+	}
+}
+
+func TestValidateMergePrerequisites_NoProtection(t *testing.T) {
+	// First call: gh pr view → returns baseRefName.
+	// Second call: gh api → 404 (no protection).
+	callNum := 0
+	binPath := writeFakeGHMulti(t, func(args []string) (string, string, int) {
+		callNum++
+		if callNum == 1 {
+			// gh pr view ... --json baseRefName
+			return `{"baseRefName":"main"}`, "", 0
+		}
+		// gh api ... → 404
+		return "", "HTTP 404: Not Found", 1
+	})
+
+	poller := NewGitHubPRPoller(binPath)
+	ctx := context.Background()
+
+	err := poller.ValidateMergePrerequisites(ctx, "https://github.com/owner/repo/pull/1")
+	if err != nil {
+		t.Fatalf("expected no error for unprotected branch, got: %v", err)
+	}
+}
+
+func TestValidateMergePrerequisites_NoDismissStale(t *testing.T) {
+	callNum := 0
+	binPath := writeFakeGHMulti(t, func(args []string) (string, string, int) {
+		callNum++
+		if callNum == 1 {
+			return `{"baseRefName":"main"}`, "", 0
+		}
+		// Protection exists but dismiss_stale_reviews is false.
+		return `{"required_pull_request_reviews":{"dismiss_stale_reviews":false}}`, "", 0
+	})
+
+	poller := NewGitHubPRPoller(binPath)
+	ctx := context.Background()
+
+	err := poller.ValidateMergePrerequisites(ctx, "https://github.com/owner/repo/pull/1")
+	if err != nil {
+		t.Fatalf("expected no error when dismiss_stale_reviews is false, got: %v", err)
+	}
+}
+
+func TestValidateMergePrerequisites_DismissStaleReviews(t *testing.T) {
+	callNum := 0
+	binPath := writeFakeGHMulti(t, func(args []string) (string, string, int) {
+		callNum++
+		if callNum == 1 {
+			return `{"baseRefName":"main"}`, "", 0
+		}
+		return `{"required_pull_request_reviews":{"dismiss_stale_reviews":true}}`, "", 0
+	})
+
+	poller := NewGitHubPRPoller(binPath)
+	ctx := context.Background()
+
+	err := poller.ValidateMergePrerequisites(ctx, "https://github.com/owner/repo/pull/1")
+	if err == nil {
+		t.Fatal("expected error when dismiss_stale_reviews is true")
+	}
+	if !strings.Contains(err.Error(), "dismiss_stale_reviews") {
+		t.Errorf("expected error mentioning dismiss_stale_reviews, got: %v", err)
+	}
+}
+
+func TestValidateMergePrerequisites_BaseRefError(t *testing.T) {
+	binPath := writeFakeGH(t, "", "not found", 1)
+
+	poller := NewGitHubPRPoller(binPath)
+	ctx := context.Background()
+
+	err := poller.ValidateMergePrerequisites(ctx, "https://github.com/owner/repo/pull/1")
+	if err == nil {
+		t.Fatal("expected error when base branch fetch fails")
+	}
+}
+
+// writeFakeGH creates a shell script in a temp dir that outputs the given
+// stdout/stderr and exits with the given code. Returns the script path.
+func writeFakeGH(t *testing.T, stdout, stderr string, exitCode int) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := dir + "/gh"
+	script := fmt.Sprintf("#!/bin/sh\nprintf '%%s' %q >&1\nprintf '%%s' %q >&2\nexit %d\n",
+		stdout, stderr, exitCode)
+	if err := os.WriteFile(path, []byte(script), 0755); err != nil {
+		t.Fatalf("write fake gh: %v", err)
+	}
+	return path
+}
+
+// writeFakeGHMulti creates a shell script that calls back into a Go test
+// binary to handle multiple invocations with different responses.
+// The handler function receives the command-line arguments and returns
+// (stdout, stderr, exitCode). Uses a counter file to track call number.
+func writeFakeGHMulti(t *testing.T, handler func(args []string) (stdout, stderr string, exitCode int)) string {
+	t.Helper()
+	dir := t.TempDir()
+
+	// Pre-compute responses by calling handler sequentially.
+	// We support up to 10 calls.
+	type resp struct {
+		stdout   string
+		stderr   string
+		exitCode int
+	}
+	var responses []resp
+	for i := 0; i < 10; i++ {
+		s, e, c := handler(nil)
+		responses = append(responses, resp{s, e, c})
+	}
+
+	// Create a counter file and individual response scripts.
+	counterPath := dir + "/counter"
+	if err := os.WriteFile(counterPath, []byte("0"), 0644); err != nil {
+		t.Fatalf("write counter: %v", err)
+	}
+
+	// Write response files.
+	for i, r := range responses {
+		stdoutFile := fmt.Sprintf("%s/stdout_%d", dir, i)
+		stderrFile := fmt.Sprintf("%s/stderr_%d", dir, i)
+		exitFile := fmt.Sprintf("%s/exit_%d", dir, i)
+		os.WriteFile(stdoutFile, []byte(r.stdout), 0644)
+		os.WriteFile(stderrFile, []byte(r.stderr), 0644)
+		os.WriteFile(exitFile, []byte(fmt.Sprintf("%d", r.exitCode)), 0644)
+	}
+
+	// Build a shell script that reads the counter, outputs the right response,
+	// then increments the counter.
+	path := dir + "/gh"
+	script := fmt.Sprintf(`#!/bin/sh
+COUNTER=$(cat %q)
+STDOUT=$(cat "%s/stdout_${COUNTER}")
+STDERR=$(cat "%s/stderr_${COUNTER}")
+EXIT=$(cat "%s/exit_${COUNTER}")
+NEXT=$((COUNTER + 1))
+echo "$NEXT" > %q
+printf '%%s' "$STDOUT" >&1
+printf '%%s' "$STDERR" >&2
+exit $EXIT
+`, counterPath, dir, dir, dir, counterPath)
+
+	if err := os.WriteFile(path, []byte(script), 0755); err != nil {
+		t.Fatalf("write fake gh: %v", err)
+	}
+	return path
 }

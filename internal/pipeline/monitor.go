@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,16 +23,19 @@ const (
 // MonitorState holds the persistent state of the monitor polling loop.
 // Stored as .soda/<ticket>/monitor.json.
 type MonitorState struct {
-	PRURL             string        `json:"pr_url"`
-	PollCount         int           `json:"poll_count"`
-	ResponseRounds    int           `json:"response_rounds"`
-	ReplyRounds       int           `json:"reply_rounds"`
-	MaxResponseRounds int           `json:"max_response_rounds"`
-	LastCommentID     string        `json:"last_comment_id,omitempty"`
-	LastCIStatus      string        `json:"last_ci_status,omitempty"`
-	LastPolledAt      time.Time     `json:"last_polled_at"`
-	StartedAt         time.Time     `json:"started_at"`
-	Status            MonitorStatus `json:"status"`
+	PRURL             string `json:"pr_url"`
+	PollCount         int    `json:"poll_count"`
+	ResponseRounds    int    `json:"response_rounds"`
+	ReplyRounds       int    `json:"reply_rounds"`
+	MaxResponseRounds int    `json:"max_response_rounds"`
+	LastCommentID     string `json:"last_comment_id,omitempty"`
+	LastCIStatus      string `json:"last_ci_status,omitempty"`
+	// MergePending is reserved for auto-merge orchestration. It will be set
+	// when a merge has been requested but is waiting for CI or review gates.
+	MergePending bool          `json:"merge_pending,omitempty"`
+	LastPolledAt time.Time     `json:"last_polled_at"`
+	StartedAt    time.Time     `json:"started_at"`
+	Status       MonitorStatus `json:"status"`
 }
 
 // PRPoller polls a pull request for changes.
@@ -47,12 +51,43 @@ type PRPoller interface {
 	// PostComment posts a comment to the pull request. Used for canned
 	// acknowledgments and reply summaries.
 	PostComment(ctx context.Context, prURL string, body string) error
+	// MergePR merges the pull request using the specified method
+	// ("merge", "squash", or "rebase"). Returns ErrMergeConflict if the
+	// merge fails due to conflicts, ErrPRAlreadyMerged if the PR was
+	// already merged by someone else (a success condition), or ErrPRClosed
+	// if the PR is closed without merging.
+	MergePR(ctx context.Context, prURL string, method string) error
 }
+
+// MergeValidator is an optional interface that PRPoller implementations may
+// satisfy to allow callers to check merge prerequisites (e.g., branch
+// protection rules) before attempting a merge.
+type MergeValidator interface {
+	// ValidateMergePrerequisites checks whether the PR's target branch has
+	// any protection rules that would prevent merging (e.g.,
+	// dismiss_stale_reviews). Returns nil if merging is allowed.
+	ValidateMergePrerequisites(ctx context.Context, prURL string) error
+}
+
+// ErrMergeConflict is returned by MergePR when the merge fails due to
+// merge conflicts on the target branch.
+var ErrMergeConflict = errors.New("monitor: merge conflict")
+
+// ErrPRClosed is returned by MergePR when the pull request is closed
+// (not merged) and cannot be merged.
+var ErrPRClosed = errors.New("monitor: pull request is closed")
+
+// ErrPRAlreadyMerged is returned by MergePR when the pull request was
+// already merged by someone else. Callers can treat this as a success
+// condition (the desired end state was reached) unlike ErrPRClosed.
+var ErrPRAlreadyMerged = errors.New("monitor: pull request was already merged")
 
 // PRStatus holds the current state of a pull request.
 type PRStatus struct {
-	State    string // "open", "closed", "merged"
-	Approved bool   // true if at least one approving review
+	State          string // "open", "closed", "merged"
+	Approved       bool   // true if at least one approving review
+	ReviewDecision string // raw review decision: "APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED", ""
+	HeadSHA        string // SHA of the PR's head commit (headRefOid)
 }
 
 // PRComment represents a review comment on a pull request.
@@ -67,8 +102,9 @@ type PRComment struct {
 
 // CIStatus holds the aggregate CI status and per-job details.
 type CIStatus struct {
-	Overall string      // "success", "failure", "pending", "unknown"
-	Jobs    []CIJobInfo // individual job details
+	Overall   string      // "success", "failure", "pending", "unknown"
+	Jobs      []CIJobInfo // individual job details
+	CommitSHA string      // SHA of the commit these checks ran against
 }
 
 // CIJobInfo describes a single CI job/check.

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os/exec"
 	"sort"
 	"strings"
@@ -51,6 +52,7 @@ func parsePRRef(prURL string) (owner, repo, number string, err error) {
 type ghPR struct {
 	State          string `json:"state"`          // "OPEN", "CLOSED", "MERGED"
 	ReviewDecision string `json:"reviewDecision"` // "APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED", ""
+	HeadRefOid     string `json:"headRefOid"`     // SHA of the PR head commit
 }
 
 // ghCheck is a single CI check from the PR status.
@@ -103,7 +105,7 @@ func (p *GitHubPRPoller) GetPRStatus(ctx context.Context, prURL string) (*PRStat
 	out, err := exec.CommandContext(ctx, p.command,
 		"pr", "view", number,
 		"--repo", nwoRef,
-		"--json", "state,reviewDecision",
+		"--json", "state,reviewDecision,headRefOid",
 	).Output()
 	if err != nil {
 		return nil, fmt.Errorf("monitor: get PR status: %w: %s", err, ghStderr(err))
@@ -118,8 +120,10 @@ func (p *GitHubPRPoller) GetPRStatus(ctx context.Context, prURL string) (*PRStat
 	approved := strings.EqualFold(pr.ReviewDecision, "APPROVED")
 
 	return &PRStatus{
-		State:    state,
-		Approved: approved,
+		State:          state,
+		Approved:       approved,
+		ReviewDecision: pr.ReviewDecision,
+		HeadSHA:        pr.HeadRefOid,
 	}, nil
 }
 
@@ -213,7 +217,7 @@ func (p *GitHubPRPoller) GetCIStatus(ctx context.Context, prURL string) (*CIStat
 	out, err := exec.CommandContext(ctx, p.command,
 		"pr", "view", number,
 		"--repo", nwoRef,
-		"--json", "statusCheckRollup",
+		"--json", "statusCheckRollup,headRefOid",
 	).Output()
 	if err != nil {
 		return nil, fmt.Errorf("monitor: get CI status: %w: %s", err, ghStderr(err))
@@ -221,13 +225,15 @@ func (p *GitHubPRPoller) GetCIStatus(ctx context.Context, prURL string) (*CIStat
 
 	var pr struct {
 		StatusCheckRollup []ghCheck `json:"statusCheckRollup"`
+		HeadRefOid        string    `json:"headRefOid"`
 	}
 	if err := json.Unmarshal(out, &pr); err != nil {
 		return nil, fmt.Errorf("monitor: parse CI status: %w", err)
 	}
 
 	status := &CIStatus{
-		Overall: "unknown",
+		Overall:   "unknown",
+		CommitSHA: pr.HeadRefOid,
 	}
 
 	if len(pr.StatusCheckRollup) == 0 {
@@ -291,6 +297,116 @@ func (p *GitHubPRPoller) PostComment(ctx context.Context, prURL string, body str
 	if err != nil {
 		return fmt.Errorf("monitor: post comment: %w: %s", err, strings.TrimSpace(string(output)))
 	}
+	return nil
+}
+
+// MergePR merges the pull request using the specified method
+// ("merge", "squash", or "rebase"). Maps gh CLI errors to sentinel errors.
+func (p *GitHubPRPoller) MergePR(ctx context.Context, prURL string, method string) error {
+	owner, repo, number, err := parsePRRef(prURL)
+	if err != nil {
+		return err
+	}
+
+	nwoRef := owner + "/" + repo
+
+	// Default to squash if no method specified.
+	flag := "--squash"
+	switch strings.ToLower(method) {
+	case "merge":
+		flag = "--merge"
+	case "rebase":
+		flag = "--rebase"
+	case "squash", "":
+		flag = "--squash"
+	default:
+		return fmt.Errorf("monitor: unsupported merge method %q", method)
+	}
+
+	cmd := exec.CommandContext(ctx, p.command,
+		"pr", "merge", number,
+		"--repo", nwoRef,
+		flag,
+		"--yes",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		stderr := strings.ToLower(strings.TrimSpace(string(output)))
+		switch {
+		case strings.Contains(stderr, "merge conflict"):
+			return fmt.Errorf("%w: %s", ErrMergeConflict, stderr)
+		case strings.Contains(stderr, "was already merged"):
+			return fmt.Errorf("%w: %s", ErrPRAlreadyMerged, stderr)
+		case strings.Contains(stderr, "closed"),
+			strings.Contains(stderr, "not mergeable"):
+			return fmt.Errorf("%w: %s", ErrPRClosed, stderr)
+		default:
+			return fmt.Errorf("monitor: merge PR: %w: %s", err, stderr)
+		}
+	}
+	return nil
+}
+
+// ValidateMergePrerequisites checks whether the PR's target branch has
+// branch protection rules that might block a merge. It fetches the PR's
+// base branch, then queries branch protection for dismiss_stale_reviews.
+func (p *GitHubPRPoller) ValidateMergePrerequisites(ctx context.Context, prURL string) error {
+	owner, repo, number, err := parsePRRef(prURL)
+	if err != nil {
+		return err
+	}
+
+	nwoRef := owner + "/" + repo
+
+	// Step 1: Get the base branch from the PR.
+	out, err := exec.CommandContext(ctx, p.command,
+		"pr", "view", number,
+		"--repo", nwoRef,
+		"--json", "baseRefName",
+	).Output()
+	if err != nil {
+		return fmt.Errorf("monitor: get PR base branch: %w: %s", err, ghStderr(err))
+	}
+
+	var prInfo struct {
+		BaseRefName string `json:"baseRefName"`
+	}
+	if err := json.Unmarshal(out, &prInfo); err != nil {
+		return fmt.Errorf("monitor: parse PR base branch: %w", err)
+	}
+
+	if prInfo.BaseRefName == "" {
+		return fmt.Errorf("monitor: PR base branch is empty")
+	}
+
+	// Step 2: Fetch branch protection rules for the base branch.
+	// URL-encode the branch name to handle branches with '/' (e.g., "feature/foo").
+	endpoint := fmt.Sprintf("repos/%s/%s/branches/%s/protection", owner, repo, url.PathEscape(prInfo.BaseRefName))
+	protOut, err := exec.CommandContext(ctx, p.command,
+		"api", endpoint,
+	).Output()
+	if err != nil {
+		// 404 means no branch protection rules — merging is allowed.
+		stderr := ghStderr(err)
+		if strings.Contains(stderr, "404") || strings.Contains(strings.ToLower(stderr), "not found") {
+			return nil
+		}
+		return fmt.Errorf("monitor: get branch protection: %w: %s", err, stderr)
+	}
+
+	var protection struct {
+		RequiredPullRequestReviews struct {
+			DismissStaleReviews bool `json:"dismiss_stale_reviews"`
+		} `json:"required_pull_request_reviews"`
+	}
+	if err := json.Unmarshal(protOut, &protection); err != nil {
+		return fmt.Errorf("monitor: parse branch protection: %w", err)
+	}
+
+	if protection.RequiredPullRequestReviews.DismissStaleReviews {
+		return fmt.Errorf("monitor: branch protection requires dismiss_stale_reviews; auto-merge may fail after new pushes")
+	}
+
 	return nil
 }
 
