@@ -14,10 +14,11 @@ import (
 type MonitorStatus string
 
 const (
-	MonitorPolling   MonitorStatus = "polling"
-	MonitorCompleted MonitorStatus = "completed"
-	MonitorFailed    MonitorStatus = "failed"
-	MonitorMaxRounds MonitorStatus = "max_rounds"
+	MonitorPolling        MonitorStatus = "polling"
+	MonitorCompleted      MonitorStatus = "completed"
+	MonitorFailed         MonitorStatus = "failed"
+	MonitorMaxRounds      MonitorStatus = "max_rounds"
+	MonitorRebaseConflict MonitorStatus = "rebase_conflict"
 )
 
 // MonitorState holds the persistent state of the monitor polling loop.
@@ -36,6 +37,16 @@ type MonitorState struct {
 	LastPolledAt time.Time     `json:"last_polled_at"`
 	StartedAt    time.Time     `json:"started_at"`
 	Status       MonitorStatus `json:"status"`
+
+	// ApprovalTime records when the PR was first observed as approved.
+	// Used by auto-merge to compute timeout relative to approval, not poll start.
+	ApprovalTime *time.Time `json:"approval_time,omitempty"`
+	// HasUnreviewedComments is true when new comments arrived after approval.
+	// Auto-merge blocks until comments are resolved.
+	HasUnreviewedComments bool `json:"has_unreviewed_comments,omitempty"`
+	// DryRunLogged tracks whether the dry-run event has been emitted for this
+	// approval cycle, avoiding duplicate events.
+	DryRunLogged bool `json:"dry_run_logged,omitempty"`
 }
 
 // PRPoller polls a pull request for changes.
@@ -84,10 +95,11 @@ var ErrPRAlreadyMerged = errors.New("monitor: pull request was already merged")
 
 // PRStatus holds the current state of a pull request.
 type PRStatus struct {
-	State          string // "open", "closed", "merged"
-	Approved       bool   // true if at least one approving review
-	ReviewDecision string // raw review decision: "APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED", ""
-	HeadSHA        string // SHA of the PR's head commit (headRefOid)
+	State          string   // "open", "closed", "merged"
+	Approved       bool     // true if at least one approving review
+	ReviewDecision string   // raw review decision: "APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED", ""
+	HeadSHA        string   // SHA of the PR's head commit (headRefOid)
+	Labels         []string // labels applied to the PR
 }
 
 // PRComment represents a review comment on a pull request.
