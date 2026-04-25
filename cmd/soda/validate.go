@@ -78,6 +78,9 @@ func runValidate(w io.Writer, errW io.Writer, cfg *config.Config, pipelineName s
 	// Stage 5: Context files
 	validateContextFiles(w, result, cfg)
 
+	// Stage 6: Notify hooks
+	validateNotify(w, result, cfg)
+
 	// Print summary
 	fmt.Fprintln(w)
 	for _, warn := range result.warnings {
@@ -224,4 +227,31 @@ func validateContextFiles(w io.Writer, result *validationResult, cfg *config.Con
 		fmt.Fprintf(w, "✓ context: %d of %d file(s) found (%d missing)\n",
 			len(cfg.Context)-missing, len(cfg.Context), missing)
 	}
+}
+
+// validateNotify checks notify hook configuration for obvious errors.
+func validateNotify(w io.Writer, result *validationResult, cfg *config.Config) {
+	if cfg.Notify.Webhook == nil && cfg.Notify.Script == nil {
+		fmt.Fprintln(w, "✓ notify: no hooks configured")
+		return
+	}
+
+	hooks := 0
+	if cfg.Notify.Webhook != nil {
+		hooks++
+		if cfg.Notify.Webhook.URL == "" {
+			result.addWarning("notify: webhook configured but URL is empty")
+		} else if !strings.HasPrefix(cfg.Notify.Webhook.URL, "http://") && !strings.HasPrefix(cfg.Notify.Webhook.URL, "https://") {
+			result.addWarning("notify: webhook URL %q does not start with http:// or https://", cfg.Notify.Webhook.URL)
+		}
+	}
+
+	if cfg.Notify.Script != nil {
+		hooks++
+		if cfg.Notify.Script.Command == "" {
+			result.addWarning("notify: script configured but command is empty")
+		}
+	}
+
+	fmt.Fprintf(w, "✓ notify: %d hook(s) configured\n", hooks)
 }
