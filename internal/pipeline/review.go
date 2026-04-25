@@ -420,7 +420,7 @@ func (e *Engine) runReviewer(ctx context.Context, phase PhaseConfig, reviewer Re
 			Kind:  EventReviewerFailed,
 			Data:  map[string]any{"reviewer": reviewer.Name, "error": err.Error()},
 		})
-		sendResult(reviewerResult{Name: reviewer.Name, Err: fmt.Errorf("load template %s: %w", reviewer.Prompt, err)})
+		sendResult(reviewerResult{Name: reviewer.Name, Err: &PromptError{Phase: phase.Name, Operation: "load", Err: err}})
 		return
 	}
 
@@ -431,7 +431,7 @@ func (e *Engine) runReviewer(ctx context.Context, phase PhaseConfig, reviewer Re
 			Kind:  EventReviewerFailed,
 			Data:  map[string]any{"reviewer": reviewer.Name, "error": err.Error()},
 		})
-		sendResult(reviewerResult{Name: reviewer.Name, Err: fmt.Errorf("render prompt for %s: %w", reviewer.Name, err)})
+		sendResult(reviewerResult{Name: reviewer.Name, Err: &PromptError{Phase: phase.Name, Operation: "render", Err: err}})
 		return
 	}
 
@@ -549,7 +549,7 @@ func (e *Engine) runReviewerWithRetry(ctx context.Context, phase PhaseConfig, re
 
 		left, tracked := remaining[category]
 		if !tracked || left <= 0 {
-			return nil, fmt.Errorf("reviewer %s failed (%s, no retries left): %w", reviewer.Name, category, err)
+			return nil, &RetriesExhaustedError{Phase: reviewer.Name, Category: category, Attempts: attempt + 1, Err: err}
 		}
 		remaining[category]--
 
