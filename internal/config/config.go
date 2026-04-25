@@ -11,21 +11,31 @@ import (
 
 // Config holds all SODA configuration loaded from a YAML file.
 type Config struct {
-	TicketSource string              `yaml:"ticket_source"`
-	Jira         JiraConfig          `yaml:"jira"`
-	GitHub       GitHubTicketConfig  `yaml:"github"`
-	Mode         string              `yaml:"mode"`
-	Model        string              `yaml:"model"`
-	Sandbox      SandboxConfig       `yaml:"sandbox"`
-	Limits       LimitsConfig        `yaml:"limits"`
-	PhasesPath   string              `yaml:"phases_path"`  // explicit path to pipeline YAML; overrides CWD discovery
-	PromptsPath  string              `yaml:"prompts_path"` // base directory for prompt templates; overrides CWD discovery
-	WorktreeDir  string              `yaml:"worktree_dir"`
-	StateDir     string              `yaml:"state_dir"`
-	Context      []string            `yaml:"context"`
-	PhaseContext map[string][]string `yaml:"phase_context"`
-	Repos        []RepoConfig        `yaml:"repos"`
-	Monitor      MonitorConfig       `yaml:"monitor"`
+	TicketSource  string              `yaml:"ticket_source"`
+	Jira          JiraConfig          `yaml:"jira"`
+	GitHub        GitHubTicketConfig  `yaml:"github"`
+	Mode          string              `yaml:"mode"`
+	Model         string              `yaml:"model"`
+	Sandbox       SandboxConfig       `yaml:"sandbox"`
+	Limits        LimitsConfig        `yaml:"limits"`
+	PhasesPath    string              `yaml:"phases_path"`  // explicit path to pipeline YAML; overrides CWD discovery
+	PromptsPath   string              `yaml:"prompts_path"` // base directory for prompt templates; overrides CWD discovery
+	WorktreeDir   string              `yaml:"worktree_dir"`
+	StateDir      string              `yaml:"state_dir"`
+	Context       []string            `yaml:"context"`
+	PhaseContext  map[string][]string `yaml:"phase_context"`
+	Repos         []RepoConfig        `yaml:"repos"`
+	Monitor       MonitorConfig       `yaml:"monitor"`
+	Notifications NotificationsConfig `yaml:"notifications"`
+}
+
+// NotificationsConfig holds pipeline completion notification settings.
+// Both webhook and script callbacks are optional; if both are configured,
+// both are invoked (best-effort, errors are logged but never propagated).
+type NotificationsConfig struct {
+	WebhookURL string `yaml:"webhook_url"` // HTTP(S) URL to POST a JSON payload on completion
+	Script     string `yaml:"script"`      // path to executable script invoked on completion
+	TimeoutSec int    `yaml:"timeout_sec"` // max seconds for webhook/script; 0 means default (30)
 }
 
 // MonitorConfig holds monitor phase settings loaded from the config file.
