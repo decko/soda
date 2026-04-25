@@ -365,6 +365,18 @@ func runPipeline(cfg *config.Config, opts pipelineOpts) error {
 		maxPipelineDuration = parsed
 	}
 
+	// Build notification config from user settings.
+	var notifyCfg pipeline.NotifyConfig
+	if cfg.Notifications.WebhookURL != "" || cfg.Notifications.Script != "" {
+		notifyCfg = pipeline.NotifyConfig{
+			WebhookURL: cfg.Notifications.WebhookURL,
+			Script:     cfg.Notifications.Script,
+		}
+		if cfg.Notifications.TimeoutSec > 0 {
+			notifyCfg.Timeout = time.Duration(cfg.Notifications.TimeoutSec) * time.Second
+		}
+	}
+
 	engineCfg := pipeline.EngineConfig{
 		Pipeline:               pl,
 		Loader:                 loader,
@@ -391,6 +403,7 @@ func runPipeline(cfg *config.Config, opts pipelineOpts) error {
 		BotUsers:               botUsers,
 		MonitorProfile:         monitorProfile,
 		AuthorityResolver:      authorityResolver,
+		Notify:                 notifyCfg,
 		OnEvent: func(event pipeline.Event) {
 			if event.Kind == pipeline.EventPhaseSkipped || event.Kind == pipeline.EventMonitorSkipped {
 				skippedPhases[event.Phase] = true
