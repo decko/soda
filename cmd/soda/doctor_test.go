@@ -898,6 +898,36 @@ func TestResolveConfigPath_UserHomeDirNotCalled_WhenUserConfigDirSucceeds(t *tes
 	}
 }
 
+// TestResolveConfigPath_NoFalsePositive_WhenUserConfigDirSucceeds verifies
+// that on platforms where UserConfigDir differs from ~/.config (e.g. macOS
+// returns ~/Library/Application Support), doctor does NOT fall through to
+// the UserHomeDir ~/.config path. This would be a false positive: doctor
+// says "config OK" but runtime config.DefaultPath() would look only at
+// the UserConfigDir path and fail to find it.
+func TestResolveConfigPath_NoFalsePositive_WhenUserConfigDirSucceeds(t *testing.T) {
+	env := allPassEnv()
+	// Simulate macOS: UserConfigDir returns ~/Library/Application Support
+	env.UserConfigDir = func() (string, error) {
+		return "/Users/testuser/Library/Application Support", nil
+	}
+	env.UserHomeDir = func() (string, error) {
+		return "/Users/testuser", nil
+	}
+	env.Stat = func(name string) (os.FileInfo, error) {
+		// Config exists at ~/.config/soda/config.yaml but NOT at
+		// ~/Library/Application Support/soda/config.yaml
+		if name == "/Users/testuser/.config/soda/config.yaml" {
+			return mockFileInfo{name: name}, nil
+		}
+		return nil, os.ErrNotExist
+	}
+	loc := resolveConfigPath(env)
+	// Must return nil — the file at ~/.config is not where runtime would look.
+	if loc != nil {
+		t.Errorf("expected nil (no false positive), got %+v", loc)
+	}
+}
+
 // --- extractSemver tests ---
 
 func TestExtractSemver(t *testing.T) {

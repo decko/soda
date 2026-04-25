@@ -398,9 +398,13 @@ func resolveConfigPath(env *doctorEnv) *configLocation {
 		if _, statErr := env.Stat(path); statErr == nil {
 			return &configLocation{path: path, label: "global"}
 		}
+		// UserConfigDir succeeded but file not found — do NOT fall through
+		// to UserHomeDir. This matches config.DefaultPath() which only uses
+		// UserHomeDir when UserConfigDir() itself returns an error.
+		return nil
 	}
 
-	// 3. Fallback: UserHomeDir + ".config".
+	// 3. Fallback: UserHomeDir + ".config" — only reached when UserConfigDir fails.
 	if env.UserHomeDir != nil {
 		home, homeErr := env.UserHomeDir()
 		if homeErr == nil {
