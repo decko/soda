@@ -7,6 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -6270,4 +6273,344 @@ func TestEngine_TokenBudgetCalibrationNotEmittedWhenZeroTokens(t *testing.T) {
 			t.Error("unexpected token_budget_calibration event when TokensIn is zero")
 		}
 	}
+}
+
+func TestEngine_NotificationOnSuccess(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage: automatable",
+					CostUSD: 0.10,
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	var webhookPayload []byte
+	srv := newTestWebhookServer(t, func(body []byte) {
+		webhookPayload = body
+	})
+	defer srv.Close()
+
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.Notify = NotifyConfig{
+			Webhook: &WebhookNotifyConfig{URL: srv.URL},
+		}
+		cfg.OnEvent = func(e Event) {
+			events = append(events, e)
+		}
+	})
+
+	err := engine.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	// Verify webhook was called.
+	if webhookPayload == nil {
+		t.Fatal("expected webhook to be called")
+	}
+
+	var result PipelineResult
+	if err := json.Unmarshal(webhookPayload, &result); err != nil {
+		t.Fatalf("unmarshal webhook payload: %v", err)
+	}
+	if result.Status != "success" {
+		t.Errorf("Status = %q, want %q", result.Status, "success")
+	}
+	if result.Ticket != "TEST-1" {
+		t.Errorf("Ticket = %q, want %q", result.Ticket, "TEST-1")
+	}
+
+	// Verify EventNotifySuccess was emitted.
+	found := false
+	for _, ev := range events {
+		if ev.Kind == EventNotifySuccess {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected EventNotifySuccess event")
+	}
+}
+
+func TestEngine_NotificationOnFailure(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 0, Parse: 0, Semantic: 0},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: nil,
+				err:    fmt.Errorf("API unavailable"),
+			}},
+		},
+	}
+
+	var events []Event
+	var webhookPayload []byte
+	srv := newTestWebhookServer(t, func(body []byte) {
+		webhookPayload = body
+	})
+	defer srv.Close()
+
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.Notify = NotifyConfig{
+			Webhook: &WebhookNotifyConfig{URL: srv.URL},
+		}
+		cfg.OnEvent = func(e Event) {
+			events = append(events, e)
+		}
+	})
+
+	err := engine.Run(context.Background())
+	if err == nil {
+		t.Fatal("expected Run() to return an error")
+	}
+
+	// Verify webhook was called with failure status.
+	if webhookPayload == nil {
+		t.Fatal("expected webhook to be called on failure")
+	}
+
+	var result PipelineResult
+	if err := json.Unmarshal(webhookPayload, &result); err != nil {
+		t.Fatalf("unmarshal webhook payload: %v", err)
+	}
+	if result.Status != "failed" {
+		t.Errorf("Status = %q, want %q", result.Status, "failed")
+	}
+	if result.Error == "" {
+		t.Error("expected Error to be non-empty on failure")
+	}
+
+	// Verify EventNotifySuccess was emitted (notification delivery succeeded).
+	found := false
+	for _, ev := range events {
+		if ev.Kind == EventNotifySuccess {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected EventNotifySuccess event even when pipeline fails")
+	}
+}
+
+func TestEngine_NotificationWebhookError(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage: automatable",
+					CostUSD: 0.10,
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.Notify = NotifyConfig{
+			Webhook: &WebhookNotifyConfig{URL: "http://127.0.0.1:0/nonexistent"},
+		}
+		cfg.OnEvent = func(e Event) {
+			events = append(events, e)
+		}
+	})
+
+	// Pipeline should succeed even when notification fails.
+	err := engine.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error: %v — notification failure should not fail pipeline", err)
+	}
+
+	// Verify EventNotifyFailed was emitted.
+	found := false
+	for _, ev := range events {
+		if ev.Kind == EventNotifyFailed {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected EventNotifyFailed event when webhook is unreachable")
+	}
+}
+
+func TestEngine_NoNotificationWithoutConfig(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage: automatable",
+					CostUSD: 0.10,
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		// Notify is zero-value (no hooks configured).
+		cfg.OnEvent = func(e Event) {
+			events = append(events, e)
+		}
+	})
+
+	err := engine.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	// Verify no notification events were emitted.
+	for _, ev := range events {
+		if ev.Kind == EventNotifySuccess || ev.Kind == EventNotifyFailed {
+			t.Errorf("unexpected notification event %q when no hooks configured", ev.Kind)
+		}
+	}
+}
+
+func TestEngine_NotificationOnResume(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "plan",
+			Prompt:    "plan.md",
+			DependsOn: []string{"triage"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "Triage: automatable",
+					CostUSD: 0.10,
+				},
+			}},
+			"plan": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tasks":["task1"]}`),
+					RawText: "Plan: one task",
+					CostUSD: 0.20,
+				},
+			}},
+		},
+	}
+
+	var webhookPayload []byte
+	srv := newTestWebhookServer(t, func(body []byte) {
+		webhookPayload = body
+	})
+	defer srv.Close()
+
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.Notify = NotifyConfig{
+			Webhook: &WebhookNotifyConfig{URL: srv.URL},
+		}
+	})
+
+	// Run triage first to populate state.
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("initial Run() error: %v", err)
+	}
+
+	// First webhook call is from Run — reset.
+	webhookPayload = nil
+
+	// Create a new engine for resume (simulates a restart).
+	mock2 := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"plan": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tasks":["task1"]}`),
+					RawText: "Plan: one task",
+					CostUSD: 0.20,
+				},
+			}},
+		},
+	}
+
+	engine2, _ := setupEngine(t, phases, mock2, func(cfg *EngineConfig) {
+		cfg.Notify = NotifyConfig{
+			Webhook: &WebhookNotifyConfig{URL: srv.URL},
+		}
+	})
+	// Swap the state to the one with triage already completed.
+	engine2.state = state
+
+	err := engine2.Resume(context.Background(), "plan")
+	if err != nil {
+		t.Fatalf("Resume() error: %v", err)
+	}
+
+	if webhookPayload == nil {
+		t.Fatal("expected webhook to be called on Resume completion")
+	}
+
+	var result PipelineResult
+	if err := json.Unmarshal(webhookPayload, &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if result.Status != "success" {
+		t.Errorf("Status = %q, want %q", result.Status, "success")
+	}
+}
+
+// newTestWebhookServer creates a test HTTP server that calls onBody with the
+// request body for each POST request.
+func newTestWebhookServer(t *testing.T, onBody func([]byte)) *httpTestServer {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		onBody(body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	return &httpTestServer{Server: srv}
+}
+
+type httpTestServer struct {
+	*httptest.Server
 }
