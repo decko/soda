@@ -352,6 +352,152 @@ func TestRunValidate_DocsOnlyPipeline(t *testing.T) {
 	}
 }
 
+// --- Notification validation tests ---
+
+func TestValidateNotifications_NotConfigured(t *testing.T) {
+	cfg := &config.Config{}
+
+	result := &validationResult{}
+	var buf bytes.Buffer
+	validateNotifications(&buf, result, cfg)
+
+	if result.hasErrors() {
+		t.Error("expected no errors for unconfigured notifications")
+	}
+	if !strings.Contains(buf.String(), "not configured") {
+		t.Errorf("expected 'not configured' message, got: %s", buf.String())
+	}
+}
+
+func TestValidateNotifications_ValidWebhookURL(t *testing.T) {
+	cfg := &config.Config{
+		Notifications: config.NotificationsConfig{
+			WebhookURL: "https://hooks.example.com/pipeline",
+		},
+	}
+
+	result := &validationResult{}
+	var buf bytes.Buffer
+	validateNotifications(&buf, result, cfg)
+
+	if result.hasErrors() {
+		t.Errorf("expected no errors, got: %v", result.errors)
+	}
+	if !strings.Contains(buf.String(), "webhook configured") {
+		t.Errorf("expected 'webhook configured' message, got: %s", buf.String())
+	}
+}
+
+func TestValidateNotifications_InvalidWebhookScheme(t *testing.T) {
+	cfg := &config.Config{
+		Notifications: config.NotificationsConfig{
+			WebhookURL: "ftp://hooks.example.com/pipeline",
+		},
+	}
+
+	result := &validationResult{}
+	var buf bytes.Buffer
+	validateNotifications(&buf, result, cfg)
+
+	if !result.hasErrors() {
+		t.Error("expected error for non-HTTP scheme")
+	}
+	if !strings.Contains(result.errors[0], "http or https") {
+		t.Errorf("error should mention http/https, got: %s", result.errors[0])
+	}
+}
+
+func TestValidateNotifications_WebhookNoHost(t *testing.T) {
+	cfg := &config.Config{
+		Notifications: config.NotificationsConfig{
+			WebhookURL: "https://",
+		},
+	}
+
+	result := &validationResult{}
+	var buf bytes.Buffer
+	validateNotifications(&buf, result, cfg)
+
+	if !result.hasErrors() {
+		t.Error("expected error for URL with no host")
+	}
+	if !strings.Contains(result.errors[0], "no host") {
+		t.Errorf("error should mention 'no host', got: %s", result.errors[0])
+	}
+}
+
+func TestValidateNotifications_ScriptExists(t *testing.T) {
+	dir := t.TempDir()
+	scriptPath := filepath.Join(dir, "notify.sh")
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\necho ok\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{
+		Notifications: config.NotificationsConfig{
+			Script: scriptPath,
+		},
+	}
+
+	result := &validationResult{}
+	var buf bytes.Buffer
+	validateNotifications(&buf, result, cfg)
+
+	if result.hasErrors() {
+		t.Errorf("expected no errors, got: %v", result.errors)
+	}
+	if !strings.Contains(buf.String(), "script configured") {
+		t.Errorf("expected 'script configured' message, got: %s", buf.String())
+	}
+}
+
+func TestValidateNotifications_ScriptNotFound(t *testing.T) {
+	cfg := &config.Config{
+		Notifications: config.NotificationsConfig{
+			Script: "/nonexistent/notify.sh",
+		},
+	}
+
+	result := &validationResult{}
+	var buf bytes.Buffer
+	validateNotifications(&buf, result, cfg)
+
+	if !result.hasErrors() {
+		t.Error("expected error for missing script")
+	}
+	if !strings.Contains(result.errors[0], "not found") {
+		t.Errorf("error should mention 'not found', got: %s", result.errors[0])
+	}
+}
+
+func TestValidateNotifications_ScriptNotExecutable(t *testing.T) {
+	dir := t.TempDir()
+	scriptPath := filepath.Join(dir, "notify.sh")
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\necho ok\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{
+		Notifications: config.NotificationsConfig{
+			Script: scriptPath,
+		},
+	}
+
+	result := &validationResult{}
+	var buf bytes.Buffer
+	validateNotifications(&buf, result, cfg)
+
+	if result.hasErrors() {
+		t.Errorf("not-executable should be a warning, not error: %v", result.errors)
+	}
+	if len(result.warnings) == 0 {
+		t.Error("expected warning for non-executable script")
+	}
+	if len(result.warnings) > 0 && !strings.Contains(result.warnings[0], "not executable") {
+		t.Errorf("warning should mention 'not executable', got: %s", result.warnings[0])
+	}
+}
+
 func TestRunValidate_ErrorOutput(t *testing.T) {
 	// Test that errors go to stderr and success markers go to stdout.
 	cfg := &config.Config{
