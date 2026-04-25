@@ -212,7 +212,7 @@ func validateSchemas(w io.Writer, result *validationResult, pl *pipeline.PhasePi
 // HTTP(S) URL.
 func validateNotifications(w io.Writer, result *validationResult, cfg *config.Config) {
 	nc := cfg.Notifications
-	if nc.WebhookURL == "" && nc.Script == "" {
+	if nc.WebhookURL == "" && nc.Script == "" && nc.OnFailureWebhookURL == "" && nc.OnFailureScript == "" {
 		fmt.Fprintln(w, "✓ notifications: not configured")
 		return
 	}
