@@ -1361,7 +1361,33 @@ func convertNotifyConfig(cfg config.NotifyConfig) pipeline.NotifyConfig {
 			Command: cfg.Script.Command,
 		}
 	}
+	if cfg.OnFinish != nil {
+		nc.OnFinish = convertNotifyHookConfig(cfg.OnFinish)
+	}
+	if cfg.OnFailure != nil {
+		nc.OnFailure = convertNotifyHookConfig(cfg.OnFailure)
+	}
 	return nc
+}
+
+// convertNotifyHookConfig converts a config.NotifyHookConfig to a pipeline.NotifyHookConfig.
+func convertNotifyHookConfig(cfg *config.NotifyHookConfig) *pipeline.NotifyHookConfig {
+	if cfg == nil {
+		return nil
+	}
+	var hc pipeline.NotifyHookConfig
+	if cfg.Webhook != nil {
+		hc.Webhook = &pipeline.WebhookNotifyConfig{
+			URL:     cfg.Webhook.URL,
+			Headers: cfg.Webhook.Headers,
+		}
+	}
+	if cfg.Script != nil {
+		hc.Script = &pipeline.ScriptNotifyConfig{
+			Command: cfg.Script.Command,
+		}
+	}
+	return &hc
 }
 
 // resolveLastPhase finds the last running or failed phase in pipeline order.
