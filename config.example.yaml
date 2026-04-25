@@ -142,6 +142,22 @@ monitor:
   # If unset, all commenters are treated as authoritative.
   # codeowners: .github/CODEOWNERS
 
+# Notification hooks — fired on pipeline completion (success or failure).
+# Both webhook and script may be configured; they fire independently.
+# Notifications are best-effort: failures are logged but do not affect
+# the pipeline's exit status.
+notify:
+  # HTTP POST webhook — receives a JSON payload with pipeline results.
+  webhook:
+    url: https://hooks.example.com/soda
+    headers:
+      Authorization: "Bearer your-token"
+
+  # Shell script callback — receives the same JSON payload on stdin.
+  # Useful for desktop notifications, Slack messages, or custom integrations.
+  script:
+    command: "./scripts/on-complete.sh"
+
 # Prompt overrides (optional)
 # Place custom prompts in ~/.config/soda/prompts/<phase>.md
 # They take precedence over built-in prompts.
