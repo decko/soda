@@ -26,6 +26,7 @@ type Config struct {
 	PhaseContext map[string][]string `yaml:"phase_context"`
 	Repos        []RepoConfig        `yaml:"repos"`
 	Monitor      MonitorConfig       `yaml:"monitor"`
+	Notify       NotifyConfig        `yaml:"notify"`
 }
 
 // MonitorConfig holds monitor phase settings loaded from the config file.
@@ -35,6 +36,24 @@ type MonitorConfig struct {
 	SelfUser   string   `yaml:"self_user"`  // PR author username for self-comment filtering
 	BotUsers   []string `yaml:"bot_users"`  // known bot usernames to filter out
 	CODEOWNERS string   `yaml:"codeowners"` // path to CODEOWNERS file for authority resolution
+}
+
+// NotifyConfig holds notification hook settings for pipeline completion.
+// Both webhook and script may be configured; they fire independently.
+type NotifyConfig struct {
+	Webhook *WebhookNotifyConfig `yaml:"webhook,omitempty"` // HTTP POST notification
+	Script  *ScriptNotifyConfig  `yaml:"script,omitempty"`  // shell script callback
+}
+
+// WebhookNotifyConfig configures an HTTP POST webhook fired on pipeline completion.
+type WebhookNotifyConfig struct {
+	URL     string            `yaml:"url"`               // target URL (required)
+	Headers map[string]string `yaml:"headers,omitempty"` // extra HTTP headers (e.g., Authorization)
+}
+
+// ScriptNotifyConfig configures a script callback fired on pipeline completion.
+type ScriptNotifyConfig struct {
+	Command string `yaml:"command"` // shell command to execute; receives JSON on stdin
 }
 
 // JiraConfig holds Jira ticket source settings.

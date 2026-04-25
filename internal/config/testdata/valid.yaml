@@ -68,3 +68,10 @@ monitor:
     - dependabot
     - renovate
   codeowners: .github/CODEOWNERS
+notify:
+  webhook:
+    url: https://hooks.example.com/soda
+    headers:
+      Authorization: "Bearer secret-token"
+  script:
+    command: "./scripts/on-complete.sh"
