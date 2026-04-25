@@ -536,6 +536,218 @@ func TestCheckConfigValid_NoConfigFound(t *testing.T) {
 	}
 }
 
+// --- isGitHubSource tests ---
+
+func TestIsGitHubSource_NilConfig(t *testing.T) {
+	env := &doctorEnv{}
+	if env.isGitHubSource() {
+		t.Error("expected false when ParsedConfig is nil")
+	}
+}
+
+func TestIsGitHubSource_GitHub(t *testing.T) {
+	env := &doctorEnv{ParsedConfig: &config.Config{TicketSource: "github"}}
+	if !env.isGitHubSource() {
+		t.Error("expected true when ticket_source is github")
+	}
+}
+
+func TestIsGitHubSource_Jira(t *testing.T) {
+	env := &doctorEnv{ParsedConfig: &config.Config{TicketSource: "jira"}}
+	if env.isGitHubSource() {
+		t.Error("expected false when ticket_source is jira")
+	}
+}
+
+func TestIsGitHubSource_Empty(t *testing.T) {
+	env := &doctorEnv{ParsedConfig: &config.Config{TicketSource: ""}}
+	if env.isGitHubSource() {
+		t.Error("expected false when ticket_source is empty")
+	}
+}
+
+// --- checkGh context-aware tests ---
+
+func TestCheckGh_RequiredWhenGitHubSource(t *testing.T) {
+	env := allPassEnv()
+	env.ParsedConfig = &config.Config{TicketSource: "github"}
+	env.LookPath = func(file string) (string, error) {
+		if file == "gh" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + file, nil
+	}
+	r := checkGh(env)
+	if r.passed {
+		t.Error("expected gh check to fail")
+	}
+	if !r.required {
+		t.Error("expected gh check to be required when ticket_source is github")
+	}
+	if !strings.Contains(r.detail, "required") {
+		t.Errorf("expected detail to mention required, got: %q", r.detail)
+	}
+}
+
+func TestCheckGh_OptionalWhenJiraSource(t *testing.T) {
+	env := allPassEnv()
+	env.ParsedConfig = &config.Config{TicketSource: "jira"}
+	env.LookPath = func(file string) (string, error) {
+		if file == "gh" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + file, nil
+	}
+	r := checkGh(env)
+	if r.required {
+		t.Error("expected gh check to be optional when ticket_source is jira")
+	}
+	if !strings.Contains(r.detail, "optional") {
+		t.Errorf("expected detail to mention optional, got: %q", r.detail)
+	}
+}
+
+func TestCheckGh_OptionalWhenNoParsedConfig(t *testing.T) {
+	env := allPassEnv()
+	// ParsedConfig is nil by default.
+	env.LookPath = func(file string) (string, error) {
+		if file == "gh" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + file, nil
+	}
+	r := checkGh(env)
+	if r.required {
+		t.Error("expected gh check to be optional when ParsedConfig is nil")
+	}
+}
+
+// --- checkGhAuth context-aware tests ---
+
+func TestCheckGhAuth_RequiredWhenGitHubSource(t *testing.T) {
+	env := allPassEnv()
+	env.ParsedConfig = &config.Config{TicketSource: "github"}
+	env.RunCmd = func(name string, args ...string) (string, error) {
+		if name == "gh" && len(args) > 0 && args[0] == "auth" {
+			return "", errors.New("not logged in")
+		}
+		if name == "claude" && len(args) > 0 && args[0] == "--version" {
+			return fmt.Sprintf("claude %s", claude.MinCLIVersion), nil
+		}
+		if name == "git" {
+			return ".git", nil
+		}
+		return "", nil
+	}
+	r := checkGhAuth(env)
+	if r.passed {
+		t.Error("expected gh-auth check to fail")
+	}
+	if !r.required {
+		t.Error("expected gh-auth check to be required when ticket_source is github")
+	}
+}
+
+func TestCheckGhAuth_OptionalWhenJiraSource(t *testing.T) {
+	env := allPassEnv()
+	env.ParsedConfig = &config.Config{TicketSource: "jira"}
+	env.RunCmd = func(name string, args ...string) (string, error) {
+		if name == "gh" && len(args) > 0 && args[0] == "auth" {
+			return "", errors.New("not logged in")
+		}
+		if name == "claude" && len(args) > 0 && args[0] == "--version" {
+			return fmt.Sprintf("claude %s", claude.MinCLIVersion), nil
+		}
+		if name == "git" {
+			return ".git", nil
+		}
+		return "", nil
+	}
+	r := checkGhAuth(env)
+	if r.required {
+		t.Error("expected gh-auth check to be optional when ticket_source is jira")
+	}
+}
+
+// --- checkConfigValid stores ParsedConfig ---
+
+func TestCheckConfigValid_StoresParsedConfig(t *testing.T) {
+	env := allPassEnv()
+	env.LoadConfig = func(path string) (*config.Config, error) {
+		return &config.Config{TicketSource: "github"}, nil
+	}
+	r := checkConfigValid(env)
+	if !r.passed {
+		t.Fatal("expected config-valid check to pass")
+	}
+	if env.ParsedConfig == nil {
+		t.Fatal("expected ParsedConfig to be populated")
+	}
+	if env.ParsedConfig.TicketSource != "github" {
+		t.Errorf("expected TicketSource=github, got %q", env.ParsedConfig.TicketSource)
+	}
+}
+
+func TestCheckConfigValid_DoesNotStoreParsedConfigOnError(t *testing.T) {
+	env := allPassEnv()
+	env.LoadConfig = func(path string) (*config.Config, error) {
+		return nil, errors.New("invalid YAML")
+	}
+	r := checkConfigValid(env)
+	if r.passed {
+		t.Fatal("expected config-valid check to fail")
+	}
+	if env.ParsedConfig != nil {
+		t.Error("expected ParsedConfig to remain nil on parse error")
+	}
+}
+
+// --- runDoctor integration: gh required with github source ---
+
+func TestRunDoctor_GhRequiredWhenGitHubSource(t *testing.T) {
+	env := allPassEnv()
+	env.LoadConfig = func(path string) (*config.Config, error) {
+		return &config.Config{TicketSource: "github"}, nil
+	}
+	env.LookPath = func(file string) (string, error) {
+		if file == "gh" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + file, nil
+	}
+	var buf bytes.Buffer
+	err := runDoctor(&buf, env)
+	if err == nil {
+		t.Fatal("expected error when gh is missing and ticket_source is github")
+	}
+	out := buf.String()
+	if !strings.Contains(out, "✗ gh:") {
+		t.Errorf("expected ✗ marker for gh, got:\n%s", out)
+	}
+}
+
+func TestRunDoctor_GhOptionalWhenJiraSource(t *testing.T) {
+	env := allPassEnv()
+	env.LoadConfig = func(path string) (*config.Config, error) {
+		return &config.Config{TicketSource: "jira"}, nil
+	}
+	env.LookPath = func(file string) (string, error) {
+		if file == "gh" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + file, nil
+	}
+	var buf bytes.Buffer
+	err := runDoctor(&buf, env)
+	if err != nil {
+		t.Fatalf("expected no error when gh is missing and ticket_source is jira, got: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "⚠ gh:") {
+		t.Errorf("expected ⚠ marker for gh, got:\n%s", out)
+	}
+}
+
 // --- extractSemver tests ---
 
 func TestExtractSemver(t *testing.T) {

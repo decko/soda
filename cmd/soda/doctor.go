@@ -32,6 +32,17 @@ type doctorEnv struct {
 	Stat          func(name string) (os.FileInfo, error)
 	LoadConfig    func(path string) (*config.Config, error)
 	UserConfigDir func() (string, error)
+
+	// ParsedConfig is populated by checkConfigValid on success.
+	// Downstream checks use it to adjust their required status.
+	ParsedConfig *config.Config
+}
+
+// isGitHubSource reports whether the parsed config sets ticket_source to "github".
+// Returns false when ParsedConfig is nil (config missing or unparseable),
+// making gh checks default to optional — a safe fallback.
+func (e *doctorEnv) isGitHubSource() bool {
+	return e.ParsedConfig != nil && e.ParsedConfig.TicketSource == "github"
 }
 
 // defaultDoctorEnv returns a doctorEnv wired to the real OS.
@@ -74,11 +85,11 @@ func runDoctor(w io.Writer, env *doctorEnv) error {
 		checkGitRepo,
 		checkClaude,
 		checkClaudeVersion,
+		checkConfig,
+		checkConfigValid,
 		checkGh,
 		checkGhAuth,
 		checkNode,
-		checkConfig,
-		checkConfigValid,
 	}
 
 	var failed int
@@ -281,27 +292,34 @@ func compareSemver(a, b string) int {
 	return 0
 }
 
-// checkGh verifies that the GitHub CLI is available in PATH (optional).
+// checkGh verifies that the GitHub CLI is available in PATH.
+// Required when ticket_source is "github", optional otherwise.
 func checkGh(env *doctorEnv) checkResult {
+	required := env.isGitHubSource()
 	path, err := env.LookPath("gh")
 	if err != nil {
+		detail := "not found in PATH (optional, needed for GitHub ticket source)"
+		if required {
+			detail = "not found in PATH (required by ticket_source: github)"
+		}
 		return checkResult{
 			name:     "gh",
 			passed:   false,
-			required: false,
-			detail:   "not found in PATH (optional, needed for GitHub ticket source)",
+			required: required,
+			detail:   detail,
 			fix:      "install gh: https://cli.github.com",
 		}
 	}
 	return checkResult{
 		name:     "gh",
 		passed:   true,
-		required: false,
+		required: required,
 		detail:   path,
 	}
 }
 
 // checkGhAuth verifies that the GitHub CLI is authenticated.
+// Required when ticket_source is "github", optional otherwise.
 // Skipped when gh is not installed.
 func checkGhAuth(env *doctorEnv) checkResult {
 	if _, err := env.LookPath("gh"); err != nil {
@@ -311,12 +329,13 @@ func checkGhAuth(env *doctorEnv) checkResult {
 			detail:  "skipped (gh not found)",
 		}
 	}
+	required := env.isGitHubSource()
 	_, err := env.RunCmd("gh", "auth", "status")
 	if err != nil {
 		return checkResult{
 			name:     "gh-auth",
 			passed:   false,
-			required: false,
+			required: required,
 			detail:   "gh is not authenticated",
 			fix:      "run: gh auth login",
 		}
@@ -324,7 +343,7 @@ func checkGhAuth(env *doctorEnv) checkResult {
 	return checkResult{
 		name:     "gh-auth",
 		passed:   true,
-		required: false,
+		required: required,
 		detail:   "authenticated",
 	}
 }
@@ -393,7 +412,8 @@ func checkConfig(env *doctorEnv) checkResult {
 func checkConfigValid(env *doctorEnv) checkResult {
 	// Try local config first.
 	if _, statErr := env.Stat("soda.yaml"); statErr == nil {
-		if _, err := env.LoadConfig("soda.yaml"); err != nil {
+		cfg, err := env.LoadConfig("soda.yaml")
+		if err != nil {
 			return checkResult{
 				name:     "config-valid",
 				passed:   false,
@@ -402,6 +422,7 @@ func checkConfigValid(env *doctorEnv) checkResult {
 				fix:      "fix syntax errors in soda.yaml",
 			}
 		}
+		env.ParsedConfig = cfg
 		return checkResult{
 			name:     "config-valid",
 			passed:   true,
@@ -427,7 +448,8 @@ func checkConfigValid(env *doctorEnv) checkResult {
 			detail:  "skipped (no config file found)",
 		}
 	}
-	if _, err := env.LoadConfig(path); err != nil {
+	cfg, err := env.LoadConfig(path)
+	if err != nil {
 		return checkResult{
 			name:     "config-valid",
 			passed:   false,
@@ -436,6 +458,7 @@ func checkConfigValid(env *doctorEnv) checkResult {
 			fix:      "fix syntax errors in config file",
 		}
 	}
+	env.ParsedConfig = cfg
 	return checkResult{
 		name:     "config-valid",
 		passed:   true,
