@@ -102,13 +102,23 @@ type SandboxLimits struct {
 
 // LimitsConfig holds budget and duration limits.
 type LimitsConfig struct {
-	MaxCostPerTicket       float64 `yaml:"max_cost_per_ticket"`
-	MaxCostPerPhase        float64 `yaml:"max_cost_per_phase"`
-	MaxCostPerGeneration   float64 `yaml:"max_cost_per_generation,omitempty"`   // per-attempt cost cap; 0 means disabled
-	MaxPipelineDuration    string  `yaml:"max_pipeline_duration,omitempty"`     // Go duration string (e.g., "2h", "90m"); 0 or empty means no limit
-	MaxDiffBytes           int     `yaml:"max_diff_bytes,omitempty"`            // max bytes of git diff injected into rework prompts; 0 means use default (50000)
-	MaxAPIConcurrency      int     `yaml:"max_api_concurrency,omitempty"`       // max concurrent API calls (runner.Run); 0 means unlimited
-	MaxSiblingContextBytes int     `yaml:"max_sibling_context_bytes,omitempty"` // max bytes of sibling-function context injected into implement prompts; 0 means use default (20000)
+	MaxCostPerTicket       float64           `yaml:"max_cost_per_ticket"`
+	MaxCostPerPhase        float64           `yaml:"max_cost_per_phase"`
+	MaxCostPerGeneration   float64           `yaml:"max_cost_per_generation,omitempty"`   // per-attempt cost cap; 0 means disabled
+	MaxPipelineDuration    string            `yaml:"max_pipeline_duration,omitempty"`     // Go duration string (e.g., "2h", "90m"); 0 or empty means no limit
+	MaxDiffBytes           int               `yaml:"max_diff_bytes,omitempty"`            // max bytes of git diff injected into rework prompts; 0 means use default (50000)
+	MaxAPIConcurrency      int               `yaml:"max_api_concurrency,omitempty"`       // max concurrent API calls (runner.Run); 0 means unlimited
+	MaxSiblingContextBytes int               `yaml:"max_sibling_context_bytes,omitempty"` // max bytes of sibling-function context injected into implement prompts; 0 means use default (20000)
+	TokenBudget            TokenBudgetConfig `yaml:"token_budget,omitempty"`              // prompt token budget estimation; zero value disables checks
+}
+
+// TokenBudgetConfig configures the prompt-size estimation check that runs
+// before each CLI invocation. When WarnTokens > 0, the engine estimates
+// the rendered prompt's token count (bytes / 3.3) and emits a warning
+// event if the estimate exceeds the threshold. This is a warn-only check;
+// it never blocks execution.
+type TokenBudgetConfig struct {
+	WarnTokens int `yaml:"warn_tokens,omitempty"` // emit warning when estimated prompt tokens exceed this; 0 disables
 }
 
 // RepoConfig holds per-repo configuration.

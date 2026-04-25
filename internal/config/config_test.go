@@ -47,6 +47,9 @@ func TestLoad(t *testing.T) {
 				if cfg.Limits.MaxPipelineDuration != "2h" {
 					t.Errorf("MaxPipelineDuration = %q, want %q", cfg.Limits.MaxPipelineDuration, "2h")
 				}
+				if cfg.Limits.TokenBudget.WarnTokens != 100000 {
+					t.Errorf("TokenBudget.WarnTokens = %d, want 100000", cfg.Limits.TokenBudget.WarnTokens)
+				}
 				if cfg.StateDir != ".soda" {
 					t.Errorf("StateDir = %q, want %q", cfg.StateDir, ".soda")
 				}

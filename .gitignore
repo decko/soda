@@ -21,3 +21,4 @@ config.yaml
 
 # Prompt overrides (use ~/.config/soda/prompts/ instead)
 prompts/
+soda-system-prompt-*.md
