@@ -142,11 +142,9 @@ func TestNotifier_ScriptSuccess(t *testing.T) {
 	outDir := t.TempDir()
 	outFile := filepath.Join(outDir, "notify.json")
 
-	// Script reads stdin and writes it to a file
-	cmd := "cat > " + outFile
-
+	// Script reads stdin and writes it to a file (tee works without shell)
 	n := NewNotifier(NotifyConfig{
-		Script: &ScriptNotifyConfig{Command: cmd},
+		Script: &ScriptNotifyConfig{Command: "tee " + outFile},
 	})
 
 	result := PipelineResult{
@@ -179,7 +177,7 @@ func TestNotifier_ScriptFailure(t *testing.T) {
 	}
 
 	n := NewNotifier(NotifyConfig{
-		Script: &ScriptNotifyConfig{Command: "exit 1"},
+		Script: &ScriptNotifyConfig{Command: "false"},
 	})
 
 	err := n.Notify(context.Background(), PipelineResult{Ticket: "X-1", Status: "failed"})
@@ -208,7 +206,7 @@ func TestNotifier_BothWebhookAndScript(t *testing.T) {
 
 	n := NewNotifier(NotifyConfig{
 		Webhook: &WebhookNotifyConfig{URL: srv.URL},
-		Script:  &ScriptNotifyConfig{Command: "cat > " + outFile},
+		Script:  &ScriptNotifyConfig{Command: "tee " + outFile},
 	})
 
 	err := n.Notify(context.Background(), PipelineResult{Ticket: "BOTH-1", Status: "success"})

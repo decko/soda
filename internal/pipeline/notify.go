@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -134,16 +135,24 @@ func (n *Notifier) sendWebhook(ctx context.Context, payload []byte) error {
 }
 
 // runScript executes the configured command with the JSON payload on stdin.
+// The command is split into binary + args and executed directly without a shell.
 func (n *Notifier) runScript(ctx context.Context, payload []byte) error {
 	ctx, cancel := context.WithTimeout(ctx, n.timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "sh", "-c", n.config.Script.Command)
+	parts := strings.Fields(n.config.Script.Command)
+	if len(parts) == 0 {
+		return fmt.Errorf("script command is empty")
+	}
+
+	cmd := exec.CommandContext(ctx, parts[0], parts[1:]...)
 	cmd.Stdin = bytes.NewReader(payload)
 
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("execute %q: %w (output: %s)", n.config.Script.Command, err, bytes.TrimSpace(output))
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("execute %q: %w (stderr: %s)", n.config.Script.Command, err, bytes.TrimSpace(stderr.Bytes()))
 	}
 	return nil
 }
