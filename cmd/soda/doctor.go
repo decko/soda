@@ -32,6 +32,7 @@ type doctorEnv struct {
 	Stat          func(name string) (os.FileInfo, error)
 	LoadConfig    func(path string) (*config.Config, error)
 	UserConfigDir func() (string, error)
+	UserHomeDir   func() (string, error)
 
 	// ParsedConfig is populated by checkConfigValid on success.
 	// Downstream checks use it to adjust their required status.
@@ -56,6 +57,7 @@ func defaultDoctorEnv() *doctorEnv {
 		Stat:          os.Stat,
 		LoadConfig:    config.Load,
 		UserConfigDir: os.UserConfigDir,
+		UserHomeDir:   os.UserHomeDir,
 	}
 }
 

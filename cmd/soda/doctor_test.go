@@ -50,6 +50,9 @@ func allPassEnv() *doctorEnv {
 		UserConfigDir: func() (string, error) {
 			return "/home/testuser/.config", nil
 		},
+		UserHomeDir: func() (string, error) {
+			return "/home/testuser", nil
+		},
 	}
 }
 
