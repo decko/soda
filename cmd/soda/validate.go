@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -231,7 +232,8 @@ func validateContextFiles(w io.Writer, result *validationResult, cfg *config.Con
 
 // validateNotify checks notify hook configuration for obvious errors.
 func validateNotify(w io.Writer, result *validationResult, cfg *config.Config) {
-	if cfg.Notify.Webhook == nil && cfg.Notify.Script == nil {
+	if cfg.Notify.Webhook == nil && cfg.Notify.Script == nil &&
+		cfg.Notify.OnFinish == nil && cfg.Notify.OnFailure == nil {
 		fmt.Fprintln(w, "✓ notify: no hooks configured")
 		return
 	}
@@ -239,19 +241,56 @@ func validateNotify(w io.Writer, result *validationResult, cfg *config.Config) {
 	hooks := 0
 	if cfg.Notify.Webhook != nil {
 		hooks++
-		if cfg.Notify.Webhook.URL == "" {
-			result.addWarning("notify: webhook configured but URL is empty")
-		} else if !strings.HasPrefix(cfg.Notify.Webhook.URL, "http://") && !strings.HasPrefix(cfg.Notify.Webhook.URL, "https://") {
-			result.addWarning("notify: webhook URL %q does not start with http:// or https://", cfg.Notify.Webhook.URL)
-		}
+		validateNotifyWebhook(result, "notify", cfg.Notify.Webhook)
 	}
 
 	if cfg.Notify.Script != nil {
 		hooks++
-		if cfg.Notify.Script.Command == "" {
-			result.addWarning("notify: script configured but command is empty")
+		validateNotifyScript(result, "notify", cfg.Notify.Script)
+	}
+
+	if cfg.Notify.OnFinish != nil {
+		hooks++
+		if cfg.Notify.OnFinish.Webhook != nil {
+			validateNotifyWebhook(result, "notify.on_finish", cfg.Notify.OnFinish.Webhook)
+		}
+		if cfg.Notify.OnFinish.Script != nil {
+			validateNotifyScript(result, "notify.on_finish", cfg.Notify.OnFinish.Script)
+		}
+	}
+
+	if cfg.Notify.OnFailure != nil {
+		hooks++
+		if cfg.Notify.OnFailure.Webhook != nil {
+			validateNotifyWebhook(result, "notify.on_failure", cfg.Notify.OnFailure.Webhook)
+		}
+		if cfg.Notify.OnFailure.Script != nil {
+			validateNotifyScript(result, "notify.on_failure", cfg.Notify.OnFailure.Script)
 		}
 	}
 
 	fmt.Fprintf(w, "✓ notify: %d hook(s) configured\n", hooks)
+}
+
+// validateNotifyWebhook checks a webhook config for obvious errors.
+func validateNotifyWebhook(result *validationResult, prefix string, wh *config.WebhookNotifyConfig) {
+	if wh.URL == "" {
+		result.addWarning("%s: webhook configured but URL is empty", prefix)
+	} else if !strings.HasPrefix(wh.URL, "http://") && !strings.HasPrefix(wh.URL, "https://") {
+		result.addWarning("%s: webhook URL %q does not start with http:// or https://", prefix, wh.URL)
+	}
+}
+
+// validateNotifyScript checks a script config for obvious errors, including
+// whether the binary exists on disk.
+func validateNotifyScript(result *validationResult, prefix string, sc *config.ScriptNotifyConfig) {
+	if sc.Command == "" {
+		result.addWarning("%s: script configured but command is empty", prefix)
+		return
+	}
+	parts := strings.Fields(sc.Command)
+	binary := parts[0]
+	if _, err := exec.LookPath(binary); err != nil {
+		result.addWarning("%s: script binary %q not found in PATH: %v", prefix, binary, err)
+	}
 }
