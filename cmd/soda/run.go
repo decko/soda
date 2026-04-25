@@ -385,12 +385,16 @@ func runPipeline(cfg *config.Config, opts pipelineOpts) error {
 		MaxDiffBytes:           cfg.Limits.MaxDiffBytes,
 		MaxAPIConcurrency:      cfg.Limits.MaxAPIConcurrency,
 		MaxSiblingContextBytes: cfg.Limits.MaxSiblingContextBytes,
-		Mode:                   mode,
-		PRPoller:               prPoller,
-		SelfUser:               selfUser,
-		BotUsers:               botUsers,
-		MonitorProfile:         monitorProfile,
-		AuthorityResolver:      authorityResolver,
+		TokenBudget: pipeline.TokenBudgetConfig{
+			WarnTokens:    cfg.Limits.TokenBudget.WarnTokens,
+			BytesPerToken: cfg.Limits.TokenBudget.BytesPerToken,
+		},
+		Mode:              mode,
+		PRPoller:          prPoller,
+		SelfUser:          selfUser,
+		BotUsers:          botUsers,
+		MonitorProfile:    monitorProfile,
+		AuthorityResolver: authorityResolver,
 		OnEvent: func(event pipeline.Event) {
 			if event.Kind == pipeline.EventPhaseSkipped || event.Kind == pipeline.EventMonitorSkipped {
 				skippedPhases[event.Phase] = true
@@ -819,6 +823,21 @@ func handleEvent(ctx context.Context, cancel context.CancelFunc, engine *pipelin
 			phase = p
 		}
 		prog.Message(fmt.Sprintf("  ⏹  Pipeline timeout after %s (during %s)", limit, phase))
+
+	case pipeline.EventTokenBudgetWarning:
+		var estimated int64
+		if e, ok := event.Data["estimated_tokens"].(int64); ok {
+			estimated = e
+		} else if ef, ok := event.Data["estimated_tokens"].(float64); ok {
+			estimated = int64(ef)
+		}
+		var warnLimit int
+		if w, ok := event.Data["warn_limit"].(int); ok {
+			warnLimit = w
+		} else if wf, ok := event.Data["warn_limit"].(float64); ok {
+			warnLimit = int(wf)
+		}
+		prog.Message(fmt.Sprintf("  ⚠️  Prompt size warning: ~%d tokens estimated (limit: %d)", estimated, warnLimit))
 
 	case pipeline.EventBinaryVersionMismatch:
 		var stored string

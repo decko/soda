@@ -89,6 +89,8 @@ const (
 	EventBinaryVersionMismatch    = "binary_version_mismatch"
 	EventAPISemaphoreWait         = "api_semaphore_wait"
 	EventImplementNoChanges       = "implement_no_changes"
+	EventTokenBudgetWarning       = "token_budget_warning"
+	EventTokenBudgetCalibration   = "token_budget_calibration"
 )
 
 // FormatEvent formats an event as a compact, human-readable line:

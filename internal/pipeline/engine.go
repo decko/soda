@@ -64,6 +64,14 @@ type EngineConfig struct {
 	SelfUser               string            // PR author username for self-comment filtering
 	BotUsers               []string          // known bot usernames to filter
 	Stderr                 io.Writer         // destination for warning messages; defaults to os.Stderr
+	TokenBudget            TokenBudgetConfig // prompt token budget estimation; zero value disables checks
+}
+
+// TokenBudgetConfig configures the prompt-size estimation check.
+// Mirrors config.TokenBudgetConfig — kept separate to avoid cross-package imports.
+type TokenBudgetConfig struct {
+	WarnTokens    int     // emit warning when estimated prompt tokens exceed this; 0 disables
+	BytesPerToken float64 // bytes-per-token ratio for estimation; 0 defaults to 3.3
 }
 
 // maxReworkCycles returns the configured max rework cycles, defaulting to DefaultMaxReworkCycles.
@@ -666,6 +674,27 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 	promptDigest := sha256.Sum256([]byte(rendered))
 	e.state.Meta().Phases[phase.Name].PromptHash = fmt.Sprintf("%x", promptDigest)
 
+	// Token budget estimation: estimate prompt tokens from rendered byte
+	// length (bytes / ratio) and warn if above the configured threshold.
+	// This is a warn-only check — it never blocks execution.
+	bytesPerToken := e.config.TokenBudget.BytesPerToken
+	if bytesPerToken <= 0 {
+		bytesPerToken = 3.3
+	}
+	estimatedTokens := int64(float64(len(rendered)) / bytesPerToken)
+	e.state.Meta().Phases[phase.Name].EstimatedPromptTokens = estimatedTokens
+	if warnLimit := e.config.TokenBudget.WarnTokens; warnLimit > 0 && estimatedTokens > int64(warnLimit) {
+		e.emit(Event{
+			Phase: phase.Name,
+			Kind:  EventTokenBudgetWarning,
+			Data: map[string]any{
+				"estimated_tokens": estimatedTokens,
+				"warn_limit":       warnLimit,
+				"prompt_bytes":     len(rendered),
+			},
+		})
+	}
+
 	_ = e.state.WriteLog(phase.Name, "prompt", []byte(rendered))
 
 	// Build runner opts. Tighten budget to the smallest remaining limit.
@@ -731,6 +760,23 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 	}
 	if err := e.state.AccumulateTokens(phase.Name, result.TokensIn, result.TokensOut, result.CacheTokensIn); err != nil {
 		return fmt.Errorf("engine: accumulate tokens for %s: %w", phase.Name, err)
+	}
+
+	// Token budget calibration: after the LLM returns actual token counts,
+	// emit a calibration event pairing the prompt byte length with the real
+	// tokens_in so operators can tune the bytes-per-token ratio (default 3.3).
+	if ps := e.state.Meta().Phases[phase.Name]; ps != nil && ps.TokensIn > 0 {
+		actualRatio := float64(len(rendered)) / float64(ps.TokensIn)
+		e.emit(Event{
+			Phase: phase.Name,
+			Kind:  EventTokenBudgetCalibration,
+			Data: map[string]any{
+				"prompt_bytes":     len(rendered),
+				"estimated_tokens": estimatedTokens,
+				"actual_tokens_in": ps.TokensIn,
+				"bytes_per_token":  math.Round(actualRatio*100) / 100,
+			},
+		})
 	}
 
 	// Per-phase cost enforcement: abort if this phase exceeded its budget.
