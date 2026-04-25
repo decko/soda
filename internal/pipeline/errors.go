@@ -1,9 +1,12 @@
 package pipeline
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/decko/soda/internal/runner"
 )
 
 // BudgetExceededError is returned when accumulated cost exceeds the configured limit.
@@ -76,6 +79,104 @@ type PhaseGateError struct {
 
 func (e *PhaseGateError) Error() string {
 	return fmt.Sprintf("pipeline: phase %s gated: %s", e.Phase, e.Reason)
+}
+
+// PhaseNotFoundError is returned when Resume is called with a phase name
+// that does not exist in the pipeline configuration.
+type PhaseNotFoundError struct {
+	Phase    string
+	Pipeline []string // names of available phases for diagnostics
+}
+
+func (e *PhaseNotFoundError) Error() string {
+	return fmt.Sprintf("engine: phase %q not found in pipeline (available: %s)",
+		e.Phase, strings.Join(e.Pipeline, ", "))
+}
+
+// RetriesExhaustedError is returned when a phase fails after exhausting all
+// retries for a given error category. It wraps the last error encountered
+// so callers can inspect the root cause.
+type RetriesExhaustedError struct {
+	Phase    string // pipeline phase name (e.g. "review")
+	Reviewer string // reviewer name when error originates from a parallel-review reviewer; empty for regular phases
+	Category string // "transient", "parse", "semantic", "unknown"
+	Attempts int    // total attempts (initial + retries)
+	Err      error  // last error encountered
+}
+
+func (e *RetriesExhaustedError) Error() string {
+	if e.Reviewer != "" {
+		return fmt.Sprintf("engine: phase %s (reviewer %s) failed after %d attempts (%s): %s",
+			e.Phase, e.Reviewer, e.Attempts, e.Category, e.Err)
+	}
+	return fmt.Sprintf("engine: phase %s failed after %d attempts (%s): %s",
+		e.Phase, e.Attempts, e.Category, e.Err)
+}
+
+func (e *RetriesExhaustedError) Unwrap() error { return e.Err }
+
+// WorktreeError is returned when worktree creation fails. It wraps the
+// underlying git error so callers can inspect the root cause.
+type WorktreeError struct {
+	Branch string
+	Path   string // attempted worktree path; may be empty on early failures
+	Err    error
+}
+
+func (e *WorktreeError) Error() string {
+	if e.Path != "" {
+		return fmt.Sprintf("engine: create worktree for branch %s at %s: %s",
+			e.Branch, e.Path, e.Err)
+	}
+	return fmt.Sprintf("engine: create worktree for branch %s: %s",
+		e.Branch, e.Err)
+}
+
+func (e *WorktreeError) Unwrap() error { return e.Err }
+
+// PromptError is returned when a phase prompt cannot be loaded or rendered.
+// It wraps the underlying error and records the phase and operation for
+// diagnostics. When the error originates from a parallel-review reviewer,
+// Reviewer is set to identify which reviewer's prompt failed.
+type PromptError struct {
+	Phase     string
+	Reviewer  string // reviewer name when error originates from a parallel-review reviewer; empty for regular phases
+	Operation string // "load" or "render"
+	Err       error
+}
+
+func (e *PromptError) Error() string {
+	if e.Reviewer != "" {
+		return fmt.Sprintf("engine: prompt %s for phase %s (reviewer %s): %s",
+			e.Operation, e.Phase, e.Reviewer, e.Err)
+	}
+	return fmt.Sprintf("engine: prompt %s for phase %s: %s",
+		e.Operation, e.Phase, e.Err)
+}
+
+func (e *PromptError) Unwrap() error { return e.Err }
+
+// transientSuggestionCatalog maps runner.TransientError.Reason values to
+// user-facing suggestions that help operators remediate common failures.
+var transientSuggestionCatalog = map[string]string{
+	"oom":        "Reduce context size or increase memory limits.",
+	"signal":     "Process was killed by a signal. Check system resource limits (ulimits) and OOM killer logs.",
+	"rate_limit": "API rate limit hit. Increase retry delays, reduce concurrency (max_api_concurrency), or check provider quota.",
+	"timeout":    "Request timed out. Increase phase timeout or reduce prompt size.",
+	"overloaded": "API is overloaded. Retry later or switch to a less loaded model/region.",
+	"connection": "Network connection failed. Check connectivity, DNS resolution, and firewall rules.",
+	"unknown":    "Unexpected transient failure. Check runner logs for details.",
+}
+
+// transientSuggestion returns a user-facing suggestion for the given error
+// by unwrapping it to find a runner.TransientError and looking up its Reason
+// in the suggestion catalog. Returns empty string if no suggestion applies.
+func transientSuggestion(err error) string {
+	var te *runner.TransientError
+	if !errors.As(err, &te) {
+		return ""
+	}
+	return transientSuggestionCatalog[te.Reason]
 }
 
 // reworkFinding is a minimal finding type used by reworkSignal for error

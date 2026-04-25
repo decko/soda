@@ -251,7 +251,7 @@ func (e *Engine) ensureWorktree(ctx context.Context) error {
 
 	wtPath, err := git.CreateWorktree(ctx, e.config.WorkDir, e.config.WorktreeBase, branch, baseBranch)
 	if err != nil {
-		return fmt.Errorf("engine: create worktree: %w", err)
+		return &WorktreeError{Branch: branch, Err: err}
 	}
 
 	e.state.Meta().Worktree = wtPath
@@ -345,7 +345,11 @@ func (e *Engine) Resume(ctx context.Context, fromPhase string) error {
 		}
 	}
 	if startIdx < 0 {
-		return fmt.Errorf("engine: phase %q not found in pipeline", fromPhase)
+		names := make([]string, len(e.config.Pipeline.Phases))
+		for i, p := range e.config.Pipeline.Phases {
+			names[i] = p.Name
+		}
+		return &PhaseNotFoundError{Phase: fromPhase, Pipeline: names}
 	}
 
 	if err := e.state.AcquireLock(); err != nil {
@@ -642,9 +646,10 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 
 	loadResult, err := e.config.Loader.LoadWithSource(phase.Prompt)
 	if err != nil {
-		_ = e.state.MarkFailed(phase.Name, err)
-		e.emitPhaseFailed(phase.Name, err)
-		return fmt.Errorf("engine: load template for %s: %w", phase.Name, err)
+		promptErr := &PromptError{Phase: phase.Name, Operation: "load", Err: err}
+		_ = e.state.MarkFailed(phase.Name, promptErr)
+		e.emitPhaseFailed(phase.Name, promptErr)
+		return promptErr
 	}
 
 	// Emit source info so operators can see which template was used.
@@ -664,9 +669,10 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 
 	rendered, err := RenderPrompt(loadResult.Content, promptData)
 	if err != nil {
-		_ = e.state.MarkFailed(phase.Name, err)
-		e.emitPhaseFailed(phase.Name, err)
-		return fmt.Errorf("engine: render prompt for %s: %w", phase.Name, err)
+		promptErr := &PromptError{Phase: phase.Name, Operation: "render", Err: err}
+		_ = e.state.MarkFailed(phase.Name, promptErr)
+		e.emitPhaseFailed(phase.Name, promptErr)
+		return promptErr
 	}
 
 	// Persist prompt content hash for traceability so operators can verify
@@ -843,7 +849,12 @@ func (e *Engine) runWithRetry(ctx context.Context, phase PhaseConfig, opts runne
 
 		left, tracked := remaining[category]
 		if !tracked || left <= 0 {
-			return nil, fmt.Errorf("engine: phase %s failed (%s, no retries left): %w", phase.Name, category, err)
+			return nil, &RetriesExhaustedError{
+				Phase:    phase.Name,
+				Category: category,
+				Attempts: attempt + 1,
+				Err:      err,
+			}
 		}
 		remaining[category]--
 
@@ -851,10 +862,14 @@ func (e *Engine) runWithRetry(ctx context.Context, phase PhaseConfig, opts runne
 		case "transient":
 			delay := backoff(attempt, e.config.JitterFunc)
 			e.config.SleepFunc(delay)
+			retryData := map[string]any{"category": category, "attempt": attempt + 1, "delay": delay.String()}
+			if suggestion := transientSuggestion(err); suggestion != "" {
+				retryData["suggestion"] = suggestion
+			}
 			e.emit(Event{
 				Phase: phase.Name,
 				Kind:  EventPhaseRetrying,
-				Data:  map[string]any{"category": category, "attempt": attempt + 1, "delay": delay.String()},
+				Data:  retryData,
 			})
 
 		case "parse":
@@ -1279,12 +1294,60 @@ func (e *Engine) lastRunningPhase() string {
 // emitPhaseFailed emits a phase_failed event with error, duration, and cost
 // data from the phase state. Must be called after MarkFailed so the phase
 // state contains the final duration and cost values.
+//
+// When the error is a structured error type, its machine-readable fields are
+// propagated into the event Data map so consumers of events.jsonl can inspect
+// failure metadata without parsing the error string.
 func (e *Engine) emitPhaseFailed(phase string, phaseErr error) {
 	data := map[string]any{"error": phaseErr.Error()}
 	if ps := e.state.Meta().Phases[phase]; ps != nil {
 		data["duration_ms"] = ps.DurationMs
 		data["cost"] = ps.Cost
 	}
+
+	// Enrich with structured error metadata when available.
+	var re *RetriesExhaustedError
+	var pe *PromptError
+	var be *BudgetExceededError
+	var pbe *PhaseBudgetExceededError
+	var gbe *GenerationBudgetExceededError
+	var dne *DependencyNotMetError
+
+	switch {
+	case errors.As(phaseErr, &re):
+		data["error_type"] = "retries_exhausted"
+		data["category"] = re.Category
+		data["attempts"] = re.Attempts
+		if re.Reviewer != "" {
+			data["reviewer"] = re.Reviewer
+		}
+		// Enrich with suggestion from the transient error catalog if available.
+		if suggestion := transientSuggestion(re.Err); suggestion != "" {
+			data["suggestion"] = suggestion
+		}
+	case errors.As(phaseErr, &pe):
+		data["error_type"] = "prompt_error"
+		data["operation"] = pe.Operation
+		if pe.Reviewer != "" {
+			data["reviewer"] = pe.Reviewer
+		}
+	case errors.As(phaseErr, &be):
+		data["error_type"] = "budget_exceeded"
+		data["limit"] = be.Limit
+		data["actual"] = be.Actual
+	case errors.As(phaseErr, &pbe):
+		data["error_type"] = "phase_budget_exceeded"
+		data["limit"] = pbe.Limit
+		data["actual"] = pbe.Actual
+	case errors.As(phaseErr, &gbe):
+		data["error_type"] = "generation_budget_exceeded"
+		data["limit"] = gbe.Limit
+		data["actual"] = gbe.Actual
+	case errors.As(phaseErr, &dne):
+		data["error_type"] = "dependency_not_met"
+		data["dependency"] = dne.Dependency
+	}
+
 	e.emit(Event{Phase: phase, Kind: EventPhaseFailed, Data: data})
 }
 

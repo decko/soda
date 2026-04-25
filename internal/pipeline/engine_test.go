@@ -532,6 +532,69 @@ func TestEngine_TransientRetryWithBackoff(t *testing.T) {
 	}
 }
 
+func TestEngine_TransientRetrySuggestionInEvent(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 0, Semantic: 0},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {
+				{err: &runner.TransientError{Reason: "rate_limit", Err: fmt.Errorf("429 too many requests")}},
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":true}`),
+					RawText: "success",
+					CostUSD: 0.05,
+				}},
+			},
+		},
+	}
+
+	var captured []Event
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(e Event) { captured = append(captured, e) }
+		cfg.SleepFunc = func(time.Duration) {} // no-op
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Find the phase_retrying event.
+	var retryEvent *Event
+	for i := range captured {
+		if captured[i].Kind == EventPhaseRetrying {
+			retryEvent = &captured[i]
+			break
+		}
+	}
+	if retryEvent == nil {
+		t.Fatal("no phase_retrying event found")
+	}
+
+	// Verify suggestion is in the event data.
+	suggestion, ok := retryEvent.Data["suggestion"].(string)
+	if !ok || suggestion == "" {
+		t.Error("phase_retrying event should contain a non-empty suggestion for rate_limit errors")
+	}
+	if !strings.Contains(suggestion, "rate limit") {
+		t.Errorf("suggestion should mention rate limit, got: %q", suggestion)
+	}
+
+	// Verify suggestion is NOT in the retry prompt text.
+	if len(mock.calls) < 2 {
+		t.Fatalf("expected at least 2 calls, got %d", len(mock.calls))
+	}
+	retryPrompt := mock.calls[1].UserPrompt
+	if strings.Contains(retryPrompt, suggestion) {
+		t.Errorf("suggestion should NOT be in retry prompt text, got: %q", retryPrompt)
+	}
+}
+
 func TestEngine_ParseRetryAppendsError(t *testing.T) {
 	phases := []PhaseConfig{
 		{
@@ -608,6 +671,21 @@ func TestEngine_MaxRetriesExhausted(t *testing.T) {
 	err := engine.Run(context.Background())
 	if err == nil {
 		t.Fatal("expected error after max retries exhausted")
+	}
+
+	// Assert structured error type.
+	var retriesErr *RetriesExhaustedError
+	if !errors.As(err, &retriesErr) {
+		t.Fatalf("expected RetriesExhaustedError, got: %T: %v", err, err)
+	}
+	if retriesErr.Phase != "triage" {
+		t.Errorf("Phase = %q, want %q", retriesErr.Phase, "triage")
+	}
+	if retriesErr.Category != "transient" {
+		t.Errorf("Category = %q, want %q", retriesErr.Category, "transient")
+	}
+	if retriesErr.Attempts != 3 {
+		t.Errorf("Attempts = %d, want 3", retriesErr.Attempts)
 	}
 
 	// Phase should be marked failed.
@@ -916,6 +994,44 @@ func TestEngine_Resume(t *testing.T) {
 		if call.Phase == "triage" {
 			t.Error("triage should not have been called on Resume from plan")
 		}
+	}
+}
+
+func TestEngine_ResumeInvalidPhase(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "plan",
+			Prompt:    "plan.md",
+			DependsOn: []string{"triage"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{}
+	engine, _ := setupEngine(t, phases, mock)
+
+	err := engine.Resume(context.Background(), "nonexistent")
+	if err == nil {
+		t.Fatal("expected error for invalid phase")
+	}
+
+	var target *PhaseNotFoundError
+	if !errors.As(err, &target) {
+		t.Fatalf("expected PhaseNotFoundError, got: %T: %v", err, err)
+	}
+	if target.Phase != "nonexistent" {
+		t.Errorf("Phase = %q, want %q", target.Phase, "nonexistent")
+	}
+	if len(target.Pipeline) != 2 {
+		t.Errorf("Pipeline length = %d, want 2", len(target.Pipeline))
+	}
+	if target.Pipeline[0] != "triage" || target.Pipeline[1] != "plan" {
+		t.Errorf("Pipeline = %v, want [triage plan]", target.Pipeline)
 	}
 }
 
