@@ -36,7 +36,7 @@ type NotifyConfig struct {
 
 // defaultNotifyTimeout is the default timeout for notification webhook and
 // script callbacks when no explicit timeout is configured.
-const defaultNotifyTimeout = 30 * time.Second
+const defaultNotifyTimeout = 10 * time.Second
 
 // notifyTimeout returns the configured timeout, falling back to the default.
 func (c *NotifyConfig) notifyTimeout() time.Duration {
