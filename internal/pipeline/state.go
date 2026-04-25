@@ -136,6 +136,7 @@ func (s *State) MarkRunning(phase string) error {
 	ps.TokensIn = 0
 	ps.TokensOut = 0
 	ps.CacheTokensIn = 0
+	ps.EstimatedPromptTokens = 0
 	ps.Error = ""
 	ps.PlanHash = ""
 	ps.PromptHash = ""

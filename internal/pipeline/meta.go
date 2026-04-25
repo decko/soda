@@ -23,18 +23,19 @@ const (
 
 // PhaseState holds the status and metrics for a single phase.
 type PhaseState struct {
-	Status         PhaseStatus `json:"status"`
-	Cost           float64     `json:"cost,omitempty"`
-	CumulativeCost float64     `json:"cumulative_cost,omitempty"`
-	DurationMs     int64       `json:"duration_ms,omitempty"`
-	TokensIn       int64       `json:"tokens_in,omitempty"`
-	TokensOut      int64       `json:"tokens_out,omitempty"`
-	CacheTokensIn  int64       `json:"cache_tokens_in,omitempty"`
-	Error          string      `json:"error,omitempty"`
-	Generation     int         `json:"generation,omitempty"`
-	PlanHash       string      `json:"plan_hash,omitempty"`
-	PromptHash     string      `json:"prompt_hash,omitempty"` // SHA-256 hex digest of the rendered prompt sent to the LLM
-	startedAt      time.Time
+	Status                PhaseStatus `json:"status"`
+	Cost                  float64     `json:"cost,omitempty"`
+	CumulativeCost        float64     `json:"cumulative_cost,omitempty"`
+	DurationMs            int64       `json:"duration_ms,omitempty"`
+	TokensIn              int64       `json:"tokens_in,omitempty"`
+	TokensOut             int64       `json:"tokens_out,omitempty"`
+	CacheTokensIn         int64       `json:"cache_tokens_in,omitempty"`
+	Error                 string      `json:"error,omitempty"`
+	Generation            int         `json:"generation,omitempty"`
+	PlanHash              string      `json:"plan_hash,omitempty"`
+	PromptHash            string      `json:"prompt_hash,omitempty"`             // SHA-256 hex digest of the rendered prompt sent to the LLM
+	EstimatedPromptTokens int64       `json:"estimated_prompt_tokens,omitempty"` // pre-invocation estimate: len(rendered) / 3.3
+	startedAt             time.Time
 }
 
 // PipelineMeta is the top-level state stored in meta.json.

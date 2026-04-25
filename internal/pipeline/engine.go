@@ -64,6 +64,13 @@ type EngineConfig struct {
 	SelfUser               string            // PR author username for self-comment filtering
 	BotUsers               []string          // known bot usernames to filter
 	Stderr                 io.Writer         // destination for warning messages; defaults to os.Stderr
+	TokenBudget            TokenBudgetConfig // prompt token budget estimation; zero value disables checks
+}
+
+// TokenBudgetConfig configures the prompt-size estimation check.
+// Mirrors config.TokenBudgetConfig — kept separate to avoid cross-package imports.
+type TokenBudgetConfig struct {
+	WarnTokens int // emit warning when estimated prompt tokens exceed this; 0 disables
 }
 
 // maxReworkCycles returns the configured max rework cycles, defaulting to DefaultMaxReworkCycles.
