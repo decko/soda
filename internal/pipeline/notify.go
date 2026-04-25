@@ -29,9 +29,11 @@ const (
 // Both WebhookURL and Script are optional; when both are set, both
 // are invoked best-effort.
 type NotifyConfig struct {
-	WebhookURL string        // HTTP(S) URL to POST a JSON payload on completion
-	Script     string        // path to executable script invoked on completion
-	Timeout    time.Duration // max duration for webhook/script; 0 means default (30s)
+	WebhookURL        string        // HTTP(S) URL to POST a JSON payload on completion (on_finish)
+	Script            string        // path to executable script invoked on completion (on_finish)
+	FailureWebhookURL string        // HTTP(S) URL to POST only when the pipeline fails (on_failure)
+	FailureScript     string        // path to executable script invoked only when the pipeline fails (on_failure)
+	Timeout           time.Duration // max duration for webhook/script; 0 means default (10s)
 }
 
 // defaultNotifyTimeout is the default timeout for notification webhook and
@@ -125,11 +127,9 @@ func (e *Engine) buildWebhookPayload(status NotifyStatus, runErr error) webhookP
 	return p
 }
 
-// runScript executes the notification script with status information passed
-// as arguments. The script is invoked directly (no shell) via
-// exec.CommandContext.
-func (e *Engine) runScript(ctx context.Context, status NotifyStatus, runErr error) error {
-	script := e.config.Notify.Script
+// runScriptAt executes the script at scriptPath with status information passed
+// as arguments. The script is invoked directly (no shell) via exec.CommandContext.
+func (e *Engine) runScriptAt(ctx context.Context, scriptPath string, status NotifyStatus, runErr error) error {
 	meta := e.state.Meta()
 
 	args := []string{
@@ -140,25 +140,31 @@ func (e *Engine) runScript(ctx context.Context, status NotifyStatus, runErr erro
 		args = append(args, meta.Branch)
 	}
 
-	cmd := exec.CommandContext(ctx, script, args...)
+	cmd := exec.CommandContext(ctx, scriptPath, args...)
 	cmd.Dir = e.config.WorkDir
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("notify script %s: %w (output: %s)", script, err, string(output))
+		return fmt.Errorf("notify script %s: %w (output: %s)", scriptPath, err, string(output))
 	}
 	return nil
 }
 
-// postWebhook sends a POST request with the JSON payload to the configured
-// webhook URL.
-func (e *Engine) postWebhook(ctx context.Context, payload webhookPayload) error {
+// runScript executes the notification script with status information passed
+// as arguments. The script is invoked directly (no shell) via
+// exec.CommandContext.
+func (e *Engine) runScript(ctx context.Context, status NotifyStatus, runErr error) error {
+	return e.runScriptAt(ctx, e.config.Notify.Script, status, runErr)
+}
+
+// postWebhookTo sends a POST request with the JSON payload to the given URL.
+func (e *Engine) postWebhookTo(ctx context.Context, webhookURL string, payload webhookPayload) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("notify webhook marshal: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.config.Notify.WebhookURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, webhookURL, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("notify webhook request: %w", err)
 	}
@@ -176,13 +182,19 @@ func (e *Engine) postWebhook(ctx context.Context, payload webhookPayload) error 
 	return nil
 }
 
+// postWebhook sends a POST request with the JSON payload to the configured
+// webhook URL.
+func (e *Engine) postWebhook(ctx context.Context, payload webhookPayload) error {
+	return e.postWebhookTo(ctx, e.config.Notify.WebhookURL, payload)
+}
+
 // notifyOnFinish is the best-effort notification orchestrator. It derives the
 // pipeline status, runs the configured script and/or webhook, and emits events
 // on success or failure. Errors are captured via EventNotifyFailed and never
 // propagated to the caller.
 func (e *Engine) notifyOnFinish(runErr error) {
 	cfg := e.config.Notify
-	if cfg.WebhookURL == "" && cfg.Script == "" {
+	if cfg.WebhookURL == "" && cfg.Script == "" && cfg.FailureWebhookURL == "" && cfg.FailureScript == "" {
 		return
 	}
 
@@ -191,6 +203,7 @@ func (e *Engine) notifyOnFinish(runErr error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
+	// on_finish handlers: fire on every completion (success or failure).
 	if cfg.Script != "" {
 		if err := e.runScript(ctx, status, runErr); err != nil {
 			e.emit(Event{
@@ -217,6 +230,38 @@ func (e *Engine) notifyOnFinish(runErr error) {
 				Kind: EventNotifySuccess,
 				Data: map[string]any{"type": "webhook"},
 			})
+		}
+	}
+
+	// on_failure handlers: fire only when the pipeline encountered an error.
+	if runErr != nil {
+		if cfg.FailureScript != "" {
+			if err := e.runScriptAt(ctx, cfg.FailureScript, status, runErr); err != nil {
+				e.emit(Event{
+					Kind: EventNotifyFailed,
+					Data: map[string]any{"type": "script", "error": err.Error()},
+				})
+			} else {
+				e.emit(Event{
+					Kind: EventNotifySuccess,
+					Data: map[string]any{"type": "script"},
+				})
+			}
+		}
+
+		if cfg.FailureWebhookURL != "" {
+			payload := e.buildWebhookPayload(status, runErr)
+			if err := e.postWebhookTo(ctx, cfg.FailureWebhookURL, payload); err != nil {
+				e.emit(Event{
+					Kind: EventNotifyFailed,
+					Data: map[string]any{"type": "webhook", "error": err.Error()},
+				})
+			} else {
+				e.emit(Event{
+					Kind: EventNotifySuccess,
+					Data: map[string]any{"type": "webhook"},
+				})
+			}
 		}
 	}
 }

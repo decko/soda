@@ -367,10 +367,13 @@ func runPipeline(cfg *config.Config, opts pipelineOpts) error {
 
 	// Build notification config from user settings.
 	var notifyCfg pipeline.NotifyConfig
-	if cfg.Notifications.WebhookURL != "" || cfg.Notifications.Script != "" {
+	if cfg.Notifications.WebhookURL != "" || cfg.Notifications.Script != "" ||
+		cfg.Notifications.OnFailureWebhookURL != "" || cfg.Notifications.OnFailureScript != "" {
 		notifyCfg = pipeline.NotifyConfig{
-			WebhookURL: cfg.Notifications.WebhookURL,
-			Script:     cfg.Notifications.Script,
+			WebhookURL:        cfg.Notifications.WebhookURL,
+			Script:            cfg.Notifications.Script,
+			FailureWebhookURL: cfg.Notifications.OnFailureWebhookURL,
+			FailureScript:     cfg.Notifications.OnFailureScript,
 		}
 		if cfg.Notifications.TimeoutSec > 0 {
 			notifyCfg.Timeout = time.Duration(cfg.Notifications.TimeoutSec) * time.Second

@@ -33,9 +33,11 @@ type Config struct {
 // Both webhook and script callbacks are optional; if both are configured,
 // both are invoked (best-effort, errors are logged but never propagated).
 type NotificationsConfig struct {
-	WebhookURL string `yaml:"webhook_url"` // HTTP(S) URL to POST a JSON payload on completion
-	Script     string `yaml:"script"`      // path to executable script invoked on completion
-	TimeoutSec int    `yaml:"timeout_sec"` // max seconds for webhook/script; 0 means default (30)
+	WebhookURL          string `yaml:"webhook_url"`            // HTTP(S) URL to POST a JSON payload on completion (on_finish)
+	Script              string `yaml:"script"`                 // path to executable script invoked on completion (on_finish)
+	OnFailureWebhookURL string `yaml:"on_failure_webhook_url"` // HTTP(S) URL to POST only when the pipeline fails (on_failure)
+	OnFailureScript     string `yaml:"on_failure_script"`      // path to executable script invoked only when the pipeline fails (on_failure)
+	TimeoutSec          int    `yaml:"timeout_sec"`            // max seconds for webhook/script; 0 means default (10)
 }
 
 // MonitorConfig holds monitor phase settings loaded from the config file.
