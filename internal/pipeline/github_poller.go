@@ -50,9 +50,15 @@ func parsePRRef(prURL string) (owner, repo, number string, err error) {
 
 // ghPR is the response from gh pr view.
 type ghPR struct {
-	State          string `json:"state"`          // "OPEN", "CLOSED", "MERGED"
-	ReviewDecision string `json:"reviewDecision"` // "APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED", ""
-	HeadRefOid     string `json:"headRefOid"`     // SHA of the PR head commit
+	State          string    `json:"state"`          // "OPEN", "CLOSED", "MERGED"
+	ReviewDecision string    `json:"reviewDecision"` // "APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED", ""
+	HeadRefOid     string    `json:"headRefOid"`     // SHA of the PR head commit
+	Labels         []ghLabel `json:"labels"`         // labels applied to the PR
+}
+
+// ghLabel is a single label from gh pr view --json labels.
+type ghLabel struct {
+	Name string `json:"name"`
 }
 
 // ghCheck is a single CI check from the PR status.
@@ -105,7 +111,7 @@ func (p *GitHubPRPoller) GetPRStatus(ctx context.Context, prURL string) (*PRStat
 	out, err := exec.CommandContext(ctx, p.command,
 		"pr", "view", number,
 		"--repo", nwoRef,
-		"--json", "state,reviewDecision,headRefOid",
+		"--json", "state,reviewDecision,headRefOid,labels",
 	).Output()
 	if err != nil {
 		return nil, fmt.Errorf("monitor: get PR status: %w: %s", err, ghStderr(err))
@@ -119,11 +125,17 @@ func (p *GitHubPRPoller) GetPRStatus(ctx context.Context, prURL string) (*PRStat
 	state := strings.ToLower(pr.State)
 	approved := strings.EqualFold(pr.ReviewDecision, "APPROVED")
 
+	var labels []string
+	for _, l := range pr.Labels {
+		labels = append(labels, l.Name)
+	}
+
 	return &PRStatus{
 		State:          state,
 		Approved:       approved,
 		ReviewDecision: pr.ReviewDecision,
 		HeadSHA:        pr.HeadRefOid,
+		Labels:         labels,
 	}, nil
 }
 

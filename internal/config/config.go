@@ -32,10 +32,13 @@ type Config struct {
 // MonitorConfig holds monitor phase settings loaded from the config file.
 // These values are wired into EngineConfig at startup.
 type MonitorConfig struct {
-	Profile    string   `yaml:"profile"`    // monitor profile preset: conservative, smart, aggressive
-	SelfUser   string   `yaml:"self_user"`  // PR author username for self-comment filtering
-	BotUsers   []string `yaml:"bot_users"`  // known bot usernames to filter out
-	CODEOWNERS string   `yaml:"codeowners"` // path to CODEOWNERS file for authority resolution
+	Profile          string   `yaml:"profile"`            // monitor profile preset: conservative, smart, aggressive
+	SelfUser         string   `yaml:"self_user"`          // PR author username for self-comment filtering
+	BotUsers         []string `yaml:"bot_users"`          // known bot usernames to filter out
+	CODEOWNERS       string   `yaml:"codeowners"`         // path to CODEOWNERS file for authority resolution
+	MergeMethod      string   `yaml:"merge_method"`       // merge method: "merge", "squash", "rebase"; defaults to "squash"
+	MergeLabels      []string `yaml:"merge_labels"`       // required PR labels before auto-merge proceeds
+	AutoMergeTimeout string   `yaml:"auto_merge_timeout"` // max wait after approval before giving up (Go duration string); defaults to "30m"
 }
 
 // NotifyConfig holds notification hook settings for pipeline completion.

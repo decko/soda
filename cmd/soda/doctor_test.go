@@ -45,7 +45,12 @@ func allPassEnv() *doctorEnv {
 			return mockFileInfo{name: name, isDir: strings.HasSuffix(name, "soda") && !strings.HasSuffix(name, ".yaml")}, nil
 		},
 		LoadConfig: func(path string) (*config.Config, error) {
-			return &config.Config{}, nil
+			return &config.Config{
+				GitHub: config.GitHubTicketConfig{
+					Owner: "test-org",
+					Repo:  "test-repo",
+				},
+			}, nil
 		},
 		UserConfigDir: func() (string, error) {
 			return "/home/testuser/.config", nil
@@ -1015,5 +1020,96 @@ func TestRunDoctor_ClaudeMissing_SkipsClaudeVersion(t *testing.T) {
 	// claude itself should fail
 	if !strings.Contains(out, "✗ claude:") {
 		t.Errorf("expected claude check to fail, got:\n%s", out)
+	}
+}
+
+// --- checkBranchProtection tests ---
+
+func TestCheckBranchProtection_SkippedWhenGhMissing(t *testing.T) {
+	env := allPassEnv()
+	env.LookPath = func(file string) (string, error) {
+		if file == "gh" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + file, nil
+	}
+	r := checkBranchProtection(env)
+	if !r.skipped {
+		t.Error("expected branch-protection to be skipped when gh is missing")
+	}
+}
+
+func TestCheckBranchProtection_SkippedWhenNoConfig(t *testing.T) {
+	env := allPassEnv()
+	env.ParsedConfig = nil
+	r := checkBranchProtection(env)
+	if !r.skipped {
+		t.Error("expected branch-protection to be skipped when config is nil")
+	}
+}
+
+func TestCheckBranchProtection_SkippedWhenNoOwnerRepo(t *testing.T) {
+	env := allPassEnv()
+	env.ParsedConfig = &config.Config{}
+	r := checkBranchProtection(env)
+	if !r.skipped {
+		t.Error("expected branch-protection to be skipped when owner/repo is empty")
+	}
+}
+
+func TestCheckBranchProtection_NoBranchProtection(t *testing.T) {
+	env := allPassEnv()
+	env.ParsedConfig = &config.Config{
+		GitHub: config.GitHubTicketConfig{Owner: "org", Repo: "repo"},
+	}
+	env.RunCmd = func(name string, args ...string) (string, error) {
+		if name == "gh" && len(args) > 1 && args[0] == "api" {
+			return "Not Found", errors.New("exit status 1")
+		}
+		return "", nil
+	}
+	r := checkBranchProtection(env)
+	if !r.passed {
+		t.Errorf("expected branch-protection to pass when no protection rules, got: %+v", r)
+	}
+}
+
+func TestCheckBranchProtection_DismissStaleReviewsEnabled(t *testing.T) {
+	env := allPassEnv()
+	env.ParsedConfig = &config.Config{
+		GitHub: config.GitHubTicketConfig{Owner: "org", Repo: "repo"},
+	}
+	env.RunCmd = func(name string, args ...string) (string, error) {
+		if name == "gh" && len(args) > 1 && args[0] == "api" {
+			return `{"required_pull_request_reviews":{"dismiss_stale_reviews":true}}`, nil
+		}
+		return "", nil
+	}
+	r := checkBranchProtection(env)
+	if r.passed {
+		t.Error("expected branch-protection to warn when dismiss_stale_reviews is enabled")
+	}
+	if !strings.Contains(r.detail, "dismiss_stale_reviews") {
+		t.Errorf("expected detail to mention dismiss_stale_reviews, got: %q", r.detail)
+	}
+	if r.fix == "" {
+		t.Error("expected a fix suggestion")
+	}
+}
+
+func TestCheckBranchProtection_NoStaleReviews(t *testing.T) {
+	env := allPassEnv()
+	env.ParsedConfig = &config.Config{
+		GitHub: config.GitHubTicketConfig{Owner: "org", Repo: "repo"},
+	}
+	env.RunCmd = func(name string, args ...string) (string, error) {
+		if name == "gh" && len(args) > 1 && args[0] == "api" {
+			return `{"required_pull_request_reviews":{"dismiss_stale_reviews":false}}`, nil
+		}
+		return "", nil
+	}
+	r := checkBranchProtection(env)
+	if !r.passed {
+		t.Errorf("expected branch-protection to pass when dismiss_stale_reviews is false, got: %+v", r)
 	}
 }

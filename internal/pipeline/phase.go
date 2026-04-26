@@ -89,6 +89,9 @@ type PollingConfig struct {
 	Profile           MonitorProfileName `yaml:"profile,omitempty"`             // preset profile name (conservative, smart, aggressive)
 	RespondToComments bool               `yaml:"respond_to_comments,omitempty"` // enable comment classification + response (requires self_user)
 	AutoMerge         bool               `yaml:"auto_merge,omitempty"`          // merge PR when checks green + approved (see #338 for safeguards)
+	MergeMethod       string             `yaml:"merge_method,omitempty"`        // merge method: "merge", "squash", "rebase"; defaults to "squash"
+	MergeLabels       []string           `yaml:"merge_labels,omitempty"`        // required PR labels before auto-merge proceeds
+	AutoMergeTimeout  Duration           `yaml:"auto_merge_timeout,omitempty"`  // max wait after approval before giving up; defaults to 30m
 }
 
 // Duration wraps time.Duration for YAML unmarshaling.

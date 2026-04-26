@@ -93,6 +93,10 @@ const (
 	EventTokenBudgetCalibration   = "token_budget_calibration"
 	EventNotifySuccess            = "notify_success"
 	EventNotifyFailed             = "notify_failed"
+	EventAutoMergeCompleted       = "auto_merge_completed"
+	EventAutoMergeBlocked         = "auto_merge_blocked"
+	EventAutoMergeDryRun          = "auto_merge_dry_run"
+	EventRebaseConflict           = "rebase_conflict"
 )
 
 // FormatEvent formats an event as a compact, human-readable line:

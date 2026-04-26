@@ -170,7 +170,7 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 		})
 
 		// 1. Check PR status (approved, closed, merged).
-		terminal, err := e.checkPRStatus(ctx, phase.Name, monState)
+		prResult, err := e.checkPRStatus(ctx, phase.Name, monState)
 		if err != nil {
 			e.emit(Event{
 				Phase: phase.Name,
@@ -179,7 +179,24 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 			})
 			// Non-fatal — continue polling.
 		}
-		if terminal {
+
+		// When the PR is approved and auto-merge is enabled (or could dry-run),
+		// suppress the terminal "completed" state so the safeguard chain can
+		// run. Track the approval time for timeout computation.
+		autoMergeActive := polling != nil && polling.AutoMerge
+		if prResult.Terminal && prResult.Status != nil && prResult.Status.Approved &&
+			prResult.Status.State == "open" {
+			// Record first-observed approval time.
+			if monState.ApprovalTime == nil {
+				approvalNow := e.now()
+				monState.ApprovalTime = &approvalNow
+			}
+			// Reset status back to polling — auto-merge will decide the outcome.
+			monState.Status = MonitorPolling
+
+			// Fall through to auto-merge logic below (after CI check).
+		} else if prResult.Terminal {
+			// Non-approval terminal: merged, closed — always honor immediately.
 			_ = e.state.WriteMonitorState(monState)
 			if monState.Status == MonitorCompleted {
 				if err := e.state.MarkCompleted(phase.Name); err != nil {
@@ -279,7 +296,63 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 		}
 
 		// 3. Check CI status changes.
-		e.checkCIStatus(ctx, phase.Name, monState)
+		latestCI := e.checkCIStatusReturn(ctx, phase.Name, monState)
+
+		// 3a. Auto-merge safeguard chain: runs when the PR is approved and
+		// auto-merge is enabled (or dry-run is desired).
+		if prResult.Status != nil && prResult.Status.Approved && monState.ApprovalTime != nil {
+			mergeResult := e.tryAutoMerge(ctx, phase.Name, monState, prResult.Status, latestCI, polling)
+			if mergeResult.Merged {
+				monState.Status = MonitorCompleted
+				_ = e.state.WriteMonitorState(monState)
+				if err := e.state.MarkCompleted(phase.Name); err != nil {
+					return fmt.Errorf("engine: mark completed %s: %w", phase.Name, err)
+				}
+				e.emit(Event{
+					Phase: phase.Name,
+					Kind:  EventPhaseCompleted,
+					Data:  map[string]any{"duration_ms": e.state.Meta().Phases[phase.Name].DurationMs},
+				})
+				return nil
+			}
+			if mergeResult.RebaseConflict {
+				monState.Status = MonitorRebaseConflict
+				_ = e.state.WriteMonitorState(monState)
+				failErr := fmt.Errorf("monitor: rebase conflict during auto-merge")
+				if err := e.state.MarkFailed(phase.Name, failErr); err != nil {
+					return fmt.Errorf("engine: mark failed %s: %w", phase.Name, err)
+				}
+				e.emitPhaseFailed(phase.Name, failErr)
+				return nil
+			}
+			if mergeResult.TimedOut {
+				monState.Status = MonitorFailed
+				_ = e.state.WriteMonitorState(monState)
+				failErr := fmt.Errorf("monitor: auto-merge timeout exceeded")
+				if err := e.state.MarkFailed(phase.Name, failErr); err != nil {
+					return fmt.Errorf("engine: mark failed %s: %w", phase.Name, err)
+				}
+				e.emitPhaseFailed(phase.Name, failErr)
+				return nil
+			}
+			// DryRun or Blocked with non-auto-merge: if auto-merge is not
+			// enabled, treat approval as terminal (original behavior).
+			if !autoMergeActive {
+				monState.Status = MonitorCompleted
+				_ = e.state.WriteMonitorState(monState)
+				if err := e.state.MarkCompleted(phase.Name); err != nil {
+					return fmt.Errorf("engine: mark completed %s: %w", phase.Name, err)
+				}
+				e.emit(Event{
+					Phase: phase.Name,
+					Kind:  EventPhaseCompleted,
+					Data:  map[string]any{"duration_ms": e.state.Meta().Phases[phase.Name].DurationMs},
+				})
+				return nil
+			}
+			// Blocked with auto-merge active: continue polling, merge will
+			// be retried on the next cycle.
+		}
 
 		// 4. Check for merge conflicts and auto-rebase.
 		autoRebase := profile == nil || profile.ShouldAutoRebase()
@@ -327,12 +400,21 @@ func (e *Engine) runMonitor(ctx context.Context, phase PhaseConfig) error {
 	}
 }
 
+// checkPRStatusResult holds the outcome of a PR status check.
+type checkPRStatusResult struct {
+	// Terminal indicates whether the polling loop should stop.
+	Terminal bool
+	// Status is the PRStatus returned by the poller (nil on error).
+	Status *PRStatus
+}
+
 // checkPRStatus checks the PR for terminal states (approved, closed, merged).
-// Returns true if the polling should stop.
-func (e *Engine) checkPRStatus(ctx context.Context, phaseName string, monState *MonitorState) (bool, error) {
+// Returns a result struct indicating whether polling should stop and the
+// latest PRStatus for downstream use (e.g., auto-merge label checks).
+func (e *Engine) checkPRStatus(ctx context.Context, phaseName string, monState *MonitorState) (checkPRStatusResult, error) {
 	status, err := e.config.PRPoller.GetPRStatus(ctx, monState.PRURL)
 	if err != nil {
-		return false, err
+		return checkPRStatusResult{}, err
 	}
 
 	switch status.State {
@@ -343,7 +425,7 @@ func (e *Engine) checkPRStatus(ctx context.Context, phaseName string, monState *
 			Kind:  EventMonitorPRApproved,
 			Data:  map[string]any{"state": "merged"},
 		})
-		return true, nil
+		return checkPRStatusResult{Terminal: true, Status: status}, nil
 
 	case "closed":
 		monState.Status = MonitorFailed
@@ -352,7 +434,7 @@ func (e *Engine) checkPRStatus(ctx context.Context, phaseName string, monState *
 			Kind:  EventMonitorPRClosed,
 			Data:  map[string]any{"state": "closed"},
 		})
-		return true, nil
+		return checkPRStatusResult{Terminal: true, Status: status}, nil
 	}
 
 	if status.Approved {
@@ -362,10 +444,10 @@ func (e *Engine) checkPRStatus(ctx context.Context, phaseName string, monState *
 			Kind:  EventMonitorPRApproved,
 			Data:  map[string]any{"state": "approved"},
 		})
-		return true, nil
+		return checkPRStatusResult{Terminal: true, Status: status}, nil
 	}
 
-	return false, nil
+	return checkPRStatusResult{Terminal: false, Status: status}, nil
 }
 
 // checkNewComments polls for new review comments and classifies them.
@@ -533,8 +615,9 @@ func (e *Engine) checkNewCommentsPassive(ctx context.Context, phaseName string, 
 	})
 }
 
-// checkCIStatus polls CI status and emits events on status changes.
-func (e *Engine) checkCIStatus(ctx context.Context, phaseName string, monState *MonitorState) {
+// checkCIStatusReturn polls CI status, emits events on status changes,
+// and returns the latest CIStatus so callers (e.g., auto-merge) can inspect it.
+func (e *Engine) checkCIStatusReturn(ctx context.Context, phaseName string, monState *MonitorState) *CIStatus {
 	ciStatus, err := e.config.PRPoller.GetCIStatus(ctx, monState.PRURL)
 	if err != nil {
 		// Non-fatal: emit warning and continue.
@@ -543,42 +626,42 @@ func (e *Engine) checkCIStatus(ctx context.Context, phaseName string, monState *
 			Kind:  EventMonitorWarning,
 			Data:  map[string]any{"warning": fmt.Sprintf("get CI status: %v", err)},
 		})
-		return
+		return nil
 	}
 
-	if ciStatus.Overall == monState.LastCIStatus {
-		return
-	}
+	if ciStatus.Overall != monState.LastCIStatus {
+		previousStatus := monState.LastCIStatus
+		monState.LastCIStatus = ciStatus.Overall
 
-	previousStatus := monState.LastCIStatus
-	monState.LastCIStatus = ciStatus.Overall
-
-	e.emit(Event{
-		Phase: phaseName,
-		Kind:  EventMonitorCIChange,
-		Data: map[string]any{
-			"previous": previousStatus,
-			"current":  ciStatus.Overall,
-		},
-	})
-
-	// On CI failure, emit detailed notification with job names.
-	if ciStatus.Overall == "failure" {
-		var failedJobs []string
-		for _, job := range ciStatus.Jobs {
-			if job.Conclusion == "failure" || job.Conclusion == "timed_out" || job.Conclusion == "cancelled" {
-				failedJobs = append(failedJobs, job.Name)
-			}
-		}
 		e.emit(Event{
 			Phase: phaseName,
-			Kind:  EventMonitorCIFailure,
+			Kind:  EventMonitorCIChange,
 			Data: map[string]any{
-				"failed_jobs": failedJobs,
-				"job_count":   len(ciStatus.Jobs),
+				"previous": previousStatus,
+				"current":  ciStatus.Overall,
 			},
 		})
+
+		// On CI failure, emit detailed notification with job names.
+		if ciStatus.Overall == "failure" {
+			var failedJobs []string
+			for _, job := range ciStatus.Jobs {
+				if job.Conclusion == "failure" || job.Conclusion == "timed_out" || job.Conclusion == "cancelled" {
+					failedJobs = append(failedJobs, job.Name)
+				}
+			}
+			e.emit(Event{
+				Phase: phaseName,
+				Kind:  EventMonitorCIFailure,
+				Data: map[string]any{
+					"failed_jobs": failedJobs,
+					"job_count":   len(ciStatus.Jobs),
+				},
+			})
+		}
 	}
+
+	return ciStatus
 }
 
 // checkMergeConflicts detects merge conflicts and attempts auto-rebase

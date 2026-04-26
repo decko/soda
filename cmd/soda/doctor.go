@@ -91,6 +91,7 @@ func runDoctor(w io.Writer, env *doctorEnv) error {
 		checkConfigValid,
 		checkGh,
 		checkGhAuth,
+		checkBranchProtection,
 		checkNode,
 	}
 
@@ -347,6 +348,73 @@ func checkGhAuth(env *doctorEnv) checkResult {
 		passed:   true,
 		required: required,
 		detail:   "authenticated",
+	}
+}
+
+// checkBranchProtection warns when the target repo's default branch has
+// dismiss_stale_reviews enabled, which can cause auto-merge to fail after
+// new pushes. Skipped when gh is not found or the config is unavailable.
+// This is an optional (warning-only) check.
+func checkBranchProtection(env *doctorEnv) checkResult {
+	if _, err := env.LookPath("gh"); err != nil {
+		return checkResult{
+			name:    "branch-protection",
+			skipped: true,
+			detail:  "skipped (gh not found)",
+		}
+	}
+
+	// Require a parsed config with GitHub repo info.
+	if env.ParsedConfig == nil {
+		return checkResult{
+			name:    "branch-protection",
+			skipped: true,
+			detail:  "skipped (no config parsed)",
+		}
+	}
+
+	owner := env.ParsedConfig.GitHub.Owner
+	repo := env.ParsedConfig.GitHub.Repo
+	if owner == "" || repo == "" {
+		return checkResult{
+			name:    "branch-protection",
+			skipped: true,
+			detail:  "skipped (github owner/repo not configured)",
+		}
+	}
+
+	// Query branch protection for the default branch (main).
+	// Use gh api to check the protection rules.
+	out, err := env.RunCmd("gh", "api", fmt.Sprintf("repos/%s/%s/branches/main/protection", owner, repo))
+	if err != nil {
+		// 404 or error means no branch protection — that's fine.
+		if strings.Contains(strings.ToLower(out), "not found") || strings.Contains(strings.ToLower(out), "404") {
+			return checkResult{
+				name:   "branch-protection",
+				passed: true,
+				detail: "no branch protection rules on main",
+			}
+		}
+		return checkResult{
+			name:    "branch-protection",
+			skipped: true,
+			detail:  fmt.Sprintf("skipped (could not query branch protection: %v)", err),
+		}
+	}
+
+	if strings.Contains(out, "dismiss_stale_reviews") && strings.Contains(out, "true") {
+		return checkResult{
+			name:   "branch-protection",
+			passed: false,
+			detail: "dismiss_stale_reviews is enabled on main — auto-merge may fail after new pushes",
+			fix:    "consider disabling dismiss_stale_reviews or using a merge queue",
+		}
+	}
+
+	return checkResult{
+		name:   "branch-protection",
+		passed: true,
+		detail: "no dismiss_stale_reviews on main",
 	}
 }
 

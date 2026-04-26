@@ -2566,3 +2566,280 @@ func TestCheckNewComments_ClassifierFailureDoesNotAdvanceLastCommentID(t *testin
 		t.Error("monitor_warning event about classifier creation not emitted")
 	}
 }
+
+// --- Auto-merge integration tests ---
+// These tests exercise auto-merge through the full engine polling loop.
+
+func TestMonitor_AutoMerge_Success(t *testing.T) {
+	// PR is approved, CI is green, auto_merge is enabled → merge succeeds.
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "open", Approved: true, HeadSHA: "abc123", Labels: []string{"auto-merge-ok"}}},
+		},
+		ciResponses: []mockCIResponse{
+			{status: &CIStatus{Overall: "success", CommitSHA: "abc123"}},
+		},
+	}
+
+	polling := &PollingConfig{
+		InitialInterval:   Duration{Duration: 1 * time.Millisecond},
+		MaxInterval:       Duration{Duration: 2 * time.Millisecond},
+		EscalateAfter:     Duration{Duration: 10 * time.Millisecond},
+		MaxDuration:       Duration{Duration: 100 * time.Millisecond},
+		MaxResponseRounds: 3,
+		AutoMerge:         true,
+		AutoMergeTimeout:  Duration{Duration: 30 * time.Minute},
+	}
+
+	engine, state, events := setupMonitorEngine(t, poller, polling)
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !state.IsCompleted("monitor") {
+		t.Error("monitor should be completed after successful auto-merge")
+	}
+
+	monState, err := state.ReadMonitorState()
+	if err != nil {
+		t.Fatalf("ReadMonitorState: %v", err)
+	}
+	if monState.Status != MonitorCompleted {
+		t.Errorf("monitor status = %q, want %q", monState.Status, MonitorCompleted)
+	}
+
+	if !hasEventKind(*events, EventAutoMergeCompleted) {
+		t.Error("expected auto_merge_completed event")
+	}
+
+	// Verify merge was called.
+	if len(poller.mergeCalls) != 1 {
+		t.Fatalf("expected 1 merge call, got %d", len(poller.mergeCalls))
+	}
+}
+
+func TestMonitor_AutoMerge_CIPending_ThenGreen(t *testing.T) {
+	// PR is approved, CI starts pending → next poll CI is green → merge.
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "open", Approved: true, HeadSHA: "abc123", Labels: []string{"auto-merge-ok"}}},
+			{status: &PRStatus{State: "open", Approved: true, HeadSHA: "abc123", Labels: []string{"auto-merge-ok"}}},
+		},
+		ciResponses: []mockCIResponse{
+			{status: &CIStatus{Overall: "pending", CommitSHA: "abc123"}},
+			{status: &CIStatus{Overall: "success", CommitSHA: "abc123"}},
+		},
+	}
+
+	polling := &PollingConfig{
+		InitialInterval:   Duration{Duration: 1 * time.Millisecond},
+		MaxInterval:       Duration{Duration: 2 * time.Millisecond},
+		EscalateAfter:     Duration{Duration: 10 * time.Millisecond},
+		MaxDuration:       Duration{Duration: 100 * time.Millisecond},
+		MaxResponseRounds: 3,
+		AutoMerge:         true,
+		AutoMergeTimeout:  Duration{Duration: 30 * time.Minute},
+	}
+
+	engine, state, events := setupMonitorEngine(t, poller, polling)
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !state.IsCompleted("monitor") {
+		t.Error("monitor should be completed after CI turns green and auto-merge succeeds")
+	}
+
+	// First poll: blocked (CI pending), second poll: merge success.
+	if !hasEventKind(*events, EventAutoMergeBlocked) {
+		t.Error("expected auto_merge_blocked event on first poll (CI pending)")
+	}
+	if !hasEventKind(*events, EventAutoMergeCompleted) {
+		t.Error("expected auto_merge_completed event on second poll")
+	}
+}
+
+func TestMonitor_AutoMerge_MissingLabel(t *testing.T) {
+	// PR is approved, CI green, but missing required label → blocks, then times out.
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "open", Approved: true, HeadSHA: "abc123", Labels: []string{"draft"}}},
+		},
+		ciResponses: []mockCIResponse{
+			{status: &CIStatus{Overall: "success", CommitSHA: "abc123"}},
+		},
+	}
+
+	polling := &PollingConfig{
+		InitialInterval:   Duration{Duration: 1 * time.Millisecond},
+		MaxInterval:       Duration{Duration: 2 * time.Millisecond},
+		EscalateAfter:     Duration{Duration: 5 * time.Millisecond},
+		MaxDuration:       Duration{Duration: 20 * time.Millisecond}, // very short to force timeout
+		MaxResponseRounds: 3,
+		AutoMerge:         true,
+		MergeLabels:       []string{"ready-to-merge"},
+		AutoMergeTimeout:  Duration{Duration: 30 * time.Minute},
+	}
+
+	engine, _, events := setupMonitorEngine(t, poller, polling)
+	_ = engine.Run(context.Background())
+
+	// Should have emitted auto_merge_blocked for missing labels.
+	if !hasEventKind(*events, EventAutoMergeBlocked) {
+		t.Error("expected auto_merge_blocked event for missing labels")
+	}
+
+	// Verify merge was NOT called.
+	if len(poller.mergeCalls) != 0 {
+		t.Errorf("expected 0 merge calls, got %d", len(poller.mergeCalls))
+	}
+}
+
+func TestMonitor_AutoMerge_RebaseConflict(t *testing.T) {
+	// PR is approved, CI green, merge returns conflict → phase fails.
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "open", Approved: true, HeadSHA: "abc123", Labels: []string{"auto-merge-ok"}}},
+		},
+		ciResponses: []mockCIResponse{
+			{status: &CIStatus{Overall: "success", CommitSHA: "abc123"}},
+		},
+		mergeErr: ErrMergeConflict,
+	}
+
+	polling := &PollingConfig{
+		InitialInterval:   Duration{Duration: 1 * time.Millisecond},
+		MaxInterval:       Duration{Duration: 2 * time.Millisecond},
+		EscalateAfter:     Duration{Duration: 10 * time.Millisecond},
+		MaxDuration:       Duration{Duration: 100 * time.Millisecond},
+		MaxResponseRounds: 3,
+		AutoMerge:         true,
+		AutoMergeTimeout:  Duration{Duration: 30 * time.Minute},
+	}
+
+	engine, state, events := setupMonitorEngine(t, poller, polling)
+	_ = engine.Run(context.Background())
+
+	monState, err := state.ReadMonitorState()
+	if err != nil {
+		t.Fatalf("ReadMonitorState: %v", err)
+	}
+	if monState.Status != MonitorRebaseConflict {
+		t.Errorf("monitor status = %q, want %q", monState.Status, MonitorRebaseConflict)
+	}
+
+	if !hasEventKind(*events, EventRebaseConflict) {
+		t.Error("expected rebase_conflict event")
+	}
+}
+
+func TestMonitor_AutoMerge_Disabled_DryRun(t *testing.T) {
+	// PR is approved, CI green, auto_merge=false → dry run event, phase completes.
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "open", Approved: true, HeadSHA: "abc123", Labels: []string{"auto-merge-ok"}}},
+		},
+		ciResponses: []mockCIResponse{
+			{status: &CIStatus{Overall: "success", CommitSHA: "abc123"}},
+		},
+	}
+
+	polling := &PollingConfig{
+		InitialInterval:   Duration{Duration: 1 * time.Millisecond},
+		MaxInterval:       Duration{Duration: 2 * time.Millisecond},
+		EscalateAfter:     Duration{Duration: 10 * time.Millisecond},
+		MaxDuration:       Duration{Duration: 100 * time.Millisecond},
+		MaxResponseRounds: 3,
+		AutoMerge:         false, // disabled
+		AutoMergeTimeout:  Duration{Duration: 30 * time.Minute},
+	}
+
+	engine, state, events := setupMonitorEngine(t, poller, polling)
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !state.IsCompleted("monitor") {
+		t.Error("monitor should be completed (dry run terminates with approval)")
+	}
+
+	if !hasEventKind(*events, EventAutoMergeDryRun) {
+		t.Error("expected auto_merge_dry_run event")
+	}
+
+	// Verify merge was NOT called.
+	if len(poller.mergeCalls) != 0 {
+		t.Errorf("expected 0 merge calls in dry run, got %d", len(poller.mergeCalls))
+	}
+}
+
+func TestMonitor_AutoMerge_PRClosedStillTerminal(t *testing.T) {
+	// PR is closed (not merged) → terminal even with auto_merge enabled.
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "closed", Approved: false}},
+		},
+	}
+
+	polling := &PollingConfig{
+		InitialInterval:   Duration{Duration: 1 * time.Millisecond},
+		MaxInterval:       Duration{Duration: 2 * time.Millisecond},
+		EscalateAfter:     Duration{Duration: 10 * time.Millisecond},
+		MaxDuration:       Duration{Duration: 100 * time.Millisecond},
+		MaxResponseRounds: 3,
+		AutoMerge:         true,
+		AutoMergeTimeout:  Duration{Duration: 30 * time.Minute},
+	}
+
+	engine, state, _ := setupMonitorEngine(t, poller, polling)
+	_ = engine.Run(context.Background())
+
+	monState, err := state.ReadMonitorState()
+	if err != nil {
+		t.Fatalf("ReadMonitorState: %v", err)
+	}
+	if monState.Status != MonitorFailed {
+		t.Errorf("monitor status = %q, want %q (closed PR should fail even with auto_merge)", monState.Status, MonitorFailed)
+	}
+
+	// Verify merge was NOT called.
+	if len(poller.mergeCalls) != 0 {
+		t.Errorf("expected 0 merge calls for closed PR, got %d", len(poller.mergeCalls))
+	}
+}
+
+func TestMonitor_AutoMerge_ApprovalTimeRecorded(t *testing.T) {
+	// Verify that ApprovalTime is set on first observation.
+	poller := &mockPRPoller{
+		statusResponses: []mockPRStatusResponse{
+			{status: &PRStatus{State: "open", Approved: true, HeadSHA: "abc123", Labels: []string{"auto-merge-ok"}}},
+		},
+		ciResponses: []mockCIResponse{
+			{status: &CIStatus{Overall: "success", CommitSHA: "abc123"}},
+		},
+	}
+
+	polling := &PollingConfig{
+		InitialInterval:   Duration{Duration: 1 * time.Millisecond},
+		MaxInterval:       Duration{Duration: 2 * time.Millisecond},
+		EscalateAfter:     Duration{Duration: 10 * time.Millisecond},
+		MaxDuration:       Duration{Duration: 100 * time.Millisecond},
+		MaxResponseRounds: 3,
+		AutoMerge:         true,
+		AutoMergeTimeout:  Duration{Duration: 30 * time.Minute},
+	}
+
+	engine, state, _ := setupMonitorEngine(t, poller, polling)
+	_ = engine.Run(context.Background())
+
+	monState, err := state.ReadMonitorState()
+	if err != nil {
+		t.Fatalf("ReadMonitorState: %v", err)
+	}
+	if monState.ApprovalTime == nil {
+		t.Error("ApprovalTime should be set after PR approval is observed")
+	}
+}
