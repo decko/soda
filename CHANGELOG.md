@@ -7,6 +7,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-04-27
+
+### Added
+
+#### Auto-merge safeguards
+- Auto-merge for unattended PR merging with configurable safeguard chain:
+  label check → approval status → CI freshness → branch protection validation → merge
+- `merge_method` config (squash/merge/rebase, default squash)
+- `merge_labels` config (default `auto-merge-ok`, no escape hatch)
+- `auto_merge_timeout` (default 30m) prevents infinite wait after approval
+- Runtime branch protection validation via optional `MergeValidator` interface
+- Rebase conflict detection: monitor terminates with clear event instead of
+  spinning when content conflicts prevent rebase
+- Events: `auto_merge_completed`, `auto_merge_blocked`, `auto_merge_dry_run`,
+  `rebase_conflict`
+
+#### Notification hooks
+- Script callback and webhook POST on pipeline completion/failure
+- `on_finish` handler (fires on any completion) and `on_failure` handler
+  (fires only on failed/timeout)
+- Webhook payload includes per-phase token breakdown with cache tokens
+- Script invocation via `exec.Command` (no shell — injection-safe)
+- Default 10s webhook timeout, configurable
+- Best-effort: notification failures never block the pipeline
+- `soda validate` checks script paths and webhook URLs
+
+#### Token budget estimation
+- Warn-only prompt size estimation using bytes/3.3 heuristic
+- Configurable warning threshold (default 60K tokens), budget limit (default 80K)
+- `EstimatedPromptTokens` persisted in `PhaseState` for telemetry
+- Calibration data (`prompt_bytes` vs `actual_tokens_in`) logged to events
+- Events: `token_budget_warning`, `token_budget_calibration`
+
+#### Structured error messages
+- Structured error types for common pipeline failures: `RetryExhaustedError`,
+  `PhaseNotFoundError`, `WorktreeError`, `PromptError`, `LockError`
+- Tailored CLI recovery advice with specific commands for each error type
+
+#### PRPoller interface expansion
+- `PRStatus` expanded: `ReviewDecision` (raw GitHub value), `HeadSHA`
+- `CIStatus` expanded: `CommitSHA` for CI freshness checks
+- `MergePR` method with sentinel errors (`ErrMergeConflict`, `ErrPRClosed`)
+- Optional `MergeValidator` interface for forge-agnostic merge prerequisite checks
+- `MonitorState.MergePending` for auto-merge state tracking
+
+#### Prompt hash traceability
+- SHA-256 hash of rendered prompt content persisted in `PhaseState.PromptHash`
+- Composite hash for parallel-review phases (sorted reviewer hashes)
+- Visible in `soda history <ticket> --detail`
+
+#### Status budget display
+- `soda status` shows cost and budget columns per ticket
+- Budget shows "∞" when no limit is configured
+
+#### Smoke tests
+- Config discovery smoke test: validates full `loadConfig` search chain
+- Monitor phase smoke test: passive polling, PR state detection, comment response
+- Sandbox unit tests (no CGO): phase name sanitization, `claudeEnv`, config builder
+- Pipeline integration smoke test: happy path, rework loop, corrective loop, resume
+- Crash recovery tests: table-driven state manipulation for all phase boundaries
+
+### Fixed
+
+- **`gh --paginate --jq "flatten"` silently drops comments beyond first page** —
+  switched to `.[]` with `json.NewDecoder` for correct multi-page handling (#415)
+- **`exec.Command` without context can hang indefinitely** — threaded
+  `context.Context` through `RepoRoot`, `DeleteBranch`, `claudeEnv` (#416)
+- **`LogEvent` error silently discarded** — warn on first disk failure instead
+  of silently dropping all events (#417)
+- **Doctor config resolution missing `UserHomeDir` fallback** — extracted shared
+  `resolveConfigPath` helper matching `loadConfig` behavior (#398)
+- **`checkGhAuth` unconditionally optional** — now required when
+  `ticket_source: github` is configured (#399)
+- **Generic `review.md` prompt missing from embedded defaults** — external users
+  with custom `phases.yaml` failed at every review phase (#451)
+- **3-phase docs-only pipeline not committed** — embedded file had 2 phases,
+  tests expected 3 (#426)
+
+### Changed
+
+- Plan phase timeout: 5m → 8m (complex test specs need more planning time)
+- Verify phase timeout: 5m → 8m (6+ file changes need more verification time)
+- Implement phase timeout: 15m → 25m (large tickets with 7+ tasks)
+
 ## [0.1.0] - 2026-05-01
 
 Initial release of SODA — Session-Orchestrated Development Agent.
@@ -232,5 +316,6 @@ Initial release of SODA — Session-Orchestrated Development Agent.
 - Atomic state writes (`.tmp` → rename) with archive on re-run
   (`verify.json` → `verify.json.1`)
 
-[Unreleased]: https://github.com/decko/soda/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/decko/soda/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/decko/soda/compare/v0.1.1...v0.2.0
 [0.1.0]: https://github.com/decko/soda/releases/tag/v0.1.0
