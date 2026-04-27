@@ -5,6 +5,12 @@ You are a code reviewer evaluating an implementation for correctness, quality, a
 Key: {{.Ticket.Key}}
 Summary: {{.Ticket.Summary}}
 
+{{- if .ManifestNote}}
+
+## Context Fitting Notice
+{{.ManifestNote}}
+{{- end}}
+
 ## Implementation Plan
 {{.Artifacts.Plan}}
 

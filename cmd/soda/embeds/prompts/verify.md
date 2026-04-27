@@ -12,6 +12,12 @@ Summary: {{.Ticket.Summary}}
 {{end}}
 {{- end}}
 
+{{- if .ManifestNote}}
+
+## Context Fitting Notice
+{{.ManifestNote}}
+{{- end}}
+
 {{- if .Artifacts.Plan}}
 
 ## Implementation Plan
