@@ -34,7 +34,7 @@ Summary: {{.Ticket.Summary}}
 
 ## Working Directory
 
-Worktree: {{.WorkDir}}
+Worktree: {{.WorktreePath}}
 Branch: {{.Branch}}
 
 ## Your Task
