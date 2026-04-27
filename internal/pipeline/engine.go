@@ -87,9 +87,9 @@ func (c *EngineConfig) maxReworkCycles() int {
 	return DefaultMaxReworkCycles
 }
 
-// contextBudgetDefault returns the global default context budget from the
-// engine config's TokenBudget.WarnTokens. If not configured, returns 0
-// (disabled). Per-phase ContextBudget takes precedence over this default.
+// contextBudgetDefault returns the global default context budget in tokens.
+// If not configured (0), returns 0 (disabled). Per-phase ContextBudget
+// takes precedence over this default.
 func (e *Engine) contextBudgetDefault() int {
 	return e.config.ContextBudget
 }
