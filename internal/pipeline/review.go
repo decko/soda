@@ -424,6 +424,40 @@ func (e *Engine) runReviewer(ctx context.Context, phase PhaseConfig, reviewer Re
 		return
 	}
 
+	// Adaptive context fitting for reviewer prompts.
+	contextBudget := phase.ContextBudget
+	if contextBudget <= 0 {
+		contextBudget = e.contextBudgetDefault()
+	}
+	if contextBudget > 0 {
+		bytesPerToken := e.config.TokenBudget.BytesPerToken
+		if bytesPerToken <= 0 {
+			bytesPerToken = 3.3
+		}
+		fitted, reduced, fitErr := fitToBudget(loadResult.Content, promptData, phase.Name, contextBudget, bytesPerToken)
+		if fitErr != nil {
+			sendEvent(Event{
+				Phase: phase.Name,
+				Kind:  EventReviewerFailed,
+				Data:  map[string]any{"reviewer": reviewer.Name, "error": fitErr.Error()},
+			})
+			sendResult(reviewerResult{Name: reviewer.Name, Err: fmt.Errorf("fit context for %s/%s: %w", phase.Name, reviewer.Name, fitErr)})
+			return
+		}
+		if len(reduced) > 0 {
+			promptData = fitted
+			sendEvent(Event{
+				Phase: phase.Name,
+				Kind:  EventContextFitted,
+				Data: map[string]any{
+					"reviewer":       reviewer.Name,
+					"budget_tokens":  contextBudget,
+					"reduced_fields": reduced,
+				},
+			})
+		}
+	}
+
 	rendered, err := RenderPrompt(loadResult.Content, promptData)
 	if err != nil {
 		sendEvent(Event{
