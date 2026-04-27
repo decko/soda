@@ -620,7 +620,7 @@ When asked to triage an issue:
 5. Update the issue with:
    - `## Context to read` and `## Do NOT read` sections
    - `## Estimated token budget` with the breakdown
-   - Split proposal if estimate exceeds 140K
+   - Split proposal if estimate exceeds 70K
    - Dependencies on other issues
 6. Remove the `triage needed` label once complete
 
