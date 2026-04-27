@@ -188,12 +188,14 @@ func TestFitToBudget_ReductionOrderForPatch(t *testing.T) {
 	data.SiblingContext = strings.Repeat("s", 3000)
 
 	// Compute budget with DiffContext removed + manifest overhead.
+	// Add manifestReserveTokens headroom so the loop doesn't over-reduce
+	// into SiblingContext while reserving space for the manifest note.
 	expected := data
 	expected.DiffContext = ""
 	expected.ContextFitted = true
 	expected.ManifestNote = "[context-fitted] The following sections were reduced to fit the context window: DiffContext. Use file-read and search tools to retrieve any missing context you need."
 	renderedExpected, _ := RenderPrompt(simpleTmpl, expected)
-	budget := estimateTokens(len(renderedExpected), 3.3) + 5
+	budget := estimateTokens(len(renderedExpected), 3.3) + manifestReserveTokens + 5
 
 	fitted, reduced, err := fitToBudget(simpleTmpl, data, "patch", budget, 3.3)
 	if err != nil {
@@ -452,6 +454,42 @@ func TestFitToBudget_MultipleReductions(t *testing.T) {
 	}
 	if fitted.ManifestNote == "" {
 		t.Error("ManifestNote should be set")
+	}
+}
+
+func TestFitToBudget_ManifestReservePreventsOvershoot(t *testing.T) {
+	// Regression: when the last reduction step barely brings the prompt
+	// under budget, the manifest note (~30 tokens) can push it back over.
+	// The fix reserves headroom for the manifest during the loop, and
+	// resumes reducing if the manifest still overshoots.
+	data := makeData()
+	data.SiblingContext = strings.Repeat("s", 2000)
+	data.Context.ProjectContext = strings.Repeat("p", 2000)
+
+	// Set budget so that removing SiblingContext alone brings us under the
+	// *real* budget but NOT under (budget - manifestReserve). This means
+	// the loop will also remove Context. Without the reserve fix, removing
+	// only SiblingContext + injecting the manifest would overshoot.
+	withoutSiblings := data
+	withoutSiblings.SiblingContext = ""
+	renderedWithout, _ := RenderPrompt(simpleTmpl, withoutSiblings)
+	tokensWithout := estimateTokens(len(renderedWithout), 3.3)
+	// Budget = exact fit without siblings (no manifest headroom).
+	budget := tokensWithout + 5
+
+	fitted, reduced, err := fitToBudget(simpleTmpl, data, "implement", budget, 3.3)
+	if err != nil {
+		t.Fatalf("expected no error (should continue reducing after manifest), got: %v", err)
+	}
+	if !fitted.ContextFitted {
+		t.Error("ContextFitted should be true")
+	}
+	// Should have reduced at least SiblingContext, possibly Context too.
+	if len(reduced) == 0 {
+		t.Fatal("expected at least one reduction")
+	}
+	if reduced[0] != "SiblingContext" {
+		t.Errorf("first reduction should be SiblingContext, got %v", reduced)
 	}
 }
 

@@ -19,6 +19,13 @@ const truncateKeepBytes = 500
 // trimmed and to use tools to retrieve missing context.
 const manifestTemplate = "[context-fitted] The following sections were reduced to fit the context window: %s. Use file-read and search tools to retrieve any missing context you need."
 
+// manifestReserveTokens is the number of tokens reserved during the
+// reduction loop to accommodate the manifest note that is injected after
+// fitting. This prevents a false ContextBudgetError when the last
+// reduction step barely brings the prompt under budget but the manifest
+// overhead pushes it back over.
+const manifestReserveTokens = 150
+
 // reductionStep defines a single reducible field and how to clear it.
 // The label identifies the field for the manifest note.
 type reductionStep struct {
@@ -274,7 +281,17 @@ func fitToBudget(tmpl string, data PromptData, phase string, budgetTokens int, b
 	steps := phaseReductionOrder(phase)
 	var reduced []string
 
-	for _, step := range steps {
+	// Reserve headroom for the manifest note that will be injected after
+	// reductions. This prevents the manifest from pushing the prompt over
+	// budget when the last reduction step barely fit.
+	loopBudget := budgetTokens - manifestReserveTokens
+	if loopBudget < 1 {
+		loopBudget = 1
+	}
+
+	stepIdx := 0
+	for ; stepIdx < len(steps); stepIdx++ {
+		step := steps[stepIdx]
 		if !step.applies(&fitted) {
 			continue
 		}
@@ -288,7 +305,8 @@ func fitToBudget(tmpl string, data PromptData, phase string, budgetTokens int, b
 		}
 
 		currentTokens = estimateTokens(len(rendered), bytesPerToken)
-		if currentTokens <= budgetTokens {
+		if currentTokens <= loopBudget {
+			stepIdx++ // mark this step as consumed before breaking
 			break
 		}
 	}
@@ -304,6 +322,27 @@ func fitToBudget(tmpl string, data PromptData, phase string, budgetTokens int, b
 			return data, nil, fmt.Errorf("fitToBudget: render with manifest: %w", err)
 		}
 		currentTokens = estimateTokens(len(rendered), bytesPerToken)
+
+		// If the manifest pushed us over the real budget, continue
+		// reducing from where we left off.
+		for ; currentTokens > budgetTokens && stepIdx < len(steps); stepIdx++ {
+			step := steps[stepIdx]
+			if !step.applies(&fitted) {
+				continue
+			}
+
+			step.reduce(&fitted)
+			reduced = append(reduced, step.label)
+
+			// Re-generate manifest with updated list.
+			fitted.ManifestNote = fmt.Sprintf(manifestTemplate, strings.Join(reduced, ", "))
+
+			rendered, err = RenderPrompt(tmpl, fitted)
+			if err != nil {
+				return data, nil, fmt.Errorf("fitToBudget: render after reducing %s: %w", step.label, err)
+			}
+			currentTokens = estimateTokens(len(rendered), bytesPerToken)
+		}
 	}
 
 	if currentTokens > budgetTokens {
