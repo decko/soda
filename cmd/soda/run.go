@@ -40,6 +40,7 @@ type pipelineOpts struct {
 	modeChanged     bool // true when --mode was explicitly passed
 	fromPhase       string
 	dryRun          bool
+	estimate        bool
 	useMock         bool
 	useTUI          bool
 }
@@ -51,6 +52,7 @@ func pipelineOptsFromCmd(cmd *cobra.Command, ticketKey string) pipelineOpts {
 	mode, _ := cmd.Flags().GetString("mode")
 	fromPhase, _ := cmd.Flags().GetString("from")
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	estimate, _ := cmd.Flags().GetBool("estimate")
 	useMock, _ := cmd.Flags().GetBool("mock")
 	useTUI, _ := cmd.Flags().GetBool("tui")
 
@@ -62,6 +64,7 @@ func pipelineOptsFromCmd(cmd *cobra.Command, ticketKey string) pipelineOpts {
 		modeChanged:     cmd.Flags().Changed("mode"),
 		fromPhase:       fromPhase,
 		dryRun:          dryRun,
+		estimate:        estimate,
 		useMock:         useMock,
 		useTUI:          useTUI,
 	}
@@ -88,6 +91,7 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().String("from", "", "resume from phase (or 'last')")
 	cmd.Flags().String("pipeline", "", "pipeline name (default: phases.yaml)")
 	cmd.Flags().Bool("dry-run", false, "render prompts without executing")
+	cmd.Flags().Bool("estimate", false, "show per-phase token estimates (implies --dry-run)")
 	cmd.Flags().Bool("mock", false, "use mock runner for testing")
 	cmd.Flags().Bool("tui", false, "use interactive TUI display")
 	cmd.Flags().String("query", "", "search filter for listing tickets (picker mode)")
@@ -106,7 +110,8 @@ func runPipeline(cfg *config.Config, opts pipelineOpts) error {
 	defer cancel()
 
 	ticketKey := opts.ticketKey
-	dryRun := opts.dryRun
+	estimate := opts.estimate
+	dryRun := opts.dryRun || estimate
 
 	// Fetch ticket
 	source, err := createTicketSource(cfg)
@@ -174,7 +179,7 @@ func runPipeline(cfg *config.Config, opts pipelineOpts) error {
 
 	// Dry-run mode
 	if dryRun {
-		return runDryRun(cfg, pl, loader, ticketData)
+		return runDryRun(cfg, pl, loader, ticketData, estimate)
 	}
 
 	// Resolve working directory to the main repo root so worktrees,
@@ -878,7 +883,7 @@ func promptConfirm(ctx context.Context) bool {
 	}
 }
 
-func runDryRun(cfg *config.Config, pl *pipeline.PhasePipeline, loader *pipeline.PromptLoader, ticketData pipeline.TicketData) error {
+func runDryRun(cfg *config.Config, pl *pipeline.PhasePipeline, loader *pipeline.PromptLoader, ticketData pipeline.TicketData, estimate bool) error {
 	promptData := pipeline.PromptData{
 		Ticket:  ticketData,
 		Config:  buildPromptConfig(cfg),
@@ -892,6 +897,23 @@ func runDryRun(cfg *config.Config, pl *pipeline.PhasePipeline, loader *pipeline.
 			loadArtifacts(state, &promptData, pl)
 		}
 	}
+
+	// Resolve bytesPerToken from config, defaulting to 3.3.
+	bytesPerToken := cfg.Limits.TokenBudget.BytesPerToken
+	if bytesPerToken <= 0 {
+		bytesPerToken = 3.3
+	}
+
+	// Default warn threshold for --estimate display (60,000 tokens).
+	// The config value (0 = disabled at runtime) is not meaningful for
+	// display, so we use 60K as the display-only default.
+	const defaultWarnTokens = 60000
+	warnTokens := cfg.Limits.TokenBudget.WarnTokens
+	if warnTokens <= 0 {
+		warnTokens = defaultWarnTokens
+	}
+
+	var totalTokens int64
 
 	for _, phase := range pl.Phases {
 		tmplContent, err := loader.Load(phase.Prompt)
@@ -910,12 +932,53 @@ func runDryRun(cfg *config.Config, pl *pipeline.PhasePipeline, loader *pipeline.
 		fmt.Println(rendered)
 		fmt.Printf("\n=== Tools ===\n%s\n", strings.Join(phase.Tools, ", "))
 		fmt.Printf("\n=== Output Schema ===\n%s\n", phase.Schema)
+
+		if estimate {
+			estimatedTokens := int64(float64(len(rendered)) / bytesPerToken)
+			totalTokens += estimatedTokens
+			warning := ""
+			if estimatedTokens > int64(warnTokens) {
+				warning = "  ⚠️  exceeds warn threshold"
+			}
+			fmt.Printf("\n=== Token Estimate ===\n")
+			fmt.Printf("  Prompt bytes:     %s\n", formatTokenCount(int64(len(rendered))))
+			fmt.Printf("  Estimated tokens: %s%s\n", formatTokenCount(estimatedTokens), warning)
+		}
+
 		fmt.Println()
 		fmt.Println("---")
 		fmt.Println()
 	}
 
+	if estimate {
+		fmt.Printf("=== Token Summary ===\n")
+		fmt.Printf("  Total estimated tokens: %s\n", formatTokenCount(totalTokens))
+		fmt.Printf("  Bytes-per-token ratio:  %.1f\n", bytesPerToken)
+		fmt.Printf("  Warn threshold:         %s tokens/phase\n", formatTokenCount(int64(warnTokens)))
+		fmt.Println()
+	}
+
 	return nil
+}
+
+// formatTokenCount formats an integer with comma separators for readability.
+// For example, 42500 becomes "42,500".
+func formatTokenCount(n int64) string {
+	if n < 0 {
+		return "-" + formatTokenCount(-n)
+	}
+	s := fmt.Sprintf("%d", n)
+	if len(s) <= 3 {
+		return s
+	}
+	var result []byte
+	for i, ch := range s {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			result = append(result, ',')
+		}
+		result = append(result, byte(ch))
+	}
+	return string(result)
 }
 
 // formatDuration formats a millisecond duration into a human-readable string.
