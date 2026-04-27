@@ -97,6 +97,7 @@ const (
 	EventAutoMergeBlocked         = "auto_merge_blocked"
 	EventAutoMergeDryRun          = "auto_merge_dry_run"
 	EventRebaseConflict           = "rebase_conflict"
+	EventContextFitted            = "context_fitted"
 )
 
 // FormatEvent formats an event as a compact, human-readable line:
