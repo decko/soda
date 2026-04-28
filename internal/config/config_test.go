@@ -378,6 +378,59 @@ func TestMarshalRoundTrip_MonitorConfig(t *testing.T) {
 	}
 }
 
+func TestExpandHome(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("cannot determine home directory")
+	}
+
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"~/bin/get-key", filepath.Join(home, "bin/get-key")},
+		{"~/.local/bin/helper", filepath.Join(home, ".local/bin/helper")},
+		{"/usr/local/bin/helper", "/usr/local/bin/helper"},
+		{"relative/path", "relative/path"},
+		{"", ""},
+		{"~", "~"},                 // bare ~ without slash is NOT expanded
+		{"~user/bin", "~user/bin"}, // ~user syntax is NOT expanded
+	}
+
+	for _, tt := range tests {
+		got := expandHome(tt.input)
+		if got != tt.want {
+			t.Errorf("expandHome(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestLoad_TildeExpansion(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("cannot determine home directory")
+	}
+
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "soda.yaml")
+	content := `auth:
+  api_key_helper: ~/.local/bin/get-key
+`
+	if err := os.WriteFile(cfgFile, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(cfgFile)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	want := filepath.Join(home, ".local/bin/get-key")
+	if cfg.Auth.ApiKeyHelper != want {
+		t.Errorf("Auth.ApiKeyHelper = %q, want %q (tilde should be expanded)", cfg.Auth.ApiKeyHelper, want)
+	}
+}
+
 func TestRepoConfigFieldParity(t *testing.T) {
 	configType := reflect.TypeOf(RepoConfig{})
 	pipelineType := reflect.TypeOf(pipeline.RepoConfig{})

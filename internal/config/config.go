@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -258,7 +259,24 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("config: parse %s: %w", path, err)
 	}
 
+	// Expand ~ prefix in paths that users commonly set to home-relative values.
+	cfg.Auth.ApiKeyHelper = expandHome(cfg.Auth.ApiKeyHelper)
+
 	return &cfg, nil
+}
+
+// expandHome expands a leading "~/" in path to the current user's home
+// directory. Go does not perform shell-style tilde expansion, so paths
+// like "~/bin/get-key" would fail at runtime without this helper. If the
+// home directory cannot be determined, the path is returned unchanged.
+func expandHome(path string) string {
+	if strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			return filepath.Join(home, path[2:])
+		}
+	}
+	return path
 }
 
 // DefaultPath returns the default config file path: ~/.config/soda/config.yaml.
