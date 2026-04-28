@@ -138,9 +138,12 @@ func TestIntegration_ProxyRoundTrip(t *testing.T) {
 	}
 
 	// Mock upstream: echoes back a response with usage for token metering.
+	var mu sync.Mutex
 	var receivedAPIKey string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
 		receivedAPIKey = r.Header.Get("x-api-key")
+		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		resp := map[string]any{
 			"id":    "msg_test123",
@@ -277,8 +280,11 @@ func TestIntegration_ProxyRoundTrip(t *testing.T) {
 	}
 
 	// Verify proxy injected the real API key into the upstream request.
-	if receivedAPIKey != "sk-test-integration-key" {
-		t.Errorf("upstream received x-api-key = %q, want %q", receivedAPIKey, "sk-test-integration-key")
+	mu.Lock()
+	gotKey := receivedAPIKey
+	mu.Unlock()
+	if gotKey != "sk-test-integration-key" {
+		t.Errorf("upstream received x-api-key = %q, want %q", gotKey, "sk-test-integration-key")
 	}
 
 	// Verify token metering was updated.
