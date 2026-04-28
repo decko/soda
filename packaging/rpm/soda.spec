@@ -77,7 +77,7 @@ install -Dpm 0644 soda.fish %{buildroot}%{_datadir}/fish/vendor_completions.d/so
 
 %files
 %license LICENSE
-%doc README.md CHANGELOG.md
+%doc README.md CHANGELOG.md config.example.yaml
 %{_bindir}/soda
 %{_datadir}/bash-completion/completions/soda
 %{_datadir}/zsh/site-functions/_soda
