@@ -24,6 +24,7 @@ type RunOpts struct {
 	Model        string        // model to use
 	Timeout      time.Duration // phase timeout
 	OnChunk      func(string)  // called for each streamed output line; may be nil
+	ApiKeyHelper string        // path to a script that prints an API key to stdout
 }
 
 // RunResult holds the parsed response from a phase execution.

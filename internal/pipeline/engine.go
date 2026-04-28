@@ -67,6 +67,7 @@ type EngineConfig struct {
 	TokenBudget            TokenBudgetConfig // prompt token budget estimation; zero value disables checks
 	ContextBudget          int               // global default context budget in tokens; 0 disables adaptive fitting
 	Notify                 NotifyConfig      // notification hooks fired on pipeline completion; zero value disables
+	ApiKeyHelper           string            // path to script that prints an API key; wired into runner.RunOpts
 	MergeMethod            string            // merge method: "merge", "squash", "rebase"; defaults to "squash"
 	MergeLabels            []string          // required PR labels before auto-merge proceeds
 	AutoMergeTimeout       time.Duration     // max wait after approval before giving up; defaults to 30m
@@ -797,6 +798,7 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 		Model:        model,
 		Timeout:      phase.Timeout.Duration,
 		OnChunk:      e.makeOnChunk(ctx, phase.Name),
+		ApiKeyHelper: e.config.ApiKeyHelper,
 	}
 
 	// Run with retry.
