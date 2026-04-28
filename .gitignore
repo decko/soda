@@ -5,6 +5,9 @@ dist/
 # State
 .soda/
 
+# Claude config
+.claude/
+
 # Config (contains credentials)
 config.yaml
 

@@ -40,6 +40,7 @@ phases:
   - name: implement
     prompt: prompts/implement.md
     # schema: generated from schemas.ImplementOutput (go generate ./schemas/...)
+    model: claude-opus-4-6
     tools:
       - Read
       - Write
@@ -105,6 +106,7 @@ phases:
   - name: review
     type: parallel-review
     # schema: generated from schemas.ReviewOutput (go generate ./schemas/...)
+    model: claude-opus-4-6
     tools:
       - Read
       - Glob

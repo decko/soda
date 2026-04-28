@@ -9,8 +9,8 @@ github:
 # Default execution mode
 mode: autonomous
 
-# Model
-model: claude-opus-4-6
+# Model — Sonnet as default, Opus for implement and review only
+model: claude-sonnet-4-6
 
 # Sandbox
 sandbox:
@@ -22,7 +22,7 @@ sandbox:
 
 # Budget
 limits:
-  max_cost_per_ticket: 15.00
+  max_cost_per_ticket: 25.00
   max_cost_per_phase: 8.00
 
 # Worktrees
