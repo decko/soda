@@ -33,6 +33,7 @@ type doctorEnv struct {
 	LoadConfig    func(path string) (*config.Config, error)
 	UserConfigDir func() (string, error)
 	UserHomeDir   func() (string, error)
+	Getenv        func(key string) string // injectable os.Getenv for testable env checks
 
 	// ParsedConfig is populated by checkConfigValid on success.
 	// Downstream checks use it to adjust their required status.
@@ -58,7 +59,17 @@ func defaultDoctorEnv() *doctorEnv {
 		LoadConfig:    config.Load,
 		UserConfigDir: os.UserConfigDir,
 		UserHomeDir:   os.UserHomeDir,
+		Getenv:        os.Getenv,
 	}
+}
+
+// getenv returns the value of the environment variable key using the
+// injected Getenv function, falling back to os.Getenv when not set.
+func (e *doctorEnv) getenv(key string) string {
+	if e.Getenv != nil {
+		return e.Getenv(key)
+	}
+	return os.Getenv(key)
 }
 
 func newDoctorCmd() *cobra.Command {
@@ -89,6 +100,7 @@ func runDoctor(w io.Writer, env *doctorEnv) error {
 		checkClaudeVersion,
 		checkConfig,
 		checkConfigValid,
+		checkClaudeAuth,
 		checkGh,
 		checkGhAuth,
 		checkBranchProtection,
@@ -293,6 +305,64 @@ func compareSemver(a, b string) int {
 		}
 	}
 	return 0
+}
+
+// checkClaudeAuth verifies that Claude Code has a valid authentication
+// method configured. The precedence chain mirrors how soda resolves
+// credentials at runtime:
+//
+//  1. Proxy enabled in config → pass (proxy handles credentials)
+//  2. ANTHROPIC_API_KEY env var set → pass
+//  3. CLAUDE_CODE_USE_VERTEX env var set → pass (Vertex/GCP auth)
+//  4. auth.api_key_helper in config → pass
+//  5. None of the above → fail
+//
+// This check is optional (warning-only) because authentication can also
+// be configured via Claude Code's own settings files or login flow.
+func checkClaudeAuth(env *doctorEnv) checkResult {
+	// 1. Proxy enabled — credentials are managed by the proxy.
+	if env.ParsedConfig != nil && env.ParsedConfig.Sandbox.Proxy.Enabled {
+		return checkResult{
+			name:   "claude-auth",
+			passed: true,
+			detail: "proxy enabled (credentials managed by proxy)",
+		}
+	}
+
+	// 2. ANTHROPIC_API_KEY env var.
+	if env.getenv("ANTHROPIC_API_KEY") != "" {
+		return checkResult{
+			name:   "claude-auth",
+			passed: true,
+			detail: "ANTHROPIC_API_KEY is set",
+		}
+	}
+
+	// 3. Vertex / GCP auth.
+	if env.getenv("CLAUDE_CODE_USE_VERTEX") != "" {
+		return checkResult{
+			name:   "claude-auth",
+			passed: true,
+			detail: "CLAUDE_CODE_USE_VERTEX is set (Vertex AI auth)",
+		}
+	}
+
+	// 4. api_key_helper in config.
+	if env.ParsedConfig != nil && env.ParsedConfig.Auth.ApiKeyHelper != "" {
+		return checkResult{
+			name:   "claude-auth",
+			passed: true,
+			detail: fmt.Sprintf("api_key_helper configured: %s", env.ParsedConfig.Auth.ApiKeyHelper),
+		}
+	}
+
+	// 5. No auth method found.
+	return checkResult{
+		name:   "claude-auth",
+		passed: false,
+		detail: "no authentication method detected",
+		fix:    "set ANTHROPIC_API_KEY, configure auth.api_key_helper in soda.yaml, enable sandbox proxy, or run: claude login",
+	}
 }
 
 // checkGh verifies that the GitHub CLI is available in PATH.
