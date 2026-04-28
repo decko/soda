@@ -5,6 +5,7 @@ package sandbox
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -97,6 +98,37 @@ func (r *Runner) Run(ctx context.Context, opts runner.RunOpts) (*runner.RunResul
 		// No need for deferred Remove — tmpDir cleanup handles it.
 	}
 
+	// When ApiKeyHelper is set, write a settings JSON file in tmpDir so
+	// Claude Code picks up the apiKeyHelper configuration. Also add the
+	// helper script's parent directory to extra read paths so the sandbox
+	// allows the CLI to execute it.
+	var settingsPath string
+	var extraReadForHelper []string
+	if opts.ApiKeyHelper != "" {
+		settingsData, jsonErr := json.Marshal(map[string]string{
+			"apiKeyHelper": opts.ApiKeyHelper,
+		})
+		if jsonErr != nil {
+			return nil, fmt.Errorf("sandbox: marshal settings JSON: %w", jsonErr)
+		}
+		sf, sfErr := os.CreateTemp(tmpDir, ".soda-settings-*.json")
+		if sfErr != nil {
+			return nil, fmt.Errorf("sandbox: create settings file: %w", sfErr)
+		}
+		settingsPath = sf.Name()
+		if _, wErr := sf.Write(settingsData); wErr != nil {
+			sf.Close()
+			return nil, fmt.Errorf("sandbox: write settings file: %w", wErr)
+		}
+		sf.Close()
+
+		// Allow the sandbox to read the helper script's parent directory.
+		helperDir := filepath.Dir(opts.ApiKeyHelper)
+		if filepath.IsAbs(helperDir) {
+			extraReadForHelper = append(extraReadForHelper, helperDir)
+		}
+	}
+
 	// Build Claude CLI args via exported BuildArgs.
 	var budgetPtr *float64
 	if opts.MaxBudgetUSD > 0 {
@@ -104,6 +136,7 @@ func (r *Runner) Run(ctx context.Context, opts runner.RunOpts) (*runner.RunResul
 	}
 	claudeOpts := claude.RunOpts{
 		SystemPromptPath: sysPromptPath,
+		SettingsPath:     settingsPath,
 		OutputSchema:     opts.OutputSchema,
 		AllowedTools:     opts.AllowedTools,
 		MaxBudgetUSD:     budgetPtr,
@@ -114,8 +147,11 @@ func (r *Runner) Run(ctx context.Context, opts runner.RunOpts) (*runner.RunResul
 	// Append user prompt as positional arg (stdin workaround — see issue #2 Fix 4).
 	args = append(args, "-p", opts.UserPrompt)
 
-	// Build sandbox profile.
-	sp := buildSandboxPaths(opts.WorkDir, tmpDir, r.claudeRead, r.config.ExtraReadPaths, r.config.ExtraWritePaths)
+	// Build sandbox profile. Include helper script's parent dir in extra read paths.
+	// Copy the slice to avoid mutating r.config.ExtraReadPaths across calls.
+	combinedExtraRead := append([]string{}, r.config.ExtraReadPaths...)
+	combinedExtraRead = append(combinedExtraRead, extraReadForHelper...)
+	sp := buildSandboxPaths(opts.WorkDir, tmpDir, r.claudeRead, combinedExtraRead, r.config.ExtraWritePaths)
 
 	useNetNS := r.config.UseNetNS
 	var llmProxy *proxy.Proxy
