@@ -55,7 +55,10 @@ if [ -f "$lib_path" ] && file "$lib_path" | grep -q "ASCII"; then
         exit 1
     }
     chmod -R u+w "$(dirname "$lib_path")"
-    curl -sL "$download_url" -o "$lib_path"
+    curl -sfL "$download_url" -o "$lib_path" || {
+        echo "ERROR: Failed to download libarapuca.a from LFS"
+        exit 1
+    }
     echo "Fetched libarapuca.a ($(wc -c < "$lib_path") bytes)"
 fi
 
