@@ -54,12 +54,12 @@ jobs:
 
       - name: Install Rust toolchain (cgo builds)
         if: matrix.cgo == '1'
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
 
       - name: Build and install libarapuca (cgo builds)
         if: matrix.cgo == '1'
         run: |
-          git clone --depth 1 https://github.com/sergio-correia/arapuca /tmp/arapuca
+          git clone --depth 1 --branch v0.1.1 https://github.com/sergio-correia/arapuca /tmp/arapuca
           cd /tmp/arapuca
           cargo install cbindgen
           make install PREFIX=$HOME/.local
