@@ -129,3 +129,55 @@ jobs:
 
           See checksums.txt for SHA-256 verification." \
             dist/*
+
+  copr:
+    name: COPR RPM Build
+    needs: publish
+    if: ${{ secrets.COPR_API_TOKEN != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        spec:
+          - soda
+          - soda-minimal
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install RPM tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm
+
+      - name: Install copr-cli
+        run: pip3 install copr-cli
+
+      - name: Create source tarball
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          git archive --format=tar.gz --prefix="soda-${version}/" \
+            -o "soda-${version}.tar.gz" HEAD
+
+      - name: Build SRPM
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p rpmbuild/{SOURCES,SRPMS,SPECS}
+          cp "soda-${version}.tar.gz" rpmbuild/SOURCES/
+          cp packaging/rpm/${{ matrix.spec }}.spec rpmbuild/SPECS/
+          rpmbuild -bs \
+            --define "_topdir $(pwd)/rpmbuild" \
+            --define "soda_version ${version}" \
+            rpmbuild/SPECS/${{ matrix.spec }}.spec
+
+      - name: Configure copr-cli
+        env:
+          COPR_API_TOKEN: ${{ secrets.COPR_API_TOKEN }}
+        run: |
+          mkdir -p ~/.config
+          echo "$COPR_API_TOKEN" > ~/.config/copr
+
+      - name: Submit to COPR
+        run: |
+          srpm=$(find rpmbuild/SRPMS -name '*.src.rpm' | head -1)
+          copr-cli build soda "$srpm"
