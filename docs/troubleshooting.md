@@ -390,6 +390,108 @@ soda run <ticket> --from monitor
 
 ---
 
+## 11. Token estimation and prompt sizing
+
+SODA provides several tools to understand how large your prompts are before
+(and after) execution. This is useful for diagnosing context-window pressure,
+splitting oversized tickets, and tuning `token_budget` settings.
+
+### Quick estimate with `--estimate`
+
+The `--estimate` flag on `soda run` renders all phase prompts and prints a
+per-phase token estimate plus a total:
+
+```bash
+soda run 42 --estimate
+```
+
+`--estimate` implies `--dry-run` — no phases are executed. Sample output:
+
+```
+=== System Prompt (triage) ===
+...
+
+=== Token Estimate ===
+  Prompt bytes:     8,250
+  Estimated tokens: 2,500
+
+---
+
+=== System Prompt (implement) ===
+...
+
+=== Token Estimate ===
+  Prompt bytes:     198,000
+  Estimated tokens: 60,000  ⚠️  exceeds warn threshold
+
+---
+
+=== Token Summary ===
+  Total estimated tokens: 85,400
+  Bytes-per-token ratio:  3.3
+  Warn threshold:         60,000 tokens/phase
+```
+
+The ⚠️ marker appears when a phase exceeds the warn threshold (default:
+60,000 tokens). Adjust the threshold in `soda.yaml`:
+
+```yaml
+limits:
+  token_budget:
+    warn_tokens: 80000       # per-phase warning threshold
+    bytes_per_token: 3.3     # estimation ratio (lower = more conservative)
+```
+
+### Runtime token budget warnings
+
+When `warn_tokens` is set in `soda.yaml`, the engine emits a
+`token_budget_warning` event before each phase if the estimated prompt tokens
+exceed the threshold. These warnings appear in the CLI output:
+
+```
+  ⚠️  Prompt size warning: ~65,000 tokens estimated (limit: 60,000)
+```
+
+This is a **warn-only** check — it never blocks execution. To see warnings
+after a run, inspect the event log:
+
+```bash
+soda log <ticket> | grep token_budget
+```
+
+### Post-run token data
+
+After a phase completes, actual token counts (input, output, cache) are
+persisted in `.soda/<ticket>/meta.json` under each phase's state:
+
+```bash
+soda history <ticket> --detail
+```
+
+Compare estimated tokens (from `--estimate`) against actual `tokens_in` to
+calibrate the `bytes_per_token` ratio for your codebase.
+
+### Estimation tools summary
+
+| Tool | When to use | What it shows |
+|------|-------------|---------------|
+| `soda run <ticket> --estimate` | Before running | Per-phase estimated tokens, warn markers |
+| `token_budget.warn_tokens` in `soda.yaml` | During runs | Runtime warnings when prompts are large |
+| `soda history <ticket> --detail` | After running | Actual token counts per phase |
+| `soda log <ticket>` | After running | Token budget events in the event stream |
+
+### When to split a ticket
+
+If `--estimate` shows a phase exceeding 60,000 tokens, consider:
+
+1. Adding a `## Do NOT read` section to the ticket to reduce read surface.
+2. Splitting the ticket into smaller sub-issues (see the
+   [ticket sizing guide in AGENTS.md](../AGENTS.md)).
+3. Raising `warn_tokens` if the estimate is just above the threshold and the
+   phase completes successfully.
+
+---
+
 ## Still stuck?
 
 - Run `soda doctor` — it catches most environment problems automatically.

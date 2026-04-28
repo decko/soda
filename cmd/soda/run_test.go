@@ -1081,3 +1081,30 @@ func TestHandleEvent_NotifyFailed(t *testing.T) {
 		t.Errorf("expected output to contain error message, got %q", output)
 	}
 }
+
+func TestFormatTokenCount(t *testing.T) {
+	tests := []struct {
+		name string
+		n    int64
+		want string
+	}{
+		{"zero", 0, "0"},
+		{"single_digit", 5, "5"},
+		{"two_digits", 42, "42"},
+		{"three_digits", 999, "999"},
+		{"four_digits", 1000, "1,000"},
+		{"typical_estimate", 42500, "42,500"},
+		{"sixty_thousand", 60000, "60,000"},
+		{"millions", 1234567, "1,234,567"},
+		{"negative", -42500, "-42,500"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatTokenCount(tt.n)
+			if got != tt.want {
+				t.Errorf("formatTokenCount(%d) = %q, want %q", tt.n, got, tt.want)
+			}
+		})
+	}
+}

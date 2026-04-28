@@ -503,9 +503,9 @@ Every output must be reviewed before moving to the next step. Reviews run as **s
 
 | Ticket size | Review requirement |
 |-------------|-------------------|
-| Small (< 100K budget) | Skip reviews — the fix is trivial |
-| Medium (100-140K) | Review after implementation (one round) |
-| Large (> 140K) | Review after spec AND after implementation |
+| Small (< 50K budget) | Skip reviews — the fix is trivial |
+| Medium (50-70K) | Review after implementation (one round) |
+| Large (> 70K) | Review after spec AND after implementation |
 
 ### How to review
 
@@ -539,7 +539,18 @@ estimated = (read_lines × 5) + (write_lines × 8) + (packages × 5000) + 20000 
 
 ## Ticket sizing
 
-Each ticket targets a **160K token working budget** (out of 256K context, after system prompt and safety buffer).
+Each ticket targets an **80K token working budget** (out of 200K context, after system prompt, tool overhead, and safety buffer).
+
+### Estimation tools
+
+| Tool | When | What it shows |
+|------|------|---------------|
+| `soda run <ticket> --estimate` | Before running | Per-phase estimated tokens, warn markers |
+| `token_budget.warn_tokens` in `soda.yaml` | During runs | Runtime warnings when prompts are large |
+| `soda history <ticket> --detail` | After running | Actual token counts per phase |
+| `soda log <ticket>` | After running | Token budget events in the event stream |
+
+Run `soda run <ticket> --estimate` before every first run to sanity-check prompt sizes.
 
 ### Estimate three factors
 
@@ -558,15 +569,15 @@ estimated = (read_lines × 5) + (write_lines × 8) + (packages × 5000) + 20000 
 
 | Estimate | Action |
 |----------|--------|
-| < 100K | Ship as one issue |
-| 100-140K | One issue, add explicit "do NOT read" list to save tokens |
-| 140-160K | Split unless the work is truly indivisible |
-| > 160K | Must split |
+| < 50K | Ship as one issue |
+| 50-70K | One issue, add explicit "do NOT read" list to save tokens |
+| 70-80K | Split unless the work is truly indivisible |
+| > 80K | Must split |
 
 ### Split when
 
 - Multiple independent packages to create (each package is a natural boundary)
-- Read surface > 50K tokens (~10K lines)
+- Read surface > 25K tokens (~5K lines)
 - More than 3 integration points (wiring 4+ packages)
 - Mixed read-heavy and write-heavy work
 - High test failure risk (complex wiring, external tools)
@@ -575,7 +586,7 @@ estimated = (read_lines × 5) + (write_lines × 8) + (packages × 5000) + 20000 
 
 - The work is tightly coupled (splitting creates stubs)
 - Read surface is small but write surface is large (greenfield is cheap)
-- Under 100K (splitting adds overhead for no benefit)
+- Under 50K (splitting adds overhead for no benefit)
 
 ### Ticket format
 
@@ -593,7 +604,7 @@ Every ticket should include:
 - Write: ~NK
 - Tools: ~15K
 - Buffer: ~30K
-- Total: ~NK / 160K available
+- Total: ~NK / 80K available
 ```
 
 ## Triaging issues
@@ -609,7 +620,7 @@ When asked to triage an issue:
 5. Update the issue with:
    - `## Context to read` and `## Do NOT read` sections
    - `## Estimated token budget` with the breakdown
-   - Split proposal if estimate exceeds 140K
+   - Split proposal if estimate exceeds 70K
    - Dependencies on other issues
 6. Remove the `triage needed` label once complete
 
@@ -639,6 +650,7 @@ If yes, include a "Docs to update" section in the issue body listing the files t
 | `soda run <ticket> --pipeline <name>` | Run with a named pipeline (quick-fix, docs-only, or custom) |
 | `soda run <ticket> --from <phase>` | Resume from a specific phase (`last` auto-resolves to last running/failed) |
 | `soda run <ticket> --dry-run` | Render prompts without executing |
+| `soda run <ticket> --estimate` | Dry-run with per-phase token estimates |
 | `soda run <ticket> --mode checkpoint` | Pause after each phase for confirmation |
 | `soda status` | Show active and recent pipelines |
 | `soda history <ticket>` | Show phase details for a ticket |
