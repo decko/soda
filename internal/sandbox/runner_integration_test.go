@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -425,8 +426,12 @@ func testIsolationLandlock(t *testing.T) {
 }
 
 // testIsolationNetworkNamespace verifies that network namespace isolation
-// prevents outbound network access. The subprocess attempts to connect
-// to a TCP port which should fail when UseNetNS is enabled.
+// prevents outbound network access. A local TCP listener is started on the
+// host, and the sandboxed process attempts to connect to it. In a proper
+// network namespace the process has an isolated network stack and cannot
+// reach the host's loopback, so the connection must fail. Using a local
+// listener eliminates false positives from CI firewalls that block external
+// traffic and avoids depending on external hosts like 1.1.1.1.
 func testIsolationNetworkNamespace(t *testing.T) {
 	if _, err := exec.LookPath("nc"); err != nil {
 		t.Skip("skipping: nc (netcat) not found in PATH")
@@ -435,6 +440,34 @@ func testIsolationNetworkNamespace(t *testing.T) {
 	if !arapuca.NetNSAvailable() {
 		t.Skip("skipping: network namespace isolation not available")
 	}
+
+	// Start a local TCP listener on a random port. The sandboxed process
+	// will try to connect to this address; in an isolated network namespace
+	// it should be unreachable.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to start local TCP listener: %v", err)
+	}
+	defer listener.Close()
+
+	// Accept connections in the background so nc doesn't hang on the
+	// host side. We track whether any connection was received.
+	var connReceived sync.WaitGroup
+	connReceived.Add(1)
+	var gotConnection bool
+	go func() {
+		defer connReceived.Done()
+		conn, err := listener.Accept()
+		if err != nil {
+			return // listener closed, no connection received
+		}
+		gotConnection = true
+		conn.Close()
+	}()
+
+	listenerAddr := listener.Addr().String()
+	// Extract host and port for nc command.
+	host, port, _ := net.SplitHostPort(listenerAddr)
 
 	sb, err := arapuca.New()
 	if err != nil {
@@ -485,13 +518,12 @@ func testIsolationNetworkNamespace(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Attempt to reach an external host. The connection should fail
-	// inside the network namespace. We try with /dev/tcp which is a
-	// bash built-in, falling back to checking general connectivity.
+	// Try to connect to the local listener from inside the sandbox.
+	// In a network namespace the host's loopback is isolated, so nc
+	// should fail to connect.
 	proc, err := sb.Launch(ctx, cfg, "/bin/sh", []string{
 		"-c",
-		// Try to connect to a well-known external address.
-		`(echo test | nc -w 1 1.1.1.1 80 >/dev/null 2>&1) && echo "NET=reachable" || echo "NET=blocked"`,
+		fmt.Sprintf(`(echo test | nc -w 2 %s %s >/dev/null 2>&1) && echo "NET=reachable" || echo "NET=blocked"`, host, port),
 	}, nil)
 	if err != nil {
 		t.Fatalf("Launch: %v", err)
@@ -516,9 +548,16 @@ func testIsolationNetworkNamespace(t *testing.T) {
 	wg.Wait()
 	proc.Cleanup()
 
+	// Close the listener so the Accept goroutine finishes.
+	listener.Close()
+	connReceived.Wait()
+
 	out := stdout.String()
 	if strings.Contains(out, "NET=reachable") {
-		t.Errorf("network namespace isolation failed: process reached external host;\nstdout: %s\nstderr: %s", out, stderr.String())
+		t.Errorf("network namespace isolation failed: sandboxed process reached host listener;\nstdout: %s\nstderr: %s", out, stderr.String())
+	}
+	if gotConnection {
+		t.Errorf("network namespace isolation failed: local listener received a connection from the sandbox")
 	}
 	if !strings.Contains(out, "NET=blocked") {
 		t.Logf("unexpected output (test may be inconclusive):\nstdout: %s\nstderr: %s", out, stderr.String())
