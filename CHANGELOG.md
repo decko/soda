@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **go-arapuca upgraded v0.1.1 → v0.2.0** — switches from vendored static library
+  (git-lfs, permanently broken in Go module proxy) to `pkg-config` build. The sandbox
+  binary is now built from source via the `arapuca` Rust crate. End-user binaries remain
+  fully self-contained (static linking).
+- **CI: replaced LFS fetch workaround** with `make install` from arapuca source in all
+  workflows (release, nightly, CI). Sandbox builds now succeed reliably.
+- **Release workflow**: uploads assets to existing releases (supports manual creation
+  with milestone titles), adds linux-amd64 non-sandbox binary to matrix.
+
 ## [0.3.0] — "Right-Sized" - 2026-04-28
 
 ### Added

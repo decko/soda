@@ -42,8 +42,8 @@ github.com/muesli/termenv v0.16.0/go.mod h1:ZRfOIKPFDYQoDFF4Olj7/QJbW60Ol/kL1pU3
 github.com/rivo/uniseg v0.4.7 h1:WUdvkW8uEhrYfLC4ZzdpI2ztxP1I582+49Oc5Mq64VQ=
 github.com/rivo/uniseg v0.4.7/go.mod h1:FN3SvrM+Zdj16jyLfmOkMNblXMcoc8DfTHruCPUcx88=
 github.com/russross/blackfriday/v2 v2.1.0/go.mod h1:+Rmxgy9KzJVeS9/2gXHxylqXiyQDYRxCVz55jmeOWTM=
-github.com/sergio-correia/go-arapuca v0.1.1 h1:9JiazgSiWj2Kcej3Z+yQkJbJNI1GRnxpExw3LWmddnE=
-github.com/sergio-correia/go-arapuca v0.1.1/go.mod h1:n3QwYrcRa8hGT5Xc6T1OAogHNzn/lTm5XaQmQhOJhuM=
+github.com/sergio-correia/go-arapuca v0.2.0 h1:uQa5J4i2xBtHjxffbBcXHcGp+AS0WeuZ9GJP+XWw/UI=
+github.com/sergio-correia/go-arapuca v0.2.0/go.mod h1:n3QwYrcRa8hGT5Xc6T1OAogHNzn/lTm5XaQmQhOJhuM=
 github.com/spf13/cobra v1.10.2 h1:DMTTonx5m65Ic0GOoRY2c16WCbHxOOw6xxezuLaBpcU=
 github.com/spf13/cobra v1.10.2/go.mod h1:7C1pvHqHw5A4vrJfjNwvOdzYu0Gml16OCs2GRiTUUS4=
 github.com/spf13/pflag v1.0.9 h1:9exaQaMOCwffKiiiYk6/BndUBv+iRViNW+4lEMi0PvY=

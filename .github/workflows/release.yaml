@@ -50,36 +50,20 @@ jobs:
 
       - name: Install gcc (cgo builds)
         if: matrix.cgo == '1'
-        run: sudo apt-get update && sudo apt-get install -y gcc
+        run: sudo apt-get update && sudo apt-get install -y gcc pkg-config
 
-      - name: Fetch go-arapuca LFS binary (cgo builds)
+      - name: Install Rust toolchain (cgo builds)
         if: matrix.cgo == '1'
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build and install libarapuca (cgo builds)
+        if: matrix.cgo == '1'
         run: |
-          mod_dir="$(go env GOMODCACHE)/github.com/sergio-correia/go-arapuca@$(go list -m -f '{{.Version}}' github.com/sergio-correia/go-arapuca)"
-          lib_path="${mod_dir}/lib/linux_amd64/libarapuca.a"
-          if [ -f "$lib_path" ] && file "$lib_path" | grep -q "ASCII"; then
-            oid=$(awk '/^oid sha256:/{print substr($2,8)}' "$lib_path")
-            url="https://github.com/sergio-correia/go-arapuca.git/info/lfs/objects/batch"
-            response=$(curl -s -X POST "$url" \
-              -H "Content-Type: application/vnd.git-lfs+json" \
-              -H "Authorization: Bearer ${GH_TOKEN}" \
-              -d "{\"operation\":\"download\",\"objects\":[{\"oid\":\"${oid}\",\"size\":1}]}")
-            download_url=$(echo "$response" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['objects'][0]['actions']['download']['href'])" 2>/dev/null) || {
-              echo "::warning::Failed to fetch LFS binary — sandbox build will be skipped"
-              echo "LFS API response: $response"
-              exit 1
-            }
-            chmod u+w "$(dirname "$lib_path")"
-            chmod u+w "$lib_path"
-            curl -sfL "$download_url" -o "$lib_path" || {
-              echo "ERROR: Failed to download libarapuca.a from LFS"
-              exit 1
-            }
-            echo "Fetched libarapuca.a ($(wc -c < "$lib_path") bytes)"
-          fi
+          git clone --depth 1 https://github.com/sergio-correia/arapuca /tmp/arapuca
+          cd /tmp/arapuca
+          cargo install cbindgen
+          make install PREFIX=$HOME/.local
+          echo "PKG_CONFIG_PATH=$HOME/.local/lib/pkgconfig" >> "$GITHUB_ENV"
 
       - name: Build
         env:
