@@ -428,6 +428,10 @@ func testIsolationLandlock(t *testing.T) {
 // prevents outbound network access. The subprocess attempts to connect
 // to a TCP port which should fail when UseNetNS is enabled.
 func testIsolationNetworkNamespace(t *testing.T) {
+	if _, err := exec.LookPath("nc"); err != nil {
+		t.Skip("skipping: nc (netcat) not found in PATH")
+	}
+
 	if !arapuca.NetNSAvailable() {
 		t.Skip("skipping: network namespace isolation not available")
 	}
