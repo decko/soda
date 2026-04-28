@@ -110,32 +110,37 @@ jobs:
 
       - name: Generate checksums
         working-directory: dist
-        run: sha256sum soda-* > checksums.txt
+        run: |
+          if ls soda-* 1>/dev/null 2>&1; then
+            sha256sum soda-* > checksums.txt
+          else
+            echo "No binaries found — skipping checksums"
+            exit 1
+          fi
 
-      - name: Create GitHub Release
+      - name: Upload to GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           version="${GITHUB_REF_NAME#v}"
-          gh release create "$GITHUB_REF_NAME" \
-            --title "soda ${version}" \
-            --notes "## soda ${version}
 
-          Binaries with \`-sandbox\` in the name include kernel-enforced process isolation (Landlock + seccomp + cgroups). Builds without it run normally but skip sandbox enforcement.
-
-          | Binary | Platform | Sandbox |
-          |--------|----------|---------|
-          | \`soda-linux-amd64-sandbox\` | Linux x86_64 | ✅ |
-          | \`soda-linux-arm64\` | Linux ARM64 | ❌ |
-          | \`soda-darwin-amd64\` | macOS Intel | ❌ |
-          | \`soda-darwin-arm64\` | macOS Apple Silicon | ❌ |
-
-          See checksums.txt for SHA-256 verification." \
-            dist/*
+          # Try uploading to an existing release first (created manually with milestone title).
+          # If no release exists, create one with a default title.
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME exists — uploading assets"
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          else
+            echo "Release $GITHUB_REF_NAME not found — creating"
+            gh release create "$GITHUB_REF_NAME" \
+              --title "soda ${version}" \
+              --generate-notes \
+              dist/*
+          fi
 
   copr:
     name: COPR RPM Build
-    needs: publish
+    needs: release
+    if: always() && !cancelled()
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
