@@ -27,6 +27,16 @@ Verify your installation:
 claude --version
 ```
 
+**Authentication:** SODA needs a way to authenticate with the Anthropic API.
+The simplest method is to set the `ANTHROPIC_API_KEY` environment variable:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+```
+
+For keychain or vault-based workflows, you can configure `auth.api_key_helper`
+in `soda.yaml` instead — see [Configuration: Authentication](configuration.md#authentication).
+
 ### 2. `gh` CLI — installed and authenticated
 
 SODA uses `gh` to fetch GitHub issues and create pull requests.
@@ -171,11 +181,12 @@ is ready to run the pipeline.
 ✓ git-repo: inside a git repository
 ✓ claude: /usr/local/bin/claude
 ✓ claude-version: 2.1.81
+✓ config: soda.yaml (local)
+✓ config-valid: soda.yaml parses successfully
+✓ claude-auth: ANTHROPIC_API_KEY is set
 ✓ gh: /usr/local/bin/gh
 ✓ gh-auth: authenticated
 ⚠ node: not found in PATH (optional, needed only for sandboxed execution)
-✓ config: soda.yaml (local)
-✓ config-valid: soda.yaml parses successfully
 
 All checks passed
 ```
