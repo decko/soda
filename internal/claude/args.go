@@ -31,6 +31,9 @@ func BuildArgs(opts RunOpts, model string) []string {
 	if opts.SystemPromptPath != "" {
 		args = append(args, "--system-prompt-file", opts.SystemPromptPath)
 	}
+	if opts.SettingsPath != "" {
+		args = append(args, "--settings-path", opts.SettingsPath)
+	}
 	if opts.OutputSchema != "" {
 		args = append(args, "--json-schema", opts.OutputSchema)
 	}

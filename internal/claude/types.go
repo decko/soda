@@ -8,6 +8,7 @@ import (
 // RunOpts holds per-invocation configuration for a single phase run.
 type RunOpts struct {
 	SystemPromptPath string        // path to system prompt file
+	SettingsPath     string        // path to Claude Code settings JSON (--settings-path)
 	OutputSchema     string        // JSON schema string passed to --json-schema
 	AllowedTools     []string      // tool names for --allowed-tools
 	MaxBudgetUSD     *float64      // nil = omit flag; non-nil = emit value
