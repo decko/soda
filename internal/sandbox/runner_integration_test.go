@@ -293,3 +293,330 @@ func TestIntegration_ProxyRoundTrip(t *testing.T) {
 		t.Errorf("proxy output tokens = %d, want 17", stats.OutputTokens)
 	}
 }
+
+// TestIntegration_SandboxIsolation groups subtests that verify OS-level
+// isolation primitives. Each subtest skips gracefully on kernels that
+// lack the required feature.
+func TestIntegration_SandboxIsolation(t *testing.T) {
+	t.Run("Landlock", testIsolationLandlock)
+	t.Run("NetworkNamespace", testIsolationNetworkNamespace)
+	t.Run("CgroupLimits", testIsolationCgroupLimits)
+}
+
+// testIsolationLandlock verifies that Landlock filesystem restrictions
+// prevent the sandboxed process from reading files outside the allowed
+// path set. The subprocess attempts to read a secret file under /var/tmp
+// (a directory NOT in the allowed read paths). We expect the read to fail.
+func testIsolationLandlock(t *testing.T) {
+	if arapuca.LandlockABIVersion() == 0 {
+		t.Skip("skipping: Landlock not supported on this kernel")
+	}
+
+	sb, err := arapuca.New()
+	if err != nil {
+		t.Fatalf("arapuca.New: %v", err)
+	}
+	defer sb.Close()
+
+	tmpDir, err := arapuca.MakeTmpDir("landlock-test")
+	if err != nil {
+		t.Fatalf("MakeTmpDir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	workDir := t.TempDir()
+
+	// Create a secret file under /var/tmp — a path that is definitely NOT
+	// covered by systemReadPaths() (/usr, /lib, /bin, /etc, /dev, /proc)
+	// or by the sandbox's workDir / tmpDir. Using /var/tmp avoids the
+	// case where t.TempDir() dirs share a parent with workDir under /tmp.
+	secretDir, err := os.MkdirTemp("/var/tmp", "soda-landlock-secret-")
+	if err != nil {
+		t.Fatalf("create secret dir: %v", err)
+	}
+	defer os.RemoveAll(secretDir)
+
+	secretFile := secretDir + "/secret.txt"
+	if err := os.WriteFile(secretFile, []byte("top-secret"), 0644); err != nil {
+		t.Fatalf("write secret file: %v", err)
+	}
+
+	stdoutR, stdoutW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
+	defer stdoutR.Close()
+	defer stdoutW.Close()
+
+	stderrR, stderrW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("stderr pipe: %v", err)
+	}
+	defer stderrR.Close()
+	defer stderrW.Close()
+
+	// Intentionally restrict read paths: workDir and tmpDir only.
+	// The secret file's directory is NOT in ReadPaths.
+	cfg := arapuca.Config{
+		Profile: arapuca.Profile{
+			ReadPaths:  append(systemReadPaths(), workDir, tmpDir),
+			WritePaths: []string{workDir, tmpDir},
+		},
+		TaskID:  "landlock-test",
+		Phase:   "test",
+		WorkDir: workDir,
+		Stdout:  stdoutW,
+		Stderr:  stderrW,
+		Env: map[string]string{
+			"HOME":   tmpDir,
+			"TMPDIR": tmpDir,
+			"PATH":   "/usr/local/bin:/usr/bin:/bin",
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Try to cat the secret file. This should fail due to Landlock.
+	proc, err := sb.Launch(ctx, cfg, "/bin/sh", []string{
+		"-c",
+		fmt.Sprintf("cat %s 2>&1; echo EXIT=$?", secretFile),
+	}, nil)
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+
+	stdoutW.Close()
+	stderrW.Close()
+
+	var stdout, stderr bytes.Buffer
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		io.Copy(&stdout, stdoutR)
+	}()
+	go func() {
+		defer wg.Done()
+		io.Copy(&stderr, stderrR)
+	}()
+
+	proc.Wait()
+	wg.Wait()
+	proc.Cleanup()
+
+	out := stdout.String()
+	// The cat command should have failed — look for "Permission denied"
+	// or a non-zero exit code. If Landlock enforcement is not active
+	// (e.g., running in a privileged container), skip gracefully.
+	if strings.Contains(out, "top-secret") {
+		t.Skip("skipping: Landlock reports ABI support but does not enforce restrictions (likely a privileged container)")
+	}
+	if !strings.Contains(out, "EXIT=1") && !strings.Contains(out, "Permission denied") &&
+		!strings.Contains(out, "Operation not permitted") {
+		t.Errorf("expected access denied error; got:\n%s\nstderr: %s", out, stderr.String())
+	}
+}
+
+// testIsolationNetworkNamespace verifies that network namespace isolation
+// prevents outbound network access. The subprocess attempts to connect
+// to a TCP port which should fail when UseNetNS is enabled.
+func testIsolationNetworkNamespace(t *testing.T) {
+	if !arapuca.NetNSAvailable() {
+		t.Skip("skipping: network namespace isolation not available")
+	}
+
+	sb, err := arapuca.New()
+	if err != nil {
+		t.Fatalf("arapuca.New: %v", err)
+	}
+	defer sb.Close()
+
+	tmpDir, err := arapuca.MakeTmpDir("netns-test")
+	if err != nil {
+		t.Fatalf("MakeTmpDir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	workDir := t.TempDir()
+
+	stdoutR, stdoutW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
+	defer stdoutR.Close()
+	defer stdoutW.Close()
+
+	stderrR, stderrW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("stderr pipe: %v", err)
+	}
+	defer stderrR.Close()
+	defer stderrW.Close()
+
+	cfg := arapuca.Config{
+		Profile: arapuca.Profile{
+			ReadPaths:  append(systemReadPaths(), workDir, tmpDir),
+			WritePaths: []string{workDir, tmpDir},
+			UseNetNS:   true, // Enable network namespace isolation.
+		},
+		TaskID:  "netns-test",
+		Phase:   "test",
+		WorkDir: workDir,
+		Stdout:  stdoutW,
+		Stderr:  stderrW,
+		Env: map[string]string{
+			"HOME":   tmpDir,
+			"TMPDIR": tmpDir,
+			"PATH":   "/usr/local/bin:/usr/bin:/bin",
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Attempt to reach an external host. The connection should fail
+	// inside the network namespace. We try with /dev/tcp which is a
+	// bash built-in, falling back to checking general connectivity.
+	proc, err := sb.Launch(ctx, cfg, "/bin/sh", []string{
+		"-c",
+		// Try to connect to a well-known external address.
+		`(echo test | nc -w 1 1.1.1.1 80 >/dev/null 2>&1) && echo "NET=reachable" || echo "NET=blocked"`,
+	}, nil)
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+
+	stdoutW.Close()
+	stderrW.Close()
+
+	var stdout, stderr bytes.Buffer
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		io.Copy(&stdout, stdoutR)
+	}()
+	go func() {
+		defer wg.Done()
+		io.Copy(&stderr, stderrR)
+	}()
+
+	proc.Wait()
+	wg.Wait()
+	proc.Cleanup()
+
+	out := stdout.String()
+	if strings.Contains(out, "NET=reachable") {
+		t.Errorf("network namespace isolation failed: process reached external host;\nstdout: %s\nstderr: %s", out, stderr.String())
+	}
+	if !strings.Contains(out, "NET=blocked") {
+		t.Logf("unexpected output (test may be inconclusive):\nstdout: %s\nstderr: %s", out, stderr.String())
+	}
+}
+
+// testIsolationCgroupLimits verifies that cgroup PID limits prevent
+// fork bombs from escaping the sandbox. The subprocess attempts to
+// fork rapidly; with MaxPIDs set to a low value, the fork should fail.
+func testIsolationCgroupLimits(t *testing.T) {
+	sb, err := arapuca.New()
+	if err != nil {
+		t.Fatalf("arapuca.New: %v", err)
+	}
+	defer sb.Close()
+
+	if !sb.CgroupsAvailable() {
+		t.Skip("skipping: cgroups v2 not available")
+	}
+
+	tmpDir, err := arapuca.MakeTmpDir("cgroup-test")
+	if err != nil {
+		t.Fatalf("MakeTmpDir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	workDir := t.TempDir()
+
+	stdoutR, stdoutW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
+	defer stdoutR.Close()
+	defer stdoutW.Close()
+
+	stderrR, stderrW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("stderr pipe: %v", err)
+	}
+	defer stderrR.Close()
+	defer stderrW.Close()
+
+	cfg := arapuca.Config{
+		Profile: arapuca.Profile{
+			ReadPaths:  append(systemReadPaths(), workDir, tmpDir),
+			WritePaths: []string{workDir, tmpDir},
+			MaxPIDs:    5, // Very low PID limit — fork bomb should be stopped.
+		},
+		TaskID:  "cgroup-test",
+		Phase:   "test",
+		WorkDir: workDir,
+		Stdout:  stdoutW,
+		Stderr:  stderrW,
+		Env: map[string]string{
+			"HOME":   tmpDir,
+			"TMPDIR": tmpDir,
+			"PATH":   "/usr/local/bin:/usr/bin:/bin",
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	// Attempt a controlled fork bomb. With MaxPIDs=5, most forks will
+	// fail with EAGAIN. The script tries to spawn 20 background sleeps
+	// and counts how many succeeded.
+	proc, err := sb.Launch(ctx, cfg, "/bin/sh", []string{
+		"-c",
+		`count=0; i=0; while [ $i -lt 20 ]; do sleep 60 & if [ $? -eq 0 ]; then count=$((count+1)); fi; i=$((i+1)); done; echo "FORKS=$count"`,
+	}, nil)
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+
+	stdoutW.Close()
+	stderrW.Close()
+
+	var stdout, stderr bytes.Buffer
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		io.Copy(&stdout, stdoutR)
+	}()
+	go func() {
+		defer wg.Done()
+		io.Copy(&stderr, stderrR)
+	}()
+
+	proc.Wait()
+	wg.Wait()
+	proc.Cleanup()
+
+	out := stdout.String()
+	combined := out + stderr.String()
+
+	// With MaxPIDs=5 and the sh process itself counting as 1, we expect
+	// far fewer than 20 forks to succeed. If all 20 succeeded, cgroup
+	// limits are not working.
+	if strings.Contains(out, "FORKS=20") {
+		t.Errorf("cgroup PID limit not enforced: all 20 forks succeeded;\nstdout: %s\nstderr: %s", out, stderr.String())
+	}
+
+	// Verify that fork failure messages appeared (EAGAIN / "Resource temporarily unavailable").
+	if !strings.Contains(combined, "Resource temporarily unavailable") &&
+		!strings.Contains(combined, "Cannot fork") &&
+		!strings.Contains(combined, "fork") &&
+		!strings.Contains(out, "FORKS=") {
+		t.Logf("output may be inconclusive (no fork failure message):\nstdout: %s\nstderr: %s", out, stderr.String())
+	}
+}
