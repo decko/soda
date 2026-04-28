@@ -29,6 +29,14 @@ mode: autonomous   # or "checkpoint"
 # Model (used for all phases in v1)
 model: claude-opus-4-6
 
+# Authentication — optional keychain/vault-based credential injection.
+# When api_key_helper is set, SODA writes a Claude Code settings file
+# with apiKeyHelper pointing to this script. The script must print a
+# valid API key to stdout. This avoids exporting ANTHROPIC_API_KEY in
+# the shell environment.
+# auth:
+#   api_key_helper: /usr/local/bin/get-api-key
+
 # Sandbox (via go-arapuca)
 sandbox:
   enabled: true

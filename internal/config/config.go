@@ -16,6 +16,7 @@ type Config struct {
 	GitHub       GitHubTicketConfig  `yaml:"github"`
 	Mode         string              `yaml:"mode"`
 	Model        string              `yaml:"model"`
+	Auth         AuthConfig          `yaml:"auth"`
 	Sandbox      SandboxConfig       `yaml:"sandbox"`
 	Limits       LimitsConfig        `yaml:"limits"`
 	PhasesPath   string              `yaml:"phases_path"`  // explicit path to pipeline YAML; overrides CWD discovery
@@ -27,6 +28,15 @@ type Config struct {
 	Repos        []RepoConfig        `yaml:"repos"`
 	Monitor      MonitorConfig       `yaml:"monitor"`
 	Notify       NotifyConfig        `yaml:"notify"`
+}
+
+// AuthConfig holds authentication settings for the Claude Code CLI.
+// ApiKeyHelper is the path to a script or binary that prints an API key
+// to stdout. When set, SODA writes a Claude Code settings file with
+// apiKeyHelper pointing to this path, enabling keychain/vault-based
+// credential injection without exporting ANTHROPIC_API_KEY.
+type AuthConfig struct {
+	ApiKeyHelper string `yaml:"api_key_helper,omitempty"`
 }
 
 // MonitorConfig holds monitor phase settings loaded from the config file.

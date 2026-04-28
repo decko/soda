@@ -25,6 +25,8 @@ github:
     end_marker: "<!-- plan:end -->"
 mode: autonomous
 model: claude-opus-4-6
+auth:
+  api_key_helper: /usr/local/bin/get-api-key
 sandbox:
   enabled: true
   binary: agent-node

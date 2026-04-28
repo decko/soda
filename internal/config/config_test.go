@@ -35,6 +35,9 @@ func TestLoad(t *testing.T) {
 				if cfg.Model != "claude-opus-4-6" {
 					t.Errorf("Model = %q, want %q", cfg.Model, "claude-opus-4-6")
 				}
+				if cfg.Auth.ApiKeyHelper != "/usr/local/bin/get-api-key" {
+					t.Errorf("Auth.ApiKeyHelper = %q, want %q", cfg.Auth.ApiKeyHelper, "/usr/local/bin/get-api-key")
+				}
 				if cfg.Limits.MaxCostPerTicket != 15.0 {
 					t.Errorf("MaxCostPerTicket = %f, want 15.0", cfg.Limits.MaxCostPerTicket)
 				}
@@ -159,6 +162,10 @@ func TestLoad(t *testing.T) {
 				}
 				if len(cfg.Repos) != 0 {
 					t.Errorf("len(Repos) = %d, want 0", len(cfg.Repos))
+				}
+				// Auth config should be zero-valued when not in file.
+				if cfg.Auth.ApiKeyHelper != "" {
+					t.Errorf("Auth.ApiKeyHelper = %q, want empty", cfg.Auth.ApiKeyHelper)
 				}
 				// Monitor config should be zero-valued when not in file.
 				if cfg.Monitor.SelfUser != "" {
