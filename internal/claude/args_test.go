@@ -94,6 +94,24 @@ func TestBuildArgs(t *testing.T) {
 				"--model",
 			},
 		},
+		{
+			name:  "settings_path_included",
+			model: "",
+			opts: RunOpts{
+				SettingsPath: "/tmp/settings.json",
+			},
+			contains: []string{
+				"--settings-path", "/tmp/settings.json",
+			},
+		},
+		{
+			name:  "empty_settings_path_omits_flag",
+			model: "",
+			opts:  RunOpts{SettingsPath: ""},
+			excludes: []string{
+				"--settings-path",
+			},
+		},
 	}
 
 	for _, tt := range tests {

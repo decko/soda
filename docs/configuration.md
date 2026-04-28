@@ -68,6 +68,46 @@ Multiple extraction strategies are tried in order — description markers, then 
 
 ---
 
+### Authentication
+
+SODA resolves Claude Code credentials using the following precedence chain
+(first match wins):
+
+1. **Sandbox proxy** (`sandbox.proxy.enabled: true`) — the proxy injects credentials on the host side; no API key needed inside the sandbox.
+2. **`ANTHROPIC_API_KEY`** environment variable — the simplest method for direct API access.
+3. **Vertex AI** (`CLAUDE_CODE_USE_VERTEX` env var) — uses Google Cloud Application Default Credentials.
+4. **`auth.api_key_helper`** — a script that prints an API key to stdout, useful for keychain/vault integration.
+5. **Claude Code login** — if none of the above are set, Claude Code falls back to its own `claude login` session.
+
+```yaml
+auth:
+  api_key_helper: string   # path to a script/binary that prints an API key to stdout (optional)
+```
+
+When `api_key_helper` is set, SODA writes a temporary Claude Code settings file with `apiKeyHelper` pointing to the configured script. Claude Code invokes the script before each API call to obtain a fresh key. This avoids storing long-lived keys in environment variables.
+
+> **Path requirement:** The path must be absolute (e.g., `/home/user/.local/bin/get-claude-key`). A leading `~/` is expanded to your home directory automatically, but relative paths like `./scripts/get-key` are not supported and will cause sandbox errors.
+
+Example helper script (`/home/user/.local/bin/get-claude-key`):
+
+```bash
+#!/bin/bash
+# Fetch API key from macOS Keychain
+security find-generic-password -s "anthropic-api-key" -w
+```
+
+```yaml
+auth:
+  api_key_helper: /home/user/.local/bin/get-claude-key
+  # or use ~/ shorthand (expanded automatically):
+  # api_key_helper: ~/.local/bin/get-claude-key
+```
+
+Run `soda doctor` to verify your authentication setup — the `claude-auth` check
+reports which method was detected.
+
+---
+
 ### Model
 
 ```yaml

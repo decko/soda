@@ -58,6 +58,13 @@ func allPassEnv() *doctorEnv {
 		UserHomeDir: func() (string, error) {
 			return "/home/testuser", nil
 		},
+		Getenv: func(key string) string {
+			// Default: ANTHROPIC_API_KEY is set so claude-auth passes.
+			if key == "ANTHROPIC_API_KEY" {
+				return "sk-test-key"
+			}
+			return ""
+		},
 	}
 }
 
@@ -1024,6 +1031,141 @@ func TestRunDoctor_ClaudeMissing_SkipsClaudeVersion(t *testing.T) {
 }
 
 // --- checkBranchProtection tests ---
+
+// --- checkClaudeAuth tests ---
+
+func TestCheckClaudeAuth_ProxyEnabled(t *testing.T) {
+	env := allPassEnv()
+	env.ParsedConfig = &config.Config{
+		Sandbox: config.SandboxConfig{
+			Proxy: config.SandboxProxyConfig{Enabled: true},
+		},
+	}
+	env.Getenv = func(key string) string { return "" }
+	r := checkClaudeAuth(env)
+	if !r.passed {
+		t.Error("expected claude-auth to pass when proxy is enabled")
+	}
+	if !strings.Contains(r.detail, "proxy") {
+		t.Errorf("expected detail to mention proxy, got: %q", r.detail)
+	}
+}
+
+func TestCheckClaudeAuth_APIKeySet(t *testing.T) {
+	env := allPassEnv()
+	env.Getenv = func(key string) string {
+		if key == "ANTHROPIC_API_KEY" {
+			return "sk-ant-test"
+		}
+		return ""
+	}
+	r := checkClaudeAuth(env)
+	if !r.passed {
+		t.Error("expected claude-auth to pass when ANTHROPIC_API_KEY is set")
+	}
+	if !strings.Contains(r.detail, "ANTHROPIC_API_KEY") {
+		t.Errorf("expected detail to mention ANTHROPIC_API_KEY, got: %q", r.detail)
+	}
+}
+
+func TestCheckClaudeAuth_VertexSet(t *testing.T) {
+	env := allPassEnv()
+	env.Getenv = func(key string) string {
+		if key == "CLAUDE_CODE_USE_VERTEX" {
+			return "1"
+		}
+		return ""
+	}
+	r := checkClaudeAuth(env)
+	if !r.passed {
+		t.Error("expected claude-auth to pass when CLAUDE_CODE_USE_VERTEX is set")
+	}
+	if !strings.Contains(r.detail, "Vertex") {
+		t.Errorf("expected detail to mention Vertex, got: %q", r.detail)
+	}
+}
+
+func TestCheckClaudeAuth_ApiKeyHelper(t *testing.T) {
+	env := allPassEnv()
+	env.ParsedConfig = &config.Config{
+		Auth: config.AuthConfig{ApiKeyHelper: "/usr/local/bin/get-key"},
+	}
+	env.Getenv = func(key string) string { return "" }
+	r := checkClaudeAuth(env)
+	if !r.passed {
+		t.Error("expected claude-auth to pass when api_key_helper is configured")
+	}
+	if !strings.Contains(r.detail, "api_key_helper") {
+		t.Errorf("expected detail to mention api_key_helper, got: %q", r.detail)
+	}
+}
+
+func TestCheckClaudeAuth_NoAuth(t *testing.T) {
+	env := allPassEnv()
+	env.ParsedConfig = &config.Config{}
+	env.Getenv = func(key string) string { return "" }
+	r := checkClaudeAuth(env)
+	if r.passed {
+		t.Error("expected claude-auth to fail when no auth method is configured")
+	}
+	if r.fix == "" {
+		t.Error("expected fix suggestion when auth fails")
+	}
+}
+
+func TestCheckClaudeAuth_NilConfig(t *testing.T) {
+	env := allPassEnv()
+	env.ParsedConfig = nil
+	env.Getenv = func(key string) string { return "" }
+	r := checkClaudeAuth(env)
+	if r.passed {
+		t.Error("expected claude-auth to fail when ParsedConfig is nil and no env vars set")
+	}
+}
+
+func TestCheckClaudeAuth_PrecedenceProxyOverAPIKey(t *testing.T) {
+	env := allPassEnv()
+	env.ParsedConfig = &config.Config{
+		Sandbox: config.SandboxConfig{
+			Proxy: config.SandboxProxyConfig{Enabled: true},
+		},
+	}
+	env.Getenv = func(key string) string {
+		if key == "ANTHROPIC_API_KEY" {
+			return "sk-ant-test"
+		}
+		return ""
+	}
+	r := checkClaudeAuth(env)
+	if !r.passed {
+		t.Error("expected claude-auth to pass")
+	}
+	// Should report proxy, not API key — proxy takes precedence.
+	if !strings.Contains(r.detail, "proxy") {
+		t.Errorf("expected proxy to take precedence, got: %q", r.detail)
+	}
+}
+
+func TestCheckClaudeAuth_PrecedenceAPIKeyOverHelper(t *testing.T) {
+	env := allPassEnv()
+	env.ParsedConfig = &config.Config{
+		Auth: config.AuthConfig{ApiKeyHelper: "/bin/helper"},
+	}
+	env.Getenv = func(key string) string {
+		if key == "ANTHROPIC_API_KEY" {
+			return "sk-ant-test"
+		}
+		return ""
+	}
+	r := checkClaudeAuth(env)
+	if !r.passed {
+		t.Error("expected claude-auth to pass")
+	}
+	// Should report API key, not helper — API key takes precedence.
+	if !strings.Contains(r.detail, "ANTHROPIC_API_KEY") {
+		t.Errorf("expected ANTHROPIC_API_KEY to take precedence, got: %q", r.detail)
+	}
+}
 
 func TestCheckBranchProtection_SkippedWhenGhMissing(t *testing.T) {
 	env := allPassEnv()

@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -37,6 +38,18 @@ func (r *ClaudeRunner) Run(ctx context.Context, opts RunOpts) (*RunResult, error
 	if opts.MaxBudgetUSD > 0 {
 		budget := opts.MaxBudgetUSD
 		claudeOpts.MaxBudgetUSD = &budget
+	}
+
+	// When ApiKeyHelper is set, write a temporary Claude Code settings file
+	// and pass its path via --settings-path. Follows the same temp-file
+	// pattern as the system prompt below.
+	if opts.ApiKeyHelper != "" {
+		settingsPath, err := writeSettingsFile(opts.WorkDir, opts.ApiKeyHelper)
+		if err != nil {
+			return nil, fmt.Errorf("claude runner: write settings file: %w", err)
+		}
+		defer os.Remove(settingsPath)
+		claudeOpts.SettingsPath = settingsPath
 	}
 
 	// claude.Runner expects a file path for the system prompt, not content.
@@ -91,6 +104,42 @@ func mapClaudeError(err error) error {
 		}
 	}
 	return err
+}
+
+// writeSettingsFile writes a Claude Code settings JSON file with an apiKeyHelper
+// entry and returns its absolute path. The caller is responsible for removing
+// the file after use.
+func writeSettingsFile(dir, apiKeyHelper string) (string, error) {
+	if dir == "" {
+		dir = os.TempDir()
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+
+	settings := map[string]string{
+		"apiKeyHelper": apiKeyHelper,
+	}
+	data, err := json.Marshal(settings)
+	if err != nil {
+		return "", err
+	}
+
+	f, err := os.CreateTemp(abs, "soda-settings-*.json")
+	if err != nil {
+		return "", err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return "", err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(f.Name())
+		return "", err
+	}
+	return f.Name(), nil
 }
 
 // writeSystemPromptFile writes content to a temp file in dir and returns its absolute path.

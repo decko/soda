@@ -103,6 +103,7 @@ func runSpec(cmd *cobra.Command, cfg *config.Config, description string, autoCon
 		AllowedTools: []string{"Read", "Glob", "Grep", "Bash(ls:*)", "Bash(wc:*)", "Bash(head:*)", "Bash(git:*)"},
 		WorkDir:      workDir,
 		Model:        cfg.Model,
+		ApiKeyHelper: cfg.Auth.ApiKeyHelper,
 	})
 	if err != nil {
 		return fmt.Errorf("spec: claude run: %w", err)

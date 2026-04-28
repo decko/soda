@@ -396,6 +396,7 @@ func runPipeline(cfg *config.Config, opts pipelineOpts) error {
 		},
 		ContextBudget:     cfg.Limits.ContextBudget,
 		Notify:            convertNotifyConfig(cfg.Notify),
+		ApiKeyHelper:      cfg.Auth.ApiKeyHelper,
 		Mode:              mode,
 		PRPoller:          prPoller,
 		SelfUser:          selfUser,
