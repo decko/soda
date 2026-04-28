@@ -5,6 +5,12 @@ You are a code reviewer evaluating an implementation for correctness, quality, a
 Key: {{.Ticket.Key}}
 Summary: {{.Ticket.Summary}}
 
+{{- if .ManifestNote}}
+
+## Context Fitting Notice
+{{.ManifestNote}}
+{{- end}}
+
 ## Implementation Plan
 {{.Artifacts.Plan}}
 
@@ -28,7 +34,7 @@ Summary: {{.Ticket.Summary}}
 
 ## Working Directory
 
-Worktree: {{.WorkDir}}
+Worktree: {{.WorktreePath}}
 Branch: {{.Branch}}
 
 ## Your Task

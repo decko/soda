@@ -140,6 +140,7 @@ type LimitsConfig struct {
 	MaxAPIConcurrency      int               `yaml:"max_api_concurrency,omitempty"`       // max concurrent API calls (runner.Run); 0 means unlimited
 	MaxSiblingContextBytes int               `yaml:"max_sibling_context_bytes,omitempty"` // max bytes of sibling-function context injected into implement prompts; 0 means use default (20000)
 	TokenBudget            TokenBudgetConfig `yaml:"token_budget,omitempty"`              // prompt token budget estimation; zero value disables checks
+	ContextBudget          int               `yaml:"context_budget,omitempty"`            // global default context budget in tokens for adaptive fitting; 0 disables
 }
 
 // TokenBudgetConfig configures the prompt-size estimation check that runs

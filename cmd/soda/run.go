@@ -394,6 +394,7 @@ func runPipeline(cfg *config.Config, opts pipelineOpts) error {
 			WarnTokens:    cfg.Limits.TokenBudget.WarnTokens,
 			BytesPerToken: cfg.Limits.TokenBudget.BytesPerToken,
 		},
+		ContextBudget:     cfg.Limits.ContextBudget,
 		Notify:            convertNotifyConfig(cfg.Notify),
 		Mode:              mode,
 		PRPoller:          prPoller,

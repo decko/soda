@@ -65,6 +65,7 @@ type EngineConfig struct {
 	BotUsers               []string          // known bot usernames to filter
 	Stderr                 io.Writer         // destination for warning messages; defaults to os.Stderr
 	TokenBudget            TokenBudgetConfig // prompt token budget estimation; zero value disables checks
+	ContextBudget          int               // global default context budget in tokens; 0 disables adaptive fitting
 	Notify                 NotifyConfig      // notification hooks fired on pipeline completion; zero value disables
 	MergeMethod            string            // merge method: "merge", "squash", "rebase"; defaults to "squash"
 	MergeLabels            []string          // required PR labels before auto-merge proceeds
@@ -84,6 +85,13 @@ func (c *EngineConfig) maxReworkCycles() int {
 		return c.MaxReworkCycles
 	}
 	return DefaultMaxReworkCycles
+}
+
+// contextBudgetDefault returns the global default context budget in tokens.
+// If not configured (0), returns 0 (disabled). Per-phase ContextBudget
+// takes precedence over this default.
+func (e *Engine) contextBudgetDefault() int {
+	return e.config.ContextBudget
 }
 
 // remoteName returns the configured git remote name from PromptConfig.Repo.PushTo,
@@ -676,6 +684,45 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 		promptEvent.Data["fallback_reason"] = loadResult.FallbackReason
 	}
 	e.emit(promptEvent)
+
+	// Adaptive context fitting: if a context budget is configured (per-phase
+	// or global default), reduce the prompt data to fit within the token budget.
+	// This must happen before the final render so the fitted data is used for
+	// hash computation, token estimation, and the actual prompt sent to the LLM.
+	contextBudget := phase.ContextBudget
+	if contextBudget <= 0 {
+		contextBudget = e.contextBudgetDefault()
+	}
+	if contextBudget > 0 {
+		bytesPerToken := e.config.TokenBudget.BytesPerToken
+		if bytesPerToken <= 0 {
+			bytesPerToken = 3.3
+		}
+		fitted, reduced, fitErr := fitToBudget(loadResult.Content, promptData, phase.Name, contextBudget, bytesPerToken)
+		if fitErr != nil {
+			var cbe *ContextBudgetError
+			if errors.As(fitErr, &cbe) {
+				_ = e.state.MarkFailed(phase.Name, fitErr)
+				e.emitPhaseFailed(phase.Name, fitErr)
+				return fitErr
+			}
+			// Non-budget errors (e.g., template render failure) are fatal.
+			_ = e.state.MarkFailed(phase.Name, fitErr)
+			e.emitPhaseFailed(phase.Name, fitErr)
+			return fmt.Errorf("engine: fit context for %s: %w", phase.Name, fitErr)
+		}
+		if len(reduced) > 0 {
+			promptData = fitted
+			e.emit(Event{
+				Phase: phase.Name,
+				Kind:  EventContextFitted,
+				Data: map[string]any{
+					"budget_tokens":  contextBudget,
+					"reduced_fields": reduced,
+				},
+			})
+		}
+	}
 
 	rendered, err := RenderPrompt(loadResult.Content, promptData)
 	if err != nil {

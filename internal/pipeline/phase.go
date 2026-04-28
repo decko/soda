@@ -46,6 +46,7 @@ type PhaseConfig struct {
 	Rework          *ReworkConfig     `yaml:"rework,omitempty"`
 	Corrective      *CorrectiveConfig `yaml:"corrective,omitempty"`
 	FeedbackFrom    []string          `yaml:"feedback_from,omitempty"` // ordered feedback sources injected into prompt
+	ContextBudget   int               `yaml:"prompt_budget,omitempty"` // max prompt tokens for adaptive fitting; 0 uses global default
 }
 
 // ReworkConfig configures rework routing for a phase. When a phase with

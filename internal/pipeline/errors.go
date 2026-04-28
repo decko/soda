@@ -47,6 +47,19 @@ func (e *GenerationBudgetExceededError) Error() string {
 		e.Phase, e.Limit, e.Actual)
 }
 
+// ContextBudgetError is returned when the prompt cannot be reduced enough
+// to fit within the context budget even after all reducible fields are cleared.
+type ContextBudgetError struct {
+	Phase         string
+	BudgetTokens  int
+	CurrentTokens int
+}
+
+func (e *ContextBudgetError) Error() string {
+	return fmt.Sprintf("pipeline: context budget exceeded in phase %s: budget %d tokens, prompt requires %d tokens",
+		e.Phase, e.BudgetTokens, e.CurrentTokens)
+}
+
 // DependencyNotMetError is returned when a phase's prerequisite has not completed.
 type DependencyNotMetError struct {
 	Phase      string

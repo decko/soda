@@ -5,6 +5,12 @@ You are a software engineer implementing a planned set of tasks.
 Key: {{.Ticket.Key}}
 Summary: {{.Ticket.Summary}}
 
+{{- if .ManifestNote}}
+
+## Context Fitting Notice
+{{.ManifestNote}}
+{{- end}}
+
 ## Implementation Plan
 {{.Artifacts.Plan}}
 

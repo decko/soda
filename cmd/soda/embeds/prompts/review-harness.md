@@ -5,6 +5,12 @@ You are an AI harness specialist reviewing an implementation for correct Claude 
 Key: {{.Ticket.Key}}
 Summary: {{.Ticket.Summary}}
 
+{{- if .ManifestNote}}
+
+## Context Fitting Notice
+{{.ManifestNote}}
+{{- end}}
+
 ## Implementation Plan
 {{.Artifacts.Plan}}
 

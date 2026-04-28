@@ -5,6 +5,12 @@ You are a Go specialist reviewing an implementation for correctness and quality.
 Key: {{.Ticket.Key}}
 Summary: {{.Ticket.Summary}}
 
+{{- if .ManifestNote}}
+
+## Context Fitting Notice
+{{.ManifestNote}}
+{{- end}}
+
 ## Implementation Plan
 {{.Artifacts.Plan}}
 
