@@ -68,25 +68,21 @@ jobs:
 
       - name: Install gcc (cgo builds)
         if: matrix.cgo == '1'
-        run: sudo apt-get update && sudo apt-get install -y gcc
+        run: sudo apt-get update && sudo apt-get install -y gcc pkg-config
 
-      - name: Fetch go-arapuca LFS binary (cgo builds)
+      - name: Install Rust toolchain (cgo builds)
+        if: matrix.cgo == '1'
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Build and install libarapuca (cgo builds)
         if: matrix.cgo == '1'
         run: |
-          mod_dir="$(go env GOMODCACHE)/github.com/sergio-correia/go-arapuca@$(go list -m -f '{{.Version}}' github.com/sergio-correia/go-arapuca)"
-          lib_path="${mod_dir}/lib/linux_amd64/libarapuca.a"
-          if [ -f "$lib_path" ] && file "$lib_path" | grep -q "ASCII"; then
-            oid=$(awk '/^oid sha256:/{print substr($2,8)}' "$lib_path")
-            url="https://github.com/sergio-correia/go-arapuca.git/info/lfs/objects/batch"
-            download_url=$(curl -s -X POST "$url" \
-              -H "Content-Type: application/vnd.git-lfs+json" \
-              -d "{\"operation\":\"download\",\"objects\":[{\"oid\":\"${oid}\",\"size\":1}]}" \
-              | python3 -c "import sys,json; print(json.load(sys.stdin)['objects'][0]['actions']['download']['href'])")
-            chmod u+w "$(dirname "$lib_path")"
-            chmod u+w "$lib_path"
-            curl -sL "$download_url" -o "$lib_path"
-            echo "Fetched libarapuca.a ($(wc -c < "$lib_path") bytes)"
-          fi
+          git clone https://github.com/sergio-correia/arapuca /tmp/arapuca
+          cd /tmp/arapuca
+          git checkout de97447cec63161bf4a209ac1a45cf4f40693099
+          cargo install cbindgen
+          make install PREFIX=$HOME/.local
+          echo "PKG_CONFIG_PATH=$HOME/.local/lib/pkgconfig" >> "$GITHUB_ENV"
 
       - name: Build
         env:
