@@ -133,9 +133,10 @@ jobs:
   copr:
     name: COPR RPM Build
     needs: publish
-    if: ${{ secrets.COPR_API_TOKEN != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      COPR_API_TOKEN: ${{ secrets.COPR_API_TOKEN }}
     strategy:
       fail-fast: false
       matrix:
@@ -171,13 +172,13 @@ jobs:
             rpmbuild/SPECS/${{ matrix.spec }}.spec
 
       - name: Configure copr-cli
-        env:
-          COPR_API_TOKEN: ${{ secrets.COPR_API_TOKEN }}
+        if: ${{ env.COPR_API_TOKEN != '' }}
         run: |
           mkdir -p ~/.config
           echo "$COPR_API_TOKEN" > ~/.config/copr
 
       - name: Submit to COPR
+        if: ${{ env.COPR_API_TOKEN != '' }}
         run: |
           srpm=$(find rpmbuild/SRPMS -name '*.src.rpm' | head -1)
           copr-cli build soda "$srpm"
