@@ -7,7 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.2.0] - 2026-04-27
+## [0.3.0] — "Right-Sized" - 2026-04-28
+
+### Added
+
+#### Adaptive context fitting
+- Pre-render `fitToBudget()` pass dynamically reduces context injection when prompts
+  approach the token budget — no template changes needed
+- Per-phase reduction priorities: siblings first, then diffs, then artifacts;
+  core prompt, ticket description, acceptance criteria, and plan are never reduced
+- Truncation manifest injected listing what was reduced so the model can use tools
+  to retrieve missing context (~30 tokens)
+- Per-phase `prompt_budget` configurable in `phases.yaml`
+- Fails with clear error when budget cannot be met after reduction
+
+#### Token estimation CLI
+- `soda run <ticket> --estimate` prints per-phase token estimates using bytes/3.3
+  heuristic (implies `--dry-run`)
+- Warns when estimated tokens exceed `warn_tokens` config (default 60K)
+- Summary line with total estimated tokens, ratio, and threshold
+- AGENTS.md ticket sizing section updated with corrected 80K budget
+
+#### Authentication: `apiKeyHelper` support
+- `auth.api_key_helper` config field for custom credential scripts
+- `--settings-path` passthrough to Claude Code CLI for `apiKeyHelper` integration
+- Documented that `--bare` mode skips OAuth/keychain — requires API key, Vertex, or
+  `apiKeyHelper`
+- `soda doctor` auth check detects API key, Vertex, and `apiKeyHelper` configurations
+
+#### RPM packaging
+- `packaging/rpm/soda.spec` — full build with CGO sandbox support
+- `packaging/rpm/soda-minimal.spec` — static binary without sandbox
+- Both specs include shell completions (bash/zsh/fish) and `config.example.yaml`
+- `Conflicts:` between packages prevents both installed simultaneously
+- CI workflow step for COPR submission (gated on `COPR_API_TOKEN` secret)
+
+#### Sandbox integration tests
+- Integration tests exercising full sandbox `Run()` path with mock process
+- Proxy round-trip tests with mock HTTP server
+- Sandbox isolation verification (Landlock, cgroups) with `t.Skip()` on
+  unsupported kernels
+- Gated behind `//go:build cgo && integration`
+- CI job with LFS fetch workaround (marked `continue-on-error` due to
+  go-arapuca LFS fragility)
+
+## [0.2.0] — "Trust but Verify" - 2026-04-27
 
 ### Added
 
@@ -316,6 +360,7 @@ Initial release of SODA — Session-Orchestrated Development Agent.
 - Atomic state writes (`.tmp` → rename) with archive on re-run
   (`verify.json` → `verify.json.1`)
 
-[Unreleased]: https://github.com/decko/soda/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/decko/soda/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/decko/soda/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/decko/soda/compare/v0.1.1...v0.2.0
 [0.1.0]: https://github.com/decko/soda/releases/tag/v0.1.0
