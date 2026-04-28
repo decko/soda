@@ -105,6 +105,10 @@ func (r *Runner) Run(ctx context.Context, opts runner.RunOpts) (*runner.RunResul
 	var settingsPath string
 	var extraReadForHelper []string
 	if opts.ApiKeyHelper != "" {
+		if !filepath.IsAbs(opts.ApiKeyHelper) {
+			return nil, fmt.Errorf("sandbox: ApiKeyHelper must be an absolute path, got %q", opts.ApiKeyHelper)
+		}
+
 		settingsData, jsonErr := json.Marshal(map[string]string{
 			"apiKeyHelper": opts.ApiKeyHelper,
 		})
@@ -123,10 +127,7 @@ func (r *Runner) Run(ctx context.Context, opts runner.RunOpts) (*runner.RunResul
 		sf.Close()
 
 		// Allow the sandbox to read the helper script's parent directory.
-		helperDir := filepath.Dir(opts.ApiKeyHelper)
-		if filepath.IsAbs(helperDir) {
-			extraReadForHelper = append(extraReadForHelper, helperDir)
-		}
+		extraReadForHelper = append(extraReadForHelper, filepath.Dir(opts.ApiKeyHelper))
 	}
 
 	// Build Claude CLI args via exported BuildArgs.
