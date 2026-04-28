@@ -22,6 +22,10 @@ jobs:
         include:
           - goos: linux
             goarch: amd64
+            cgo: "0"
+            suffix: linux-amd64
+          - goos: linux
+            goarch: amd64
             cgo: "1"
             suffix: linux-amd64-sandbox
           - goos: linux
