@@ -165,8 +165,12 @@ Implement each task from the plan, in dependency order. For each task:
 2. **Make the changes** described in the task.
 3. **Follow repo conventions** — formatting, naming, patterns.
 4. **Write or update tests** as specified in the plan.
+{{- if .Config.Formatter}}
 5. **Run the formatter** if configured: `{{.Config.Formatter}}`
+{{- end}}
+{{- if .Config.TestCommand}}
 6. **Run the tests** if configured: `{{.Config.TestCommand}}`
+{{- end}}
 7. **Commit** with a descriptive message referencing the ticket key.
 
 After all tasks are complete:
