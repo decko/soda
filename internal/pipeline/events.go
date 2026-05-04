@@ -98,6 +98,7 @@ const (
 	EventAutoMergeDryRun          = "auto_merge_dry_run"
 	EventRebaseConflict           = "rebase_conflict"
 	EventContextFitted            = "context_fitted"
+	EventConditionEvalFallback    = "condition_eval_fallback"
 )
 
 // FormatEvent formats an event as a compact, human-readable line:
