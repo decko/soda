@@ -13,22 +13,22 @@ func TestTriageSummary(t *testing.T) {
 	}{
 		{
 			name:  "complexity and automatable",
-			input: `{"automatable":true,"complexity":"low","ticket_key":"TEST-1"}`,
+			input: `{"automatable":"yes","complexity":"low","ticket_key":"TEST-1"}`,
 			want:  "low",
 		},
 		{
 			name:  "not automatable",
-			input: `{"automatable":false,"complexity":"high","ticket_key":"TEST-1"}`,
+			input: `{"automatable":"no","complexity":"high","ticket_key":"TEST-1"}`,
 			want:  "high, not automatable",
 		},
 		{
 			name:  "complexity only",
-			input: `{"automatable":true,"complexity":"medium"}`,
+			input: `{"automatable":"yes","complexity":"medium"}`,
 			want:  "medium",
 		},
 		{
 			name:  "no useful data",
-			input: `{"automatable":true}`,
+			input: `{"automatable":"yes"}`,
 			want:  "",
 		},
 		{

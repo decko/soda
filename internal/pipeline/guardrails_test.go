@@ -33,7 +33,7 @@ func TestEngine_BudgetExceeded(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage done",
 					CostUSD: 16.0,
 				},
@@ -78,7 +78,7 @@ func TestEngine_BudgetExceeded_AtLimit(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage done",
 					CostUSD: 15.0,
 				},
@@ -117,7 +117,7 @@ func TestEngine_GatePhase_TriageNotAutomatable(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":false,"block_reason":"needs human design review"}`),
+					Output:  json.RawMessage(`{"automatable":"no","block_reason":"needs human design review"}`),
 					RawText: "Not automatable",
 					CostUSD: 0.05,
 				},
@@ -159,7 +159,7 @@ func TestEngine_GatePhase_TriageSkipPlanDoesNotAffectGate(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true,"skip_plan":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes","skip_plan":true}`),
 					RawText: "Automatable with existing plan",
 					CostUSD: 0.05,
 				},
@@ -193,7 +193,7 @@ func TestEngine_GatePhase_TriageNotAutomatableWithSkipPlanStillBlocks(t *testing
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":false,"block_reason":"complex refactor","skip_plan":true}`),
+					Output:  json.RawMessage(`{"automatable":"no","block_reason":"complex refactor","skip_plan":true}`),
 					RawText: "Not automatable",
 					CostUSD: 0.05,
 				},
@@ -1657,7 +1657,7 @@ func TestEngine_PhaseBudgetExceeded(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage done",
 					CostUSD: 10.0,
 				},
@@ -1703,7 +1703,7 @@ func TestEngine_PhaseBudgetExceeded_AtLimit(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage done",
 					CostUSD: 5.0,
 				},
@@ -1749,7 +1749,7 @@ func TestEngine_PhaseBudgetUnderLimit(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage done",
 					CostUSD: 4.0,
 				},
@@ -1802,7 +1802,7 @@ func TestEngine_PhaseBudgetWarning(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage done",
 					CostUSD: 4.6,
 				},
@@ -1849,7 +1849,7 @@ func TestEngine_PhaseBudgetExceededEmitsEvent(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage done",
 					CostUSD: 10.0,
 				},
@@ -1894,7 +1894,7 @@ func TestEngine_PhaseBudgetCapsRunnerOpts(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage done",
 					CostUSD: 2.0,
 				},
@@ -1935,7 +1935,7 @@ func TestEngine_PhaseBudgetNoCap(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage done",
 					CostUSD: 50.0,
 				},
@@ -1974,7 +1974,7 @@ func TestEngine_PhaseBudgetSecondPhaseExceeds(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage done",
 					CostUSD: 3.0, // under $5 per-phase limit
 				},

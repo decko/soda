@@ -132,16 +132,16 @@ func TestFormatPhaseDetails(t *testing.T) {
 		state.WriteResult("triage", json.RawMessage(`{
 			"ticket_key": "T-1",
 			"repo": "soda",
-			"complexity": "small",
-			"automatable": true
+			"complexity": "low",
+			"automatable": "yes"
 		}`))
 
 		got := formatPhaseDetails(state, "triage")
 		if !strings.Contains(got, "repo=soda") {
 			t.Errorf("expected repo=soda, got %q", got)
 		}
-		if !strings.Contains(got, "complexity=small") {
-			t.Errorf("expected complexity=small, got %q", got)
+		if !strings.Contains(got, "complexity=low") {
+			t.Errorf("expected complexity=low, got %q", got)
 		}
 	})
 
@@ -151,8 +151,8 @@ func TestFormatPhaseDetails(t *testing.T) {
 		state.WriteResult("triage", json.RawMessage(`{
 			"ticket_key": "T-1",
 			"repo": "soda",
-			"complexity": "large",
-			"automatable": false,
+			"complexity": "high",
+			"automatable": "no",
 			"block_reason": "needs design review"
 		}`))
 
@@ -351,7 +351,7 @@ func TestPrintSummarySuccess(t *testing.T) {
 	}
 
 	// Write structured results
-	state.WriteResult("triage", json.RawMessage(`{"ticket_key":"PROJ-42","repo":"soda","complexity":"small","automatable":true}`))
+	state.WriteResult("triage", json.RawMessage(`{"ticket_key":"PROJ-42","repo":"soda","complexity":"low","automatable":"yes"}`))
 	state.WriteResult("plan", json.RawMessage(`{"ticket_key":"PROJ-42","approach":"x","tasks":[{"id":"T1","description":"d","files":[],"done_when":"w"}],"verification":{"commands":[]}}`))
 	state.WriteResult("implement", json.RawMessage(`{"ticket_key":"PROJ-42","branch":"soda/PROJ-42","commits":[{"hash":"abc","message":"feat","task_id":"T1"}],"files_changed":[{"path":"a.go","action":"modified"}],"task_results":[],"tests_passed":true}`))
 	state.WriteResult("verify", json.RawMessage(`{"ticket_key":"PROJ-42","verdict":"PASS","criteria_results":[],"command_results":[]}`))
@@ -429,7 +429,7 @@ func TestPrintSummaryFailure(t *testing.T) {
 		Error:      "test suite failed",
 	}
 
-	state.WriteResult("triage", json.RawMessage(`{"ticket_key":"PROJ-99","repo":"soda","complexity":"medium","automatable":true}`))
+	state.WriteResult("triage", json.RawMessage(`{"ticket_key":"PROJ-99","repo":"soda","complexity":"medium","automatable":"yes"}`))
 	state.WriteResult("plan", json.RawMessage(`{"ticket_key":"PROJ-99","approach":"x","tasks":[{"id":"T1","description":"d","files":[],"done_when":"w"},{"id":"T2","description":"e","files":[],"done_when":"x"}],"verification":{"commands":[]}}`))
 
 	var buf bytes.Buffer
@@ -477,7 +477,7 @@ func TestPrintSummarySkippedPhases(t *testing.T) {
 		Cost:       0.30,
 	}
 
-	state.WriteResult("triage", json.RawMessage(`{"ticket_key":"PROJ-50","repo":"soda","complexity":"small","automatable":false,"block_reason":"needs design review"}`))
+	state.WriteResult("triage", json.RawMessage(`{"ticket_key":"PROJ-50","repo":"soda","complexity":"low","automatable":"no","block_reason":"needs design review"}`))
 
 	var buf bytes.Buffer
 	skipped := map[string]bool{"plan": true, "implement": true, "verify": true, "submit": true}

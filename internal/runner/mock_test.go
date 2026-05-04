@@ -14,7 +14,7 @@ func TestMockRunner(t *testing.T) {
 		mock := &MockRunner{
 			Responses: map[string]*RunResult{
 				"triage": {
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "triage done",
 					CostUSD: 0.50,
 				},

@@ -21,7 +21,7 @@ func fullPipelinePhases() []PhaseConfig {
 		{
 			Name:   "triage",
 			Prompt: "triage.md",
-			Schema: `{"type":"object","properties":{"automatable":{"type":"boolean"}},"required":["automatable"]}`,
+			Schema: `{"type":"object","properties":{"automatable":{"type":"string","enum":["yes","no","partial"]}},"required":["automatable"]}`,
 			Retry:  RetryConfig{Transient: 2, Parse: 1, Semantic: 1},
 		},
 		{
@@ -85,7 +85,7 @@ func mockFixtures() map[string]*runner.RunResult {
 				"complexity": "medium",
 				"approach": "Add integration tests for the full pipeline lifecycle",
 				"risks": ["test flakiness", "mock coverage gaps"],
-				"automatable": true
+				"automatable": "yes"
 			}`),
 			RawText: "Triage: medium complexity, automatable, affects internal/pipeline",
 			CostUSD: 0.05,
@@ -532,7 +532,7 @@ func TestIntegration_MockGateBlocksDownstream(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":false,"block_reason":"requires architecture review"}`),
+					Output:  json.RawMessage(`{"automatable":"no","block_reason":"requires architecture review"}`),
 					RawText: "Blocked: architecture review needed",
 					CostUSD: 0.03,
 				},
@@ -1006,7 +1006,7 @@ func TestIntegration_MockBudgetEnforcement(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage done",
 					CostUSD: 5.10,
 				},
@@ -1089,7 +1089,7 @@ func TestIntegration_RealAPI(t *testing.T) {
 		{
 			Name:    "triage",
 			Prompt:  "triage.md",
-			Schema:  `{"type":"object","properties":{"automatable":{"type":"boolean"},"complexity":{"type":"string"}},"required":["automatable","complexity"]}`,
+			Schema:  `{"type":"object","properties":{"automatable":{"type":"string","enum":["yes","no","partial"]},"complexity":{"type":"string","enum":["low","medium","high"]}},"required":["automatable","complexity"]}`,
 			Retry:   RetryConfig{Transient: 1, Parse: 1, Semantic: 0},
 			Timeout: Duration{Duration: 2 * time.Minute},
 		},
@@ -1103,8 +1103,8 @@ Summary: {{.Ticket.Summary}}
 Description: {{.Ticket.Description}}
 
 Respond with a JSON object containing:
-- "automatable": true (this is a simple test ticket)
-- "complexity": "small"
+- "automatable": "yes" (this is a simple test ticket)
+- "complexity": "low"
 `
 	if err := os.WriteFile(filepath.Join(promptDir, "triage.md"), []byte(triageTmpl), 0644); err != nil {
 		t.Fatalf("write prompt: %v", err)
@@ -1153,7 +1153,7 @@ Respond with a JSON object containing:
 	}
 
 	var triageResult struct {
-		Automatable bool   `json:"automatable"`
+		Automatable string `json:"automatable"`
 		Complexity  string `json:"complexity"`
 	}
 	if err := json.Unmarshal(result, &triageResult); err != nil {

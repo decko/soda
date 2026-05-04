@@ -136,7 +136,7 @@ func TestBuildHistory_WithDetails(t *testing.T) {
 	// Write a triage result JSON.
 	triageResult := map[string]any{
 		"complexity":  "low",
-		"automatable": true,
+		"automatable": "yes",
 	}
 	data, _ := json.Marshal(triageResult)
 	if err := os.WriteFile(filepath.Join(dir, "triage.json"), data, 0644); err != nil {
@@ -226,7 +226,7 @@ func TestBuildHistory_ResultFileOverridesEventSummary(t *testing.T) {
 	dir := t.TempDir()
 
 	// Write a triage result file.
-	triageResult := map[string]any{"complexity": "medium", "automatable": true}
+	triageResult := map[string]any{"complexity": "medium", "automatable": "yes"}
 	data, _ := json.Marshal(triageResult)
 	if err := os.WriteFile(filepath.Join(dir, "triage.json"), data, 0644); err != nil {
 		t.Fatalf("WriteFile triage.json: %v", err)
@@ -253,7 +253,7 @@ func TestBuildHistory_ArchivedDetails(t *testing.T) {
 	// Write an archived triage result (generation 1).
 	triageResult := map[string]any{
 		"complexity":  "high",
-		"automatable": false,
+		"automatable": "no",
 	}
 	data, _ := json.Marshal(triageResult)
 	if err := os.WriteFile(filepath.Join(dir, "triage.json.1"), data, 0644); err != nil {
@@ -263,7 +263,7 @@ func TestBuildHistory_ArchivedDetails(t *testing.T) {
 	// Write the current triage result (generation 2).
 	triageResult2 := map[string]any{
 		"complexity":  "medium",
-		"automatable": true,
+		"automatable": "yes",
 	}
 	data2, _ := json.Marshal(triageResult2)
 	if err := os.WriteFile(filepath.Join(dir, "triage.json"), data2, 0644); err != nil {
@@ -354,7 +354,7 @@ func TestLoadPhaseResult(t *testing.T) {
 
 	t.Run("current result file", func(t *testing.T) {
 		dir := t.TempDir()
-		data := []byte(`{"complexity":"low","automatable":true}`)
+		data := []byte(`{"complexity":"low","automatable":"yes"}`)
 		if err := os.WriteFile(filepath.Join(dir, "triage.json"), data, 0644); err != nil {
 			t.Fatal(err)
 		}
@@ -384,7 +384,7 @@ func TestLoadPhaseResult(t *testing.T) {
 func TestLoadFullOutputs(t *testing.T) {
 	dir := t.TempDir()
 
-	triageData := []byte(`{"complexity":"low","automatable":true}`)
+	triageData := []byte(`{"complexity":"low","automatable":"yes"}`)
 	planData := []byte(`{"tasks":[{"id":"1"}]}`)
 	if err := os.WriteFile(filepath.Join(dir, "triage.json"), triageData, 0644); err != nil {
 		t.Fatal(err)

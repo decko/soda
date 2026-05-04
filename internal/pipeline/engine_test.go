@@ -39,7 +39,7 @@ func TestEngine_HappyPathAllPhasesComplete(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage: automatable",
 					CostUSD: 0.10,
 				},
@@ -121,7 +121,7 @@ func TestEngine_PromptHashPersistedToMeta(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage: automatable",
 					CostUSD: 0.10,
 				},
@@ -188,14 +188,14 @@ func TestEngine_PromptHashClearedOnRerun(t *testing.T) {
 			"triage": {
 				{
 					result: &runner.RunResult{
-						Output:  json.RawMessage(`{"automatable":true}`),
+						Output:  json.RawMessage(`{"automatable":"yes"}`),
 						RawText: "Triage: gen1",
 						CostUSD: 0.10,
 					},
 				},
 				{
 					result: &runner.RunResult{
-						Output:  json.RawMessage(`{"automatable":true}`),
+						Output:  json.RawMessage(`{"automatable":"yes"}`),
 						RawText: "Triage: gen2",
 						CostUSD: 0.10,
 					},
@@ -252,7 +252,7 @@ func TestEngine_TokenCountsPersistedToMeta(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:        json.RawMessage(`{"automatable":true}`),
+					Output:        json.RawMessage(`{"automatable":"yes"}`),
 					RawText:       "Triage: automatable",
 					CostUSD:       0.10,
 					TokensIn:      12000,
@@ -344,7 +344,7 @@ func TestEngine_TokenCountsOmittedWhenZero(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage: automatable",
 					CostUSD: 0.10,
 					// TokensIn, TokensOut, CacheTokensIn are all zero
@@ -414,7 +414,7 @@ func TestEngine_SkipsCompletedPhases(t *testing.T) {
 	if err := state.MarkRunning("triage"); err != nil {
 		t.Fatal(err)
 	}
-	if err := state.WriteResult("triage", json.RawMessage(`{"automatable":true}`)); err != nil {
+	if err := state.WriteResult("triage", json.RawMessage(`{"automatable":"yes"}`)); err != nil {
 		t.Fatal(err)
 	}
 	if err := state.WriteArtifact("triage", []byte("Triage done")); err != nil {
@@ -496,7 +496,7 @@ func TestEngine_TransientRetryWithBackoff(t *testing.T) {
 				{err: &runner.TransientError{Reason: "timeout", Err: fmt.Errorf("fail1")}},
 				{err: &runner.TransientError{Reason: "timeout", Err: fmt.Errorf("fail2")}},
 				{result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "success",
 					CostUSD: 0.05,
 				}},
@@ -549,7 +549,7 @@ func TestEngine_TransientRetrySuggestionInEvent(t *testing.T) {
 			"triage": {
 				{err: &runner.TransientError{Reason: "rate_limit", Err: fmt.Errorf("429 too many requests")}},
 				{result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "success",
 					CostUSD: 0.05,
 				}},
@@ -616,7 +616,7 @@ func TestEngine_ParseRetryAppendsError(t *testing.T) {
 			"triage": {
 				{err: parseErr},
 				{result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "success",
 					CostUSD: 0.05,
 				}},
@@ -725,7 +725,7 @@ func TestEngine_CheckpointMode(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage done",
 					CostUSD: 0.10,
 				},
@@ -970,7 +970,7 @@ func TestEngine_Resume(t *testing.T) {
 	if err := state.MarkRunning("triage"); err != nil {
 		t.Fatal(err)
 	}
-	if err := state.WriteResult("triage", json.RawMessage(`{"automatable":true}`)); err != nil {
+	if err := state.WriteResult("triage", json.RawMessage(`{"automatable":"yes"}`)); err != nil {
 		t.Fatal(err)
 	}
 	if err := state.WriteArtifact("triage", []byte("Triage done")); err != nil {
@@ -1068,7 +1068,7 @@ func TestEngine_SkipPlanRouting_SkipsPlanPhaseWhenTriageSetSkipPlan(t *testing.T
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true,"skip_plan":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes","skip_plan":true}`),
 					RawText: "Triage with skip_plan",
 					CostUSD: 0.05,
 				},
@@ -1160,7 +1160,7 @@ func TestEngine_SkipPlanRouting_NoSkipWhenSkipPlanFalse(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage without skip_plan",
 					CostUSD: 0.05,
 				},
@@ -1221,7 +1221,7 @@ func TestEngine_SkipPlanRouting_NoSkipWhenExistingPlanEmpty(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true,"skip_plan":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes","skip_plan":true}`),
 					RawText: "Triage with skip_plan but no plan",
 					CostUSD: 0.05,
 				},
@@ -1290,7 +1290,7 @@ func TestEngine_SkipPlanRouting_PlanArtifactAvailableToImplement(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true,"skip_plan":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes","skip_plan":true}`),
 					RawText: "Triage output",
 					CostUSD: 0.05,
 				},
@@ -1389,7 +1389,7 @@ func TestEngineFullLifecycle(t *testing.T) {
 		},
 	}
 
-	triageOutput := `{"automatable":true,"complexity":"medium","estimated_hours":4,"components":["api","auth"]}`
+	triageOutput := `{"automatable":"yes","complexity":"medium","estimated_hours":4,"components":["api","auth"]}`
 	planOutput := `{"tasks":[{"id":"T1","description":"Add auth middleware"},{"id":"T2","description":"Update API routes"}],"approach":"incremental"}`
 	implementOutput := `{"tests_passed":true,"commits":2,"files_changed":["middleware.go","routes.go"]}`
 	verifyOutput := `{"verdict":"PASS","test_results":{"passed":12,"failed":0},"coverage":85.5}`
@@ -1570,7 +1570,7 @@ func TestEnginePhaseGating(t *testing.T) {
 			responses: map[string][]flexResponse{
 				"triage": {{
 					result: &runner.RunResult{
-						Output:  json.RawMessage(`{"automatable":false,"block_reason":"requires database migration"}`),
+						Output:  json.RawMessage(`{"automatable":"no","block_reason":"requires database migration"}`),
 						RawText: "Not automatable: database migration needed",
 						CostUSD: 0.05,
 					},
@@ -1623,7 +1623,7 @@ func TestEnginePhaseGating(t *testing.T) {
 			responses: map[string][]flexResponse{
 				"triage": {{
 					result: &runner.RunResult{
-						Output:  json.RawMessage(`{"automatable":true}`),
+						Output:  json.RawMessage(`{"automatable":"yes"}`),
 						RawText: "Automatable",
 						CostUSD: 0.05,
 					},
@@ -1688,7 +1688,7 @@ func TestEnginePhaseGating(t *testing.T) {
 			responses: map[string][]flexResponse{
 				"triage": {{
 					result: &runner.RunResult{
-						Output:  json.RawMessage(`{"automatable":true}`),
+						Output:  json.RawMessage(`{"automatable":"yes"}`),
 						RawText: "Automatable",
 						CostUSD: 0.05,
 					},
@@ -1750,7 +1750,7 @@ func TestEnginePhaseGating(t *testing.T) {
 				"triage": {
 					{err: &runner.SemanticError{Message: "output incomplete"}},
 					{result: &runner.RunResult{
-						Output:  json.RawMessage(`{"automatable":true}`),
+						Output:  json.RawMessage(`{"automatable":"yes"}`),
 						RawText: "Triage complete",
 						CostUSD: 0.05,
 					}},
@@ -1803,7 +1803,7 @@ func TestEngine_ResumeRerunsCompletedPhase(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage v2",
 					CostUSD: 0.30,
 				},
@@ -1822,7 +1822,7 @@ func TestEngine_ResumeRerunsCompletedPhase(t *testing.T) {
 
 	// Pre-complete both triage and plan.
 	state.MarkRunning("triage")
-	state.WriteResult("triage", json.RawMessage(`{"automatable":true}`))
+	state.WriteResult("triage", json.RawMessage(`{"automatable":"yes"}`))
 	state.WriteArtifact("triage", []byte("Triage v1"))
 	state.MarkCompleted("triage")
 
@@ -1876,7 +1876,7 @@ func TestEngine_WorktreeCreatedBeforeFirstPhase(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage done",
 					CostUSD: 0.05,
 				},
@@ -1966,7 +1966,7 @@ func TestEngine_ResumeCreatesWorktreeIfMissing(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage done",
 					CostUSD: 0.05,
 				},
@@ -2028,7 +2028,7 @@ func TestEngine_ResumeWithExistingWorktreeSkipsCreation(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage done",
 					CostUSD: 0.05,
 				},
@@ -2081,7 +2081,7 @@ func TestEngine_BuildPromptDataIncludesConfigAndContext(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage done",
 					CostUSD: 0.05,
 				},
@@ -2180,7 +2180,7 @@ func TestEngine_BuildPromptDataIncludesDetectedStack(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage done",
 					CostUSD: 0.05,
 				},
@@ -2265,7 +2265,7 @@ func TestEngine_BuildPromptDataOmitsDetectedStackWhenEmpty(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage done",
 					CostUSD: 0.05,
 				},
@@ -2700,7 +2700,7 @@ func TestEngine_RunChecksGateOnSkippedPhases(t *testing.T) {
 	if err := state.MarkRunning("triage"); err != nil {
 		t.Fatal(err)
 	}
-	if err := state.WriteResult("triage", json.RawMessage(`{"automatable":false,"block_reason":"needs human"}`)); err != nil {
+	if err := state.WriteResult("triage", json.RawMessage(`{"automatable":"no","block_reason":"needs human"}`)); err != nil {
 		t.Fatal(err)
 	}
 	if err := state.MarkCompleted("triage"); err != nil {
@@ -3224,7 +3224,7 @@ func TestEngine_PromptLoadedEvents(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage done",
 					CostUSD: 0.01,
 				},
@@ -3280,7 +3280,7 @@ func TestEngine_PromptLoadedFallbackEvent(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage done",
 					CostUSD: 0.01,
 				},
@@ -3388,7 +3388,7 @@ func TestEngine_PerPhaseModel(t *testing.T) {
 			responses: map[string][]flexResponse{
 				"triage": {{
 					result: &runner.RunResult{
-						Output:  json.RawMessage(`{"automatable":true}`),
+						Output:  json.RawMessage(`{"automatable":"yes"}`),
 						RawText: "Triage output",
 						CostUSD: 0.10,
 					},
@@ -3447,7 +3447,7 @@ func TestEngine_PerPhaseModel(t *testing.T) {
 			responses: map[string][]flexResponse{
 				"triage": {{
 					result: &runner.RunResult{
-						Output:  json.RawMessage(`{"automatable":true}`),
+						Output:  json.RawMessage(`{"automatable":"yes"}`),
 						RawText: "Triage output",
 						CostUSD: 0.10,
 					},
@@ -3564,7 +3564,7 @@ func TestEngine_PhaseLifecycleEvents(t *testing.T) {
 			responses: map[string][]flexResponse{
 				"triage": {{
 					result: &runner.RunResult{
-						Output:  json.RawMessage(`{"automatable":true}`),
+						Output:  json.RawMessage(`{"automatable":"yes"}`),
 						RawText: "Triage output",
 						CostUSD: 0.25,
 					},
@@ -3717,7 +3717,7 @@ func TestEngine_OutputChunkEvents(t *testing.T) {
 			responses: map[string][]flexResponse{
 				"triage": {{
 					result: &runner.RunResult{
-						Output:  json.RawMessage(`{"automatable":true}`),
+						Output:  json.RawMessage(`{"automatable":"yes"}`),
 						RawText: "Triage done",
 						CostUSD: 0.10,
 					},
@@ -3783,7 +3783,7 @@ func TestEngine_PauseSignalBlocksBetweenPhases(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage done",
 					CostUSD: 0.10,
 				},
@@ -3863,7 +3863,7 @@ func TestEngine_PauseSignalContextCancel(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage done",
 					CostUSD: 0.10,
 				},
@@ -3922,7 +3922,7 @@ func TestEngine_PauseBlocksOutputStreaming(t *testing.T) {
 	// Custom runner that calls OnChunk and checks pause behavior.
 	blockingRunner := &blockingChunkRunner{
 		result: &runner.RunResult{
-			Output:  json.RawMessage(`{"automatable":true}`),
+			Output:  json.RawMessage(`{"automatable":"yes"}`),
 			RawText: "Triage done",
 			CostUSD: 0.10,
 		},
@@ -3979,7 +3979,7 @@ func TestEngine_NilPauseSignalNoOp(t *testing.T) {
 			responses: map[string][]flexResponse{
 				"triage": {{
 					result: &runner.RunResult{
-						Output:  json.RawMessage(`{"automatable":true}`),
+						Output:  json.RawMessage(`{"automatable":"yes"}`),
 						RawText: "Triage done",
 						CostUSD: 0.10,
 					},
@@ -4016,7 +4016,7 @@ func TestEngine_OnChunkPassedToRunner(t *testing.T) {
 	var capturedOnChunk func(string)
 	capturingRunner := &capturingChunkRunner{
 		result: &runner.RunResult{
-			Output:  json.RawMessage(`{"automatable":true}`),
+			Output:  json.RawMessage(`{"automatable":"yes"}`),
 			RawText: "Triage done",
 			CostUSD: 0.10,
 		},
@@ -4055,7 +4055,7 @@ func TestEngine_DrainPauseSignalUnpausesOnClose(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage done",
 					CostUSD: 0.10,
 				},
@@ -4187,7 +4187,7 @@ func TestEngine_OutputChunkNotLoggedToFile(t *testing.T) {
 			responses: map[string][]flexResponse{
 				"triage": {{
 					result: &runner.RunResult{
-						Output:  json.RawMessage(`{"automatable":true}`),
+						Output:  json.RawMessage(`{"automatable":"yes"}`),
 						RawText: "Triage done",
 						CostUSD: 0.10,
 					},
@@ -4252,7 +4252,7 @@ func TestEngine_CheckpointWithPauseSignal(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage done",
 					CostUSD: 0.10,
 				},
@@ -4342,7 +4342,7 @@ func TestEngine_CheckpointWithPauseSignal_ChannelClose(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage done",
 					CostUSD: 0.10,
 				},
@@ -4408,7 +4408,7 @@ func TestEngine_CheckpointWithPauseSignal_PauseResumeBeforeCheckpoint(t *testing
 			pauseCh <- false
 			time.Sleep(20 * time.Millisecond)
 			return &runner.RunResult{
-				Output:  json.RawMessage(`{"automatable":true}`),
+				Output:  json.RawMessage(`{"automatable":"yes"}`),
 				RawText: "Triage done",
 				CostUSD: 0.10,
 			}, nil
@@ -4588,7 +4588,7 @@ func TestEngine_CorrectivePhaseSkippedInForwardPass(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "auto",
 					CostUSD: 0.05,
 				},
@@ -5084,7 +5084,7 @@ func TestEngine_PipelineTimeout_Run(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "triage ok",
 					CostUSD: 0.01,
 				},
@@ -5171,7 +5171,7 @@ func TestEngine_PipelineTimeout_Resume(t *testing.T) {
 
 	// Pre-complete triage so Resume from plan works.
 	_ = state.MarkRunning("triage")
-	_ = state.WriteResult("triage", json.RawMessage(`{"automatable":true}`))
+	_ = state.WriteResult("triage", json.RawMessage(`{"automatable":"yes"}`))
 	_ = state.WriteArtifact("triage", []byte("done"))
 	_ = state.MarkCompleted("triage")
 
@@ -5247,7 +5247,7 @@ func TestEngine_PipelineTimeout_ResumeWithStaleFailed(t *testing.T) {
 
 	// Pre-complete triage from a prior run.
 	_ = state.MarkRunning("triage")
-	_ = state.WriteResult("triage", json.RawMessage(`{"automatable":true}`))
+	_ = state.WriteResult("triage", json.RawMessage(`{"automatable":"yes"}`))
 	_ = state.WriteArtifact("triage", []byte("done"))
 	_ = state.MarkCompleted("triage")
 
@@ -5287,7 +5287,7 @@ func TestEngine_PipelineTimeout_ZeroMeansNoLimit(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "ok",
 					CostUSD: 0.01,
 				},
@@ -5602,7 +5602,7 @@ func TestEngine_ExtrasNotUsedForBuiltinPhases(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage result here",
 					CostUSD: 0.05,
 				},
@@ -5689,7 +5689,7 @@ func TestEngine_RecoverCrashedPhase_RunEmitsFailureEvent(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage: automatable",
 					CostUSD: 0.10,
 				},
@@ -5712,7 +5712,7 @@ func TestEngine_RecoverCrashedPhase_RunEmitsFailureEvent(t *testing.T) {
 	// Simulate prior crash: triage completed, plan left in "running".
 	_ = state.MarkRunning("triage")
 	_ = state.MarkCompleted("triage")
-	_ = state.WriteResult("triage", json.RawMessage(`{"automatable":true}`))
+	_ = state.WriteResult("triage", json.RawMessage(`{"automatable":"yes"}`))
 	_ = state.WriteArtifact("triage", []byte("Triage done"))
 
 	_ = state.MarkRunning("plan")
@@ -5779,7 +5779,7 @@ func TestEngine_RecoverCrashedPhase_ResumeEmitsFailureEvent(t *testing.T) {
 	// Simulate prior crash: triage completed, plan left in "running".
 	_ = state.MarkRunning("triage")
 	_ = state.MarkCompleted("triage")
-	_ = state.WriteResult("triage", json.RawMessage(`{"automatable":true}`))
+	_ = state.WriteResult("triage", json.RawMessage(`{"automatable":"yes"}`))
 	_ = state.WriteArtifact("triage", []byte("Triage done"))
 
 	_ = state.MarkRunning("plan")
@@ -5822,7 +5822,7 @@ func TestEngine_RecoverCrashedPhase_NoCrashNoEvent(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage: automatable",
 					CostUSD: 0.10,
 				},
@@ -5865,7 +5865,7 @@ func TestEngine_RecoverCrashedPhase_PhaseStatusMarkedFailed(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage: automatable",
 					CostUSD: 0.10,
 				},
@@ -5926,7 +5926,7 @@ func TestEngine_EmitLogsWarningOnEventLogFailure(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage: automatable",
 					CostUSD: 0.05,
 				},
@@ -5986,7 +5986,7 @@ func TestEngine_TokenBudgetEstimationPersisted(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage: automatable",
 					CostUSD: 0.10,
 				},
@@ -6037,7 +6037,7 @@ func TestEngine_TokenBudgetCustomBytesPerToken(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage: automatable",
 					CostUSD: 0.10,
 				},
@@ -6083,7 +6083,7 @@ func TestEngine_TokenBudgetWarningEmitted(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage: automatable",
 					CostUSD: 0.10,
 				},
@@ -6144,7 +6144,7 @@ func TestEngine_TokenBudgetNoWarningBelowThreshold(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage: automatable",
 					CostUSD: 0.10,
 				},
@@ -6185,7 +6185,7 @@ func TestEngine_TokenBudgetCalibrationEmitted(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:        json.RawMessage(`{"automatable":true}`),
+					Output:        json.RawMessage(`{"automatable":"yes"}`),
 					RawText:       "Triage: automatable",
 					CostUSD:       0.10,
 					TokensIn:      500,
@@ -6248,7 +6248,7 @@ func TestEngine_TokenBudgetCalibrationNotEmittedWhenZeroTokens(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage: automatable",
 					CostUSD: 0.10,
 					// TokensIn is 0 — no calibration event should be emitted
@@ -6288,7 +6288,7 @@ func TestEngine_NotificationOnSuccess(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage: automatable",
 					CostUSD: 0.10,
 				},
@@ -6427,7 +6427,7 @@ func TestEngine_NotificationWebhookError(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage: automatable",
 					CostUSD: 0.10,
 				},
@@ -6477,7 +6477,7 @@ func TestEngine_NoNotificationWithoutConfig(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage: automatable",
 					CostUSD: 0.10,
 				},
@@ -6525,7 +6525,7 @@ func TestEngine_NotificationOnResume(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage: automatable",
 					CostUSD: 0.10,
 				},
@@ -6618,7 +6618,7 @@ func TestEngine_NotificationPartialStatus(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
 					RawText: "Triage: automatable",
 					CostUSD: 0.10,
 				},
