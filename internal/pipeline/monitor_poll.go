@@ -851,6 +851,7 @@ func (e *Engine) respondToComments(ctx context.Context, phase PhaseConfig, class
 		WorkDir:      e.workDir(phase),
 		Model:        e.config.Model,
 		Timeout:      phase.Timeout.Duration,
+		ApiKeyHelper: e.config.ApiKeyHelper,
 	}
 
 	result, err := e.runWithRetry(ctx, phase, opts)
