@@ -280,7 +280,18 @@ func (e *Engine) gateRework(phase PhaseConfig, raw json.RawMessage) error {
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil // gracefully skip — consistent with other gating cases
 	}
-	if !strings.EqualFold(result.Verdict, "rework") {
+	verdict := strings.ToLower(strings.TrimSpace(result.Verdict))
+	if verdict != "rework" {
+		switch verdict {
+		case "pass", "pass-with-follow-ups", "":
+			// known non-rework values — proceed normally
+		default:
+			e.emit(Event{
+				Phase: phase.Name,
+				Kind:  EventConditionEvalFallback,
+				Data:  map[string]any{"field": "verdict", "value": result.Verdict},
+			})
+		}
 		return nil
 	}
 
