@@ -152,6 +152,25 @@ func (r *Runner) Run(ctx context.Context, opts runner.RunOpts) (*runner.RunResul
 	// Copy the slice to avoid mutating r.config.ExtraReadPaths across calls.
 	combinedExtraRead := append([]string{}, r.config.ExtraReadPaths...)
 	combinedExtraRead = append(combinedExtraRead, extraReadForHelper...)
+
+	// Vertex mode: Claude Code reads ~/.claude/claude.settings for Vertex
+	// env vars (project, region) and validates model availability against
+	// the Vertex model catalog using ADC. Since HOME is overridden to
+	// tmpDir inside the sandbox, both paths are unreachable without
+	// explicit read access. The proxy handles inference auth, but the
+	// model catalog pre-check and settings need filesystem access.
+	if os.Getenv("CLAUDE_CODE_USE_VERTEX") != "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			gcloudDir := filepath.Join(home, ".config", "gcloud")
+			if _, err := os.Stat(gcloudDir); err == nil {
+				combinedExtraRead = append(combinedExtraRead, gcloudDir)
+			}
+			claudeDir := filepath.Join(home, ".claude")
+			if _, err := os.Stat(claudeDir); err == nil {
+				combinedExtraRead = append(combinedExtraRead, claudeDir)
+			}
+		}
+	}
 	sp := buildSandboxPaths(opts.WorkDir, tmpDir, r.claudeRead, combinedExtraRead, r.config.ExtraWritePaths)
 
 	useNetNS := r.config.UseNetNS
@@ -172,11 +191,13 @@ func (r *Runner) Run(ctx context.Context, opts runner.RunOpts) (*runner.RunResul
 
 		if os.Getenv("CLAUDE_CODE_USE_VERTEX") != "" {
 			// Vertex mode: resolve upstream URL and token source from ADC.
+			// The "global" region is used for billing/routing but doesn't
+			// host model endpoints. Fall back to a real region.
 			region := os.Getenv("CLOUD_ML_REGION")
-			if region == "" {
+			if region == "" || region == "global" {
 				region = os.Getenv("VERTEXAI_LOCATION")
 			}
-			if region == "" {
+			if region == "" || region == "global" {
 				region = "us-east5"
 			}
 			proxyCfg.UpstreamURL = fmt.Sprintf("https://%s-aiplatform.googleapis.com/v1", region)

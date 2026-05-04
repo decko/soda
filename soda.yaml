@@ -19,6 +19,8 @@ sandbox:
     memory_mb: 2048
     cpu_percent: 200
     max_pids: 256
+  proxy:
+    enabled: true
 
 # Budget
 limits:
