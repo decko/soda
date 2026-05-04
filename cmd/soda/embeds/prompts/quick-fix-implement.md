@@ -61,8 +61,12 @@ You must triage the ticket, decide on an approach, and implement it directly.
    If the change is too large or complex, note it in deviations.
 3. **Implement the fix** — make the changes, following repo conventions.
 4. **Write or update tests** as needed.
+{{- if .Config.Formatter}}
 5. **Run the formatter** if configured: `{{.Config.Formatter}}`
+{{- end}}
+{{- if .Config.TestCommand}}
 6. **Run the tests** if configured: `{{.Config.TestCommand}}`
+{{- end}}
 7. **Commit** with a descriptive message referencing the ticket key.
 
 After implementation:
