@@ -134,10 +134,39 @@ func claudeEnv(tmpDir string, opts runner.RunOpts, claudeBin, proxyURL string) [
 				"ANTHROPIC_VERTEX_BASE_URL="+proxyURL,
 				"CLAUDE_CODE_SKIP_VERTEX_AUTH=1",
 			)
-			for _, key := range []string{"VERTEXAI_PROJECT", "VERTEXAI_LOCATION", "CLOUD_ML_REGION", "ANTHROPIC_VERTEX_PROJECT_ID"} {
+			// Resolve the Vertex region. Claude Code validates model
+			// availability directly (bypassing the proxy) using
+			// CLOUD_ML_REGION. The "global" region doesn't host models,
+			// so we fall back to the proxy's upstream region.
+			region := os.Getenv("CLOUD_ML_REGION")
+			if region == "" || region == "global" {
+				region = os.Getenv("VERTEXAI_LOCATION")
+			}
+			if region == "" || region == "global" {
+				region = "us-east5"
+			}
+			for _, key := range []string{"VERTEXAI_PROJECT", "ANTHROPIC_VERTEX_PROJECT_ID"} {
 				if val := os.Getenv(key); val != "" {
 					env = append(env, key+"="+val)
 				}
+			}
+			env = append(env,
+				"VERTEXAI_LOCATION="+region,
+				"CLOUD_ML_REGION="+region,
+			)
+			// Claude Code validates model availability against the Vertex
+			// model catalog using ADC. Since HOME is overridden to tmpDir,
+			// the default ADC path (~/.config/gcloud/application_default_credentials.json)
+			// is unreachable. Point GOOGLE_APPLICATION_CREDENTIALS at the real file.
+			if os.Getenv("GOOGLE_APPLICATION_CREDENTIALS") == "" {
+				if realHome, err := os.UserHomeDir(); err == nil {
+					adcPath := filepath.Join(realHome, ".config", "gcloud", "application_default_credentials.json")
+					if _, err := os.Stat(adcPath); err == nil {
+						env = append(env, "GOOGLE_APPLICATION_CREDENTIALS="+adcPath)
+					}
+				}
+			} else {
+				env = append(env, "GOOGLE_APPLICATION_CREDENTIALS="+os.Getenv("GOOGLE_APPLICATION_CREDENTIALS"))
 			}
 		} else {
 			// Direct Anthropic mode: fake API key + base URL.
