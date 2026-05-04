@@ -2598,3 +2598,170 @@ func TestEngine_ImplementNoChanges_CommitsOnlyAllowed(t *testing.T) {
 		t.Fatalf("rework with commits-only should succeed, got: %v", err)
 	}
 }
+
+func TestEngine_GatePhase_TriageUnexpectedAutomatable_EmitsFallback(t *testing.T) {
+	// When triage returns an unrecognized automatable value, the engine should
+	// emit EventConditionEvalFallback and return PhaseGateError.
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":"garbage","block_reason":"some reason"}`),
+					RawText: "Triage done",
+					CostUSD: 0.05,
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(e Event) {
+			events = append(events, e)
+		}
+	})
+
+	err := engine.Run(context.Background())
+
+	var gateErr *PhaseGateError
+	if !errors.As(err, &gateErr) {
+		t.Fatalf("expected PhaseGateError for unexpected automatable value, got: %v", err)
+	}
+	if gateErr.Phase != "triage" {
+		t.Errorf("gate error phase = %q, want %q", gateErr.Phase, "triage")
+	}
+
+	var found bool
+	for _, ev := range events {
+		if ev.Kind == EventConditionEvalFallback && ev.Phase == "triage" {
+			found = true
+			if ev.Data["field"] != "automatable" {
+				t.Errorf("fallback event field = %q, want %q", ev.Data["field"], "automatable")
+			}
+			if ev.Data["value"] != "garbage" {
+				t.Errorf("fallback event value = %q, want %q", ev.Data["value"], "garbage")
+			}
+		}
+	}
+	if !found {
+		t.Error("expected EventConditionEvalFallback to be emitted for unexpected automatable value")
+	}
+}
+
+func TestEngine_GatePhase_VerifyUnexpectedVerdict_EmitsFallback(t *testing.T) {
+	// When verify returns an unrecognized verdict, the engine should emit
+	// EventConditionEvalFallback and continue (no PhaseGateError).
+	phases := []PhaseConfig{
+		{
+			Name:   "implement",
+			Prompt: "implement.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "verify",
+			Prompt:    "verify.md",
+			DependsOn: []string{"implement"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true}`),
+					RawText: "impl done",
+					CostUSD: 0.10,
+				},
+			}},
+			"verify": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"verdict":"unknown","fixes_required":[]}`),
+					RawText: "unexpected verdict",
+					CostUSD: 0.05,
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(e Event) {
+			events = append(events, e)
+		}
+	})
+
+	// Unexpected verdict falls through the default case — no gate error expected.
+	_ = engine.Run(context.Background())
+
+	var found bool
+	for _, ev := range events {
+		if ev.Kind == EventConditionEvalFallback && ev.Phase == "verify" {
+			found = true
+			if ev.Data["field"] != "verdict" {
+				t.Errorf("fallback event field = %q, want %q", ev.Data["field"], "verdict")
+			}
+			if ev.Data["value"] != "unknown" {
+				t.Errorf("fallback event value = %q, want %q", ev.Data["value"], "unknown")
+			}
+		}
+	}
+	if !found {
+		t.Error("expected EventConditionEvalFallback to be emitted for unexpected verify verdict")
+	}
+}
+
+func TestEngine_GateRework_ReviewUnexpectedVerdict_EmitsFallback(t *testing.T) {
+	// When a phase with Rework config returns an unrecognized verdict (not
+	// "pass", "rework", or "pass-with-follow-ups"), gateRework should emit
+	// EventConditionEvalFallback and return nil (non-blocking).
+	phases := []PhaseConfig{
+		{
+			Name:   "x",
+			Prompt: "x.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	var events []Event
+	engine, _ := setupEngine(t, phases, &flexMockRunner{}, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(e Event) {
+			events = append(events, e)
+		}
+	})
+
+	phase := PhaseConfig{
+		Name:   "review",
+		Rework: &ReworkConfig{Target: "implement"},
+	}
+	raw := json.RawMessage(`{"verdict":"bogus_value"}`)
+
+	err := engine.gateRework(phase, raw)
+	if err != nil {
+		t.Fatalf("expected nil for unexpected review verdict, got: %v", err)
+	}
+
+	var found bool
+	for _, ev := range events {
+		if ev.Kind == EventConditionEvalFallback && ev.Phase == "review" {
+			found = true
+			if ev.Data["field"] != "verdict" {
+				t.Errorf("fallback event field = %q, want %q", ev.Data["field"], "verdict")
+			}
+			if ev.Data["value"] != "bogus_value" {
+				t.Errorf("fallback event value = %q, want %q", ev.Data["value"], "bogus_value")
+			}
+		}
+	}
+	if !found {
+		t.Error("expected EventConditionEvalFallback to be emitted for unexpected review verdict")
+	}
+}
