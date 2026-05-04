@@ -97,6 +97,7 @@ type jsonSchema struct {
 	Properties map[string]jsonSchema `json:"properties,omitempty"`
 	Items      *jsonSchema           `json:"items,omitempty"`
 	Required   []string              `json:"required,omitempty"`
+	Enum       []string              `json:"enum,omitempty"`
 }
 
 // generateSchema builds a JSON Schema from a reflect.Type.
@@ -153,7 +154,20 @@ func generateStructSchema(typ reflect.Type) jsonSchema {
 			}
 		}
 
-		props[name] = generateSchema(field.Type)
+		schema := generateSchema(field.Type)
+
+		// Parse jsonschema struct tag for enum constraints.
+		if jsTag := field.Tag.Get("jsonschema"); jsTag != "" {
+			for _, part := range strings.Split(jsTag, ",") {
+				part = strings.TrimSpace(part)
+				if strings.HasPrefix(part, "enum=") {
+					vals := strings.Split(strings.TrimPrefix(part, "enum="), "|")
+					schema.Enum = vals
+				}
+			}
+		}
+
+		props[name] = schema
 
 		if !omitempty {
 			required = append(required, name)
