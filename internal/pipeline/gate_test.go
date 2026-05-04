@@ -117,7 +117,7 @@ func TestEngine_triageRequestsSkipPlan_True(t *testing.T) {
 		cfg.Ticket.ExistingPlan = "some plan"
 	})
 	_ = state.MarkRunning("triage")
-	_ = state.WriteResult("triage", json.RawMessage(`{"automatable":true,"skip_plan":true}`))
+	_ = state.WriteResult("triage", json.RawMessage(`{"automatable":"yes","skip_plan":true}`))
 
 	if !engine.triageRequestsSkipPlan() {
 		t.Error("expected triageRequestsSkipPlan=true when skip_plan=true and ExistingPlan is set")
@@ -133,7 +133,7 @@ func TestEngine_triageRequestsSkipPlan_FalseWhenNotSet(t *testing.T) {
 		cfg.Ticket.ExistingPlan = "some plan"
 	})
 	_ = state.MarkRunning("triage")
-	_ = state.WriteResult("triage", json.RawMessage(`{"automatable":true,"skip_plan":false}`))
+	_ = state.WriteResult("triage", json.RawMessage(`{"automatable":"yes","skip_plan":false}`))
 
 	if engine.triageRequestsSkipPlan() {
 		t.Error("expected triageRequestsSkipPlan=false when skip_plan=false")
@@ -147,7 +147,7 @@ func TestEngine_triageRequestsSkipPlan_FalseWhenNoPlan(t *testing.T) {
 
 	engine, state := setupEngine(t, phases, &flexMockRunner{})
 	_ = state.MarkRunning("triage")
-	_ = state.WriteResult("triage", json.RawMessage(`{"automatable":true,"skip_plan":true}`))
+	_ = state.WriteResult("triage", json.RawMessage(`{"automatable":"yes","skip_plan":true}`))
 
 	// No ExistingPlan set → false
 	if engine.triageRequestsSkipPlan() {
@@ -321,7 +321,7 @@ func TestEngine_skipPlanFromTriage_FullPipeline(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"automatable":true,"skip_plan":true}`),
+					Output:  json.RawMessage(`{"automatable":"yes","skip_plan":true}`),
 					RawText: "triage result",
 					CostUSD: 0.01,
 				},

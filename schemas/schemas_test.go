@@ -98,8 +98,8 @@ func TestGeneratedSchemas_ValidJSON(t *testing.T) {
 
 func TestTriageSchema_MatchesStruct(t *testing.T) {
 	var parsed struct {
-		Properties map[string]interface{} `json:"properties"`
-		Required   []string               `json:"required"`
+		Properties map[string]json.RawMessage `json:"properties"`
+		Required   []string                   `json:"required"`
 	}
 	if err := json.Unmarshal([]byte(TriageSchema), &parsed); err != nil {
 		t.Fatalf("unmarshal: %v", err)
@@ -138,6 +138,55 @@ func TestTriageSchema_MatchesStruct(t *testing.T) {
 	for _, prop := range wantProps {
 		if _, ok := parsed.Properties[prop]; !ok {
 			t.Errorf("missing property %q", prop)
+		}
+	}
+
+	// automatable should be type=string with enum constraint (not boolean).
+	assertEnum(t, parsed.Properties["automatable"], "string", []string{"yes", "no", "partial"})
+
+	// complexity should have enum constraint.
+	assertEnum(t, parsed.Properties["complexity"], "string", []string{"low", "medium", "high"})
+}
+
+func TestVerifySchema_VerdictEnum(t *testing.T) {
+	var parsed struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+	}
+	if err := json.Unmarshal([]byte(VerifySchema), &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	assertEnum(t, parsed.Properties["verdict"], "string", []string{"PASS", "FAIL"})
+}
+
+func TestReviewSchema_VerdictEnum(t *testing.T) {
+	var parsed struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+	}
+	if err := json.Unmarshal([]byte(ReviewSchema), &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	assertEnum(t, parsed.Properties["verdict"], "string", []string{"pass", "rework", "pass-with-follow-ups"})
+}
+
+// assertEnum verifies that a JSON Schema property has the expected type and enum values.
+func assertEnum(t *testing.T, raw json.RawMessage, wantType string, wantEnum []string) {
+	t.Helper()
+	var prop struct {
+		Type string   `json:"type"`
+		Enum []string `json:"enum"`
+	}
+	if err := json.Unmarshal(raw, &prop); err != nil {
+		t.Fatalf("unmarshal property: %v", err)
+	}
+	if prop.Type != wantType {
+		t.Errorf("type = %q, want %q", prop.Type, wantType)
+	}
+	if len(prop.Enum) != len(wantEnum) {
+		t.Fatalf("enum count = %d, want %d: %v", len(prop.Enum), len(wantEnum), prop.Enum)
+	}
+	for i, v := range wantEnum {
+		if prop.Enum[i] != v {
+			t.Errorf("enum[%d] = %q, want %q", i, prop.Enum[i], v)
 		}
 	}
 }

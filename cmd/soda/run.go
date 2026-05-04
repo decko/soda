@@ -546,7 +546,7 @@ func buildMockRunner() *runner.MockRunner {
 	return &runner.MockRunner{
 		Responses: map[string]*runner.RunResult{
 			"triage": {
-				Output:  json.RawMessage(`{"automatable":true,"ticket_key":"MOCK","complexity":"low","approach":"mock approach"}`),
+				Output:  json.RawMessage(`{"automatable":"yes","ticket_key":"MOCK","complexity":"low","approach":"mock approach"}`),
 				RawText: "Mock triage: ticket is automatable",
 			},
 			"plan": {
@@ -1025,7 +1025,7 @@ func formatPhaseDetails(state *pipeline.State, phase string) string {
 		if out.Complexity != "" {
 			parts = append(parts, "complexity="+out.Complexity)
 		}
-		if !out.Automatable {
+		if !strings.EqualFold(out.Automatable, "yes") {
 			reason := out.BlockReason
 			if reason == "" {
 				reason = "not automatable"

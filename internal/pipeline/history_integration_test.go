@@ -13,7 +13,7 @@ func TestBuildHistory_FullPipeline(t *testing.T) {
 	dir := t.TempDir()
 
 	// Write result files.
-	writeJSON(t, filepath.Join(dir, "triage.json"), map[string]any{"complexity": "low", "automatable": true})
+	writeJSON(t, filepath.Join(dir, "triage.json"), map[string]any{"complexity": "low", "automatable": "yes"})
 	writeJSON(t, filepath.Join(dir, "plan.json"), map[string]any{"tasks": []any{map[string]any{"id": "1"}, map[string]any{"id": "2"}}})
 	writeJSON(t, filepath.Join(dir, "implement.json"), map[string]any{"files_changed": []any{map[string]any{"path": "a.go"}}, "commits": []any{map[string]any{"hash": "abc"}}, "tests_passed": true})
 	writeJSON(t, filepath.Join(dir, "verify.json"), map[string]any{"verdict": "PASS"})

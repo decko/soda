@@ -3,7 +3,7 @@ package schemas
 // VerifyOutput is the structured output for the verify phase.
 type VerifyOutput struct {
 	TicketKey       string            `json:"ticket_key"`
-	Verdict         string            `json:"verdict"` // PASS, FAIL
+	Verdict         string            `json:"verdict" jsonschema:"enum=PASS|FAIL"` // PASS, FAIL
 	CriteriaResults []CriterionResult `json:"criteria_results"`
 	CommandResults  []CommandResult   `json:"command_results"`
 	CodeIssues      []CodeIssue       `json:"code_issues,omitempty"`

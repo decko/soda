@@ -53,7 +53,7 @@ func fivePhaseResults() map[string][]flexResponse {
 	return map[string][]flexResponse{
 		"triage": {{
 			result: &runner.RunResult{
-				Output:  json.RawMessage(`{"automatable":true}`),
+				Output:  json.RawMessage(`{"automatable":"yes"}`),
 				RawText: "Triage: automatable",
 				CostUSD: 0.10,
 			},
@@ -145,7 +145,7 @@ func allCrashBoundaries() []crashBoundary {
 func phaseResult(phase string) json.RawMessage {
 	switch phase {
 	case "triage":
-		return json.RawMessage(`{"automatable":true}`)
+		return json.RawMessage(`{"automatable":"yes"}`)
 	case "plan":
 		return json.RawMessage(`{"tasks":["task1","task2"]}`)
 	case "implement":

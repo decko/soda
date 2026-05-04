@@ -153,7 +153,7 @@ func TestRenderEventsHistory_PromptHash(t *testing.T) {
 	dir := t.TempDir()
 
 	// Write a triage result JSON so the phase has output to display.
-	triageResult := map[string]any{"complexity": "low", "automatable": true}
+	triageResult := map[string]any{"complexity": "low", "automatable": "yes"}
 	data, _ := json.Marshal(triageResult)
 	if err := os.WriteFile(filepath.Join(dir, "triage.json"), data, 0644); err != nil {
 		t.Fatalf("WriteFile triage.json: %v", err)
@@ -212,7 +212,7 @@ func TestRenderEventsHistory_PromptHashSuperseded(t *testing.T) {
 	dir := t.TempDir()
 
 	// Write result files for both generations.
-	result := map[string]any{"complexity": "low", "automatable": true}
+	result := map[string]any{"complexity": "low", "automatable": "yes"}
 	data, _ := json.Marshal(result)
 	// Gen 1 archived result.
 	if err := os.WriteFile(filepath.Join(dir, "triage.json.1"), data, 0644); err != nil {

@@ -9,8 +9,10 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"go/format"
 	"os"
 	"reflect"
 	"sort"
@@ -68,13 +70,6 @@ func main() {
 		outPath = envPath
 	}
 
-	file, err := os.Create(outPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "schemagen: create %s: %v\n", outPath, err)
-		os.Exit(1)
-	}
-	defer file.Close()
-
 	tmpl := template.Must(template.New("generated").Parse(generatedTemplate))
 	data := struct {
 		Timestamp string
@@ -83,8 +78,23 @@ func main() {
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 		Entries:   entries,
 	}
-	if err := tmpl.Execute(file, data); err != nil {
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
 		fmt.Fprintf(os.Stderr, "schemagen: execute template: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Run gofmt on the generated source so the output is always
+	// format-clean without requiring a separate `make fmt` step.
+	formatted, err := format.Source(buf.Bytes())
+	if err != nil {
+		// Fall back to unformatted output — still valid Go.
+		formatted = buf.Bytes()
+	}
+
+	if err := os.WriteFile(outPath, formatted, 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "schemagen: write %s: %v\n", outPath, err)
 		os.Exit(1)
 	}
 
@@ -97,6 +107,7 @@ type jsonSchema struct {
 	Properties map[string]jsonSchema `json:"properties,omitempty"`
 	Items      *jsonSchema           `json:"items,omitempty"`
 	Required   []string              `json:"required,omitempty"`
+	Enum       []string              `json:"enum,omitempty"`
 }
 
 // generateSchema builds a JSON Schema from a reflect.Type.
@@ -153,7 +164,20 @@ func generateStructSchema(typ reflect.Type) jsonSchema {
 			}
 		}
 
-		props[name] = generateSchema(field.Type)
+		schema := generateSchema(field.Type)
+
+		// Parse jsonschema struct tag for enum constraints.
+		if jsTag := field.Tag.Get("jsonschema"); jsTag != "" {
+			for _, part := range strings.Split(jsTag, ",") {
+				part = strings.TrimSpace(part)
+				if strings.HasPrefix(part, "enum=") {
+					vals := strings.Split(strings.TrimPrefix(part, "enum="), "|")
+					schema.Enum = vals
+				}
+			}
+		}
+
+		props[name] = schema
 
 		if !omitempty {
 			required = append(required, name)

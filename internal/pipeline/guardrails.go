@@ -107,13 +107,28 @@ func (e *Engine) gatePhase(phase PhaseConfig) error {
 	switch phase.Name {
 	case "triage":
 		var result struct {
-			Automatable bool   `json:"automatable"`
+			Automatable string `json:"automatable"`
 			BlockReason string `json:"block_reason"`
 		}
 		if err := json.Unmarshal(raw, &result); err != nil {
 			return nil
 		}
-		if !result.Automatable {
+		val := strings.ToLower(strings.TrimSpace(result.Automatable))
+		switch val {
+		case "yes":
+			// pass — automatable
+		case "no", "partial":
+			reason := result.BlockReason
+			if reason == "" {
+				reason = "ticket not automatable"
+			}
+			return &PhaseGateError{Phase: phase.Name, Reason: reason}
+		default:
+			e.emit(Event{
+				Phase: phase.Name,
+				Kind:  EventConditionEvalFallback,
+				Data:  map[string]any{"field": "automatable", "value": result.Automatable},
+			})
 			reason := result.BlockReason
 			if reason == "" {
 				reason = "ticket not automatable"
@@ -191,7 +206,21 @@ func (e *Engine) gatePhase(phase PhaseConfig) error {
 		if err := json.Unmarshal(raw, &result); err != nil {
 			return nil
 		}
-		if strings.EqualFold(result.Verdict, "FAIL") {
+		verdict := strings.ToLower(strings.TrimSpace(result.Verdict))
+		switch verdict {
+		case "pass":
+			// OK
+		case "fail":
+			if err := e.gateVerifyFail(phase, result.FixesRequired); err != nil {
+				return err
+			}
+		default:
+			e.emit(Event{
+				Phase: phase.Name,
+				Kind:  EventConditionEvalFallback,
+				Data:  map[string]any{"field": "verdict", "value": result.Verdict},
+			})
+			// Treat unknown verdict conservatively as a failure.
 			if err := e.gateVerifyFail(phase, result.FixesRequired); err != nil {
 				return err
 			}
@@ -255,7 +284,18 @@ func (e *Engine) gateRework(phase PhaseConfig, raw json.RawMessage) error {
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil // gracefully skip — consistent with other gating cases
 	}
-	if !strings.EqualFold(result.Verdict, "rework") {
+	verdict := strings.ToLower(strings.TrimSpace(result.Verdict))
+	if verdict != "rework" {
+		switch verdict {
+		case "pass", "pass-with-follow-ups", "":
+			// known non-rework values — proceed normally
+		default:
+			e.emit(Event{
+				Phase: phase.Name,
+				Kind:  EventConditionEvalFallback,
+				Data:  map[string]any{"field": "verdict", "value": result.Verdict},
+			})
+		}
 		return nil
 	}
 

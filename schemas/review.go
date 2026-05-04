@@ -5,7 +5,7 @@ package schemas
 type ReviewOutput struct {
 	TicketKey string          `json:"ticket_key"`
 	Findings  []ReviewFinding `json:"findings"`
-	Verdict   string          `json:"verdict"` // "pass", "rework", "pass-with-follow-ups"
+	Verdict   string          `json:"verdict" jsonschema:"enum=pass|rework|pass-with-follow-ups"` // "pass", "rework", "pass-with-follow-ups"
 }
 
 // ReviewFinding is a single issue found by a specialist reviewer.

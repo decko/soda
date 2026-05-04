@@ -49,13 +49,16 @@ Assess this ticket and produce a structured classification:
 1. **Identify the target repo** — which repository should this change land in? If unclear, flag it.
 2. **Identify the code area** — which packages, modules, or directories are likely affected.
 3. **List candidate files** — specific files that will likely need changes. Read the codebase to verify.
-4. **Assess complexity**:
-   - `small`: 1-3 files, single concern, no architectural decisions
+4. **Assess complexity** — one of `low`, `medium`, or `high`:
+   - `low`: 1-3 files, single concern, no architectural decisions
    - `medium`: 4-10 files, clear feature, may touch tests
-   - `large`: 10+ files, multi-component, architectural decisions needed
+   - `high`: 10+ files, multi-component, architectural decisions needed
 5. **Summarize approach** — 1-2 sentences on how to implement this.
 6. **Flag risks** — anything that could go wrong (breaking changes, auth implications, migration needed).
-7. **Decide if automatable** — can an agent implement this end-to-end, or does it need human decisions?
+7. **Decide if automatable** — one of `yes`, `no`, or `partial`:
+   - `yes`: an agent can implement this end-to-end
+   - `no`: requires human decisions, set `block_reason`
+   - `partial`: some parts need human input; the pipeline will stop — set `block_reason` explaining what human input is needed and what can be done autonomously
 
 Read the relevant codebase before answering. Do not guess file paths.
 

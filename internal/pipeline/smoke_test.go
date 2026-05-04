@@ -25,7 +25,7 @@ func smokePipelinePhases() []PhaseConfig {
 		{
 			Name:   "triage",
 			Prompt: "triage.md",
-			Schema: `{"type":"object","properties":{"automatable":{"type":"boolean"}},"required":["automatable"]}`,
+			Schema: `{"type":"object","properties":{"automatable":{"type":"string","enum":["yes","no","partial"]}},"required":["automatable"]}`,
 			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 0},
 		},
 		{
@@ -87,7 +87,7 @@ func smokePipelinePhases() []PhaseConfig {
 func smokeFixtures() map[string]*runner.RunResult {
 	return map[string]*runner.RunResult{
 		"triage": {
-			Output:  json.RawMessage(`{"automatable":true}`),
+			Output:  json.RawMessage(`{"automatable":"yes"}`),
 			RawText: "Triage: automatable",
 			CostUSD: 0.01,
 		},
