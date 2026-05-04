@@ -217,6 +217,61 @@ func TestEngine_GatePhase_TriageNotAutomatableWithSkipPlanStillBlocks(t *testing
 	}
 }
 
+func TestEngine_GatePhase_TriagePartialBlocks(t *testing.T) {
+	// "partial" is a valid enum value that should block the pipeline
+	// (same as "no") and should NOT emit EventConditionEvalFallback
+	// (it is a known value, not a fallback).
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":"partial","block_reason":"needs design input"}`),
+					RawText: "Partially automatable",
+					CostUSD: 0.05,
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(e Event) {
+			events = append(events, e)
+		}
+	})
+
+	err := engine.Run(context.Background())
+
+	// (a) Must return PhaseGateError.
+	var gateErr *PhaseGateError
+	if !errors.As(err, &gateErr) {
+		t.Fatalf("expected PhaseGateError for automatable=partial, got: %v", err)
+	}
+	if gateErr.Phase != "triage" {
+		t.Errorf("gate error phase = %q, want %q", gateErr.Phase, "triage")
+	}
+
+	// (c) BlockReason should be used.
+	if !strings.Contains(gateErr.Reason, "needs design input") {
+		t.Errorf("gate error reason should contain block_reason, got: %q", gateErr.Reason)
+	}
+
+	// (b) Must NOT emit EventConditionEvalFallback — partial is a known value.
+	for _, ev := range events {
+		if ev.Kind == EventConditionEvalFallback && ev.Phase == "triage" {
+			t.Errorf("unexpected EventConditionEvalFallback emitted for automatable=partial (known value should not trigger fallback)")
+		}
+	}
+}
+
 func TestEngine_GatePhase_ReviewUnmarshalError(t *testing.T) {
 	// When a phase with Rework config produces output that doesn't unmarshal
 	// as valid JSON, gateRework should gracefully skip (return nil), consistent
