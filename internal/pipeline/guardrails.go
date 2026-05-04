@@ -220,6 +220,10 @@ func (e *Engine) gatePhase(phase PhaseConfig) error {
 				Kind:  EventConditionEvalFallback,
 				Data:  map[string]any{"field": "verdict", "value": result.Verdict},
 			})
+			// Treat unknown verdict conservatively as a failure.
+			if err := e.gateVerifyFail(phase, result.FixesRequired); err != nil {
+				return err
+			}
 		}
 
 	case "patch":

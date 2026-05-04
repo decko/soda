@@ -2658,7 +2658,8 @@ func TestEngine_GatePhase_TriageUnexpectedAutomatable_EmitsFallback(t *testing.T
 
 func TestEngine_GatePhase_VerifyUnexpectedVerdict_EmitsFallback(t *testing.T) {
 	// When verify returns an unrecognized verdict, the engine should emit
-	// EventConditionEvalFallback and continue (no PhaseGateError).
+	// EventConditionEvalFallback and treat the unknown verdict conservatively
+	// as a failure (PhaseGateError), since verify is the primary quality gate.
 	phases := []PhaseConfig{
 		{
 			Name:   "implement",
@@ -2699,8 +2700,18 @@ func TestEngine_GatePhase_VerifyUnexpectedVerdict_EmitsFallback(t *testing.T) {
 		}
 	})
 
-	// Unexpected verdict falls through the default case — no gate error expected.
-	_ = engine.Run(context.Background())
+	// Unknown verdict should be treated conservatively as a failure.
+	err := engine.Run(context.Background())
+	if err == nil {
+		t.Fatal("expected PhaseGateError for unknown verify verdict, got nil")
+	}
+	var gateErr *PhaseGateError
+	if !errors.As(err, &gateErr) {
+		t.Fatalf("expected PhaseGateError, got: %v", err)
+	}
+	if gateErr.Phase != "verify" {
+		t.Errorf("gate error phase = %q, want %q", gateErr.Phase, "verify")
+	}
 
 	var found bool
 	for _, ev := range events {
