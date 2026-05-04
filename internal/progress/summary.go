@@ -58,7 +58,7 @@ func PhaseSummary(phase string, result json.RawMessage) string {
 func triageSummary(data json.RawMessage) string {
 	var result struct {
 		Complexity  string `json:"complexity"`
-		Automatable bool   `json:"automatable"`
+		Automatable string `json:"automatable"`
 	}
 	if err := json.Unmarshal(data, &result); err != nil {
 		return ""
@@ -67,7 +67,7 @@ func triageSummary(data json.RawMessage) string {
 	if result.Complexity != "" {
 		parts = append(parts, result.Complexity)
 	}
-	if !result.Automatable {
+	if !strings.EqualFold(result.Automatable, "yes") && result.Automatable != "" {
 		parts = append(parts, "not automatable")
 	}
 	if len(parts) == 0 {
