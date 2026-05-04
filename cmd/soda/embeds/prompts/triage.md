@@ -58,7 +58,7 @@ Assess this ticket and produce a structured classification:
 7. **Decide if automatable** — one of `yes`, `no`, or `partial`:
    - `yes`: an agent can implement this end-to-end
    - `no`: requires human decisions, set `block_reason`
-   - `partial`: some parts need human input but agent can start
+   - `partial`: some parts need human input; the pipeline will stop — set `block_reason` explaining what human input is needed and what can be done autonomously
 
 Read the relevant codebase before answering. Do not guess file paths.
 
