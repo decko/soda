@@ -503,6 +503,7 @@ func (e *Engine) runReviewer(ctx context.Context, phase PhaseConfig, reviewer Re
 		Model:        model,
 		Timeout:      phase.Timeout.Duration,
 		OnChunk:      onChunk,
+		ApiKeyHelper: e.config.ApiKeyHelper,
 	}
 
 	// Run with per-reviewer retry logic using the phase's RetryConfig.
