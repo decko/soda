@@ -137,6 +137,48 @@ func (e *Engine) extractVerifyFeedback() *ReworkFeedback {
 // into rework feedback across all findings. Prevents context bloat.
 const maxFeedbackContextBytes = 30 * 1024 // 30KB
 
+// Per-finding caps limit how much file content a single finding can inject.
+// Critical findings get a larger window because they are highest priority.
+const (
+	criticalFindingCapBytes = 10 * 1024 // 10KB
+	majorFindingCapBytes    = 5 * 1024  // 5KB
+)
+
+// severityRank returns a sort key for finding severity.
+// Lower rank = higher priority. Critical findings are processed first
+// so they consume budget before lower-severity findings.
+func severityRank(severity string) int {
+	switch strings.ToLower(severity) {
+	case "critical":
+		return 0
+	case "major":
+		return 1
+	default:
+		return 2
+	}
+}
+
+// contextLines returns the ± line window for snippet fallback by severity.
+// Critical findings get a wider window for more surrounding context.
+func contextLines(severity string) int {
+	switch strings.ToLower(severity) {
+	case "critical":
+		return 15
+	case "major":
+		return 10
+	default:
+		return 5
+	}
+}
+
+// findingBudgetCap returns the maximum bytes a single finding may inject.
+func findingBudgetCap(severity string) int {
+	if strings.ToLower(severity) == "critical" {
+		return criticalFindingCapBytes
+	}
+	return majorFindingCapBytes
+}
+
 // extractReviewFeedback reads the review result and returns structured
 // feedback when the verdict is "rework". Returns nil if no review result
 // exists or the verdict is not "rework".
