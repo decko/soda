@@ -876,6 +876,32 @@ func TestReadFileForFinding(t *testing.T) {
 		}
 	})
 
+	t.Run("cache_miss_line_beyond_cap_centers_on_line", func(t *testing.T) {
+		dir := t.TempDir()
+		// 300-line file, ~80 chars/line → ~24KB. Larger than both caps.
+		var fileLines []string
+		for i := 1; i <= 300; i++ {
+			fileLines = append(fileLines, fmt.Sprintf("line-%03d %s", i, strings.Repeat("z", 70)))
+		}
+		content := strings.Join(fileLines, "\n") + "\n"
+		if err := os.WriteFile(filepath.Join(dir, "service.go"), []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		budget := 50000
+		cache := make(map[string]string)
+
+		// Cache miss, major finding at line 200. The file exceeds majorCap (5KB),
+		// so the returned content should be centered on line 200, not the head.
+		got := readFileForFinding(dir, "service.go", 200, "major", &budget, cache)
+		if !strings.Contains(got, "line-200") {
+			t.Errorf("cache miss at line 200 should contain line-200, got snippet starting with: %q", got[:min(80, len(got))])
+		}
+		if strings.Contains(got, "line-001") {
+			t.Error("cache miss at line 200 should NOT contain line-001 (should not return head)")
+		}
+	})
+
 	t.Run("fallback_context_window_by_severity", func(t *testing.T) {
 		dir := t.TempDir()
 		// 100-line file.

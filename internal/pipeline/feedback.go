@@ -305,19 +305,33 @@ func readFileForFinding(workDir, file string, line int, severity string, budgetR
 		return raw
 	}
 
-	// Cache miss — apply per-finding cap, truncating to last newline.
-	effective := raw
-	if len(effective) > cap {
-		effective = effective[:cap]
-		if idx := strings.LastIndex(effective, "\n"); idx > 0 {
-			effective = effective[:idx+1]
+	// Cache miss — extract a line-centered snippet capped to per-finding budget.
+	// When the file exceeds the cap and we have a line number, center on
+	// the finding line (same logic as cache-hit path) so the LLM sees the
+	// relevant code regardless of where the finding is in the file.
+	var effective string
+	if len(raw) > cap && line > 0 {
+		effective = extractSnippet(raw, line, contextLines(severity))
+		if len(effective) > cap {
+			effective = effective[:cap]
+			if idx := strings.LastIndex(effective, "\n"); idx > 0 {
+				effective = effective[:idx+1]
+			}
+		}
+	} else {
+		effective = raw
+		if len(effective) > cap {
+			effective = effective[:cap]
+			if idx := strings.LastIndex(effective, "\n"); idx > 0 {
+				effective = effective[:idx+1]
+			}
 		}
 	}
 
 	// Cache miss — charge budget if the effective content fits.
 	if len(effective) <= *budgetRemaining {
 		*budgetRemaining -= len(effective)
-		rawCache[file] = raw // mark file as "paid for"
+		rawCache[file] = raw // store full content for future cache hits
 		return effective
 	}
 
