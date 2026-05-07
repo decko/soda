@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/decko/soda/schemas"
@@ -189,9 +190,11 @@ func findingBudgetCap(severity string) int {
 // what was previously reported. Only critical/major findings are
 // included to keep prompt context focused.
 //
-// Each finding is enriched with file content: full-file when budget allows,
-// falling back to ±5 lines when budget is exhausted. Same-file findings
-// share the cached content to avoid duplicate reads.
+// Findings are sorted by severity (critical first) so higher-priority
+// findings consume budget first. Each finding is enriched with file
+// content up to a severity-dependent cap (10KB critical, 5KB major),
+// falling back to a ±contextLines snippet when budget is exhausted.
+// Same-file findings share the cached raw content to avoid duplicate reads.
 func (e *Engine) extractReviewFeedback() *ReworkFeedback {
 	raw, err := e.state.ReadResult("review")
 	if err != nil {
@@ -211,9 +214,16 @@ func (e *Engine) extractReviewFeedback() *ReworkFeedback {
 		Source:  "review",
 	}
 
+	// Sort findings so critical issues are processed first and consume
+	// budget before lower-severity findings (stable to preserve original
+	// order within the same severity).
+	sort.SliceStable(result.Findings, func(i, j int) bool {
+		return severityRank(result.Findings[i].Severity) < severityRank(result.Findings[j].Severity)
+	})
+
 	workDir := e.workDir(PhaseConfig{})
 	budgetRemaining := maxFeedbackContextBytes
-	fileCache := make(map[string]string) // file path → cached content
+	rawCache := make(map[string]string) // file path → raw file content
 
 	// Only include critical and major findings, enriched with code context.
 	for _, finding := range result.Findings {
@@ -224,7 +234,7 @@ func (e *Engine) extractReviewFeedback() *ReworkFeedback {
 
 		ef := EnrichedFinding{ReviewFinding: finding}
 		if finding.File != "" {
-			ef.CodeSnippet = readFileForFinding(workDir, finding.File, finding.Line, &budgetRemaining, fileCache)
+			ef.CodeSnippet = readFileForFinding(workDir, finding.File, finding.Line, finding.Severity, &budgetRemaining, rawCache)
 		}
 		fb.ReviewFindings = append(fb.ReviewFindings, ef)
 	}
@@ -235,39 +245,69 @@ func (e *Engine) extractReviewFeedback() *ReworkFeedback {
 	return fb
 }
 
-// readFileForFinding returns file content for a review finding. It tries
-// full-file injection first (if budget allows), falling back to ±5 lines.
-// Same-file findings reuse cached content without consuming extra budget.
-func readFileForFinding(workDir, file string, line int, budgetRemaining *int, cache map[string]string) string {
-	// Check cache first — same file referenced by multiple findings.
-	if cached, ok := cache[file]; ok {
-		return cached
+// readFileForFinding returns file content for a review finding. The raw
+// file is cached on first read; subsequent calls for the same file
+// (possibly with a different severity) extract a severity-appropriate
+// window from the cached content without re-charging the budget.
+//
+// On a cache miss the full file is read and stored in rawCache. The
+// returned content is capped to findingBudgetCap(severity) bytes
+// (truncated to the last newline within the cap) and charged against
+// budgetRemaining. If the capped content exceeds the remaining budget,
+// a snippet of ±contextLines(severity) around the finding line is
+// returned instead (free — not charged).
+//
+// On a cache hit the same per-finding cap is applied to the already-
+// cached raw content, but no budget is charged (the file's bytes were
+// already counted on first access).
+func readFileForFinding(workDir, file string, line int, severity string, budgetRemaining *int, rawCache map[string]string) string {
+	raw, cached := rawCache[file]
+
+	if !cached {
+		resolved := filepath.Clean(filepath.Join(workDir, file))
+		if !strings.HasPrefix(resolved, filepath.Clean(workDir)+string(filepath.Separator)) {
+			return ""
+		}
+
+		data, err := os.ReadFile(resolved)
+		if err != nil {
+			return ""
+		}
+
+		raw = string(data)
+		rawCache[file] = raw
 	}
 
-	resolved := filepath.Clean(filepath.Join(workDir, file))
-	if !strings.HasPrefix(resolved, filepath.Clean(workDir)+string(filepath.Separator)) {
+	// Apply the per-finding cap, truncating to the last newline within the cap.
+	cap := findingBudgetCap(severity)
+	effective := raw
+	if len(effective) > cap {
+		effective = effective[:cap]
+		if idx := strings.LastIndex(effective, "\n"); idx > 0 {
+			effective = effective[:idx+1]
+		}
+	}
+
+	if cached {
+		// Cache hit — return severity-appropriate window without charging budget.
+		if effective != "" {
+			return effective
+		}
+		if line > 0 {
+			return extractSnippet(raw, line, contextLines(severity))
+		}
 		return ""
 	}
 
-	data, err := os.ReadFile(resolved)
-	if err != nil {
-		return ""
+	// Cache miss — charge budget if the effective content fits.
+	if len(effective) <= *budgetRemaining {
+		*budgetRemaining -= len(effective)
+		return effective
 	}
 
-	content := string(data)
-
-	// If the full file fits within budget, use it.
-	if len(data) <= *budgetRemaining {
-		*budgetRemaining -= len(data)
-		cache[file] = content
-		return content
-	}
-
-	// Budget exhausted for full file — fall back to ±5 lines snippet.
+	// Budget exhausted for capped content — fall back to snippet (free).
 	if line > 0 {
-		snippet := extractSnippet(content, line, 5)
-		cache[file] = snippet
-		return snippet
+		return extractSnippet(raw, line, contextLines(severity))
 	}
 
 	return ""
