@@ -536,7 +536,7 @@ func TestReadFileForFinding(t *testing.T) {
 
 		budget := 1000
 		cache := make(map[string]string)
-		got := readFileForFinding(dir, "small.go", 3, &budget, cache)
+		got := readFileForFinding(dir, "small.go", 3, "major", &budget, cache)
 
 		if got != content {
 			t.Errorf("got %q, want full file content", got)
@@ -548,7 +548,9 @@ func TestReadFileForFinding(t *testing.T) {
 
 	t.Run("falls_back_to_snippet_when_over_budget", func(t *testing.T) {
 		dir := t.TempDir()
-		// 20-line file — snippet at line 10 with ±5 context = 11 lines, not all 20.
+		// 20-line file — snippet at line 10 with ±5 context (minor) = 11 lines, not all 20.
+		// Using "minor" severity to keep the ±5 fallback window so the snippet
+		// is clearly shorter than the full 20-line file.
 		var longLines []string
 		for i := 1; i <= 20; i++ {
 			longLines = append(longLines, strings.Repeat("x", 10))
@@ -558,7 +560,7 @@ func TestReadFileForFinding(t *testing.T) {
 
 		budget := 50 // too small for full file (~220 bytes)
 		cache := make(map[string]string)
-		got := readFileForFinding(dir, "big.go", 10, &budget, cache)
+		got := readFileForFinding(dir, "big.go", 10, "minor", &budget, cache)
 
 		if got == content {
 			t.Error("should NOT return full file when over budget")
@@ -581,9 +583,9 @@ func TestReadFileForFinding(t *testing.T) {
 		budget := 1000
 		cache := make(map[string]string)
 
-		got1 := readFileForFinding(dir, "shared.go", 1, &budget, cache)
+		got1 := readFileForFinding(dir, "shared.go", 1, "major", &budget, cache)
 		budgetAfterFirst := budget
-		got2 := readFileForFinding(dir, "shared.go", 2, &budget, cache)
+		got2 := readFileForFinding(dir, "shared.go", 2, "major", &budget, cache)
 
 		if got1 != got2 {
 			t.Errorf("same file should return same content: %q vs %q", got1, got2)
@@ -608,12 +610,12 @@ func TestReadFileForFinding(t *testing.T) {
 		budget := 120 // enough for first file (101 bytes) but not second (~220 bytes)
 		cache := make(map[string]string)
 
-		got1 := readFileForFinding(dir, "first.go", 1, &budget, cache)
+		got1 := readFileForFinding(dir, "first.go", 1, "major", &budget, cache)
 		if got1 != file1Content {
 			t.Error("first file should get full content")
 		}
 
-		got2 := readFileForFinding(dir, "second.go", 15, &budget, cache)
+		got2 := readFileForFinding(dir, "second.go", 15, "major", &budget, cache)
 		if got2 == file2Content {
 			t.Error("second file should NOT get full content (over budget)")
 		}
@@ -626,7 +628,7 @@ func TestReadFileForFinding(t *testing.T) {
 		dir := t.TempDir()
 		budget := 1000
 		cache := make(map[string]string)
-		got := readFileForFinding(dir, "nope.go", 1, &budget, cache)
+		got := readFileForFinding(dir, "nope.go", 1, "major", &budget, cache)
 		if got != "" {
 			t.Errorf("expected empty for nonexistent file, got: %q", got)
 		}
@@ -640,7 +642,7 @@ func TestReadFileForFinding(t *testing.T) {
 
 		budget := 1000
 		cache := make(map[string]string)
-		got := readFileForFinding(dir, "../secret.txt", 1, &budget, cache)
+		got := readFileForFinding(dir, "../secret.txt", 1, "major", &budget, cache)
 		if got != "" {
 			t.Errorf("expected empty for path traversal, got: %q", got)
 		}
