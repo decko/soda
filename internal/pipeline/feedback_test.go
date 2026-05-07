@@ -902,6 +902,34 @@ func TestReadFileForFinding(t *testing.T) {
 		}
 	})
 
+	t.Run("cache_hit_sub_cap_file_returns_full_content", func(t *testing.T) {
+		dir := t.TempDir()
+		// 80-line file, ~32 chars/line → ~2.5KB, smaller than majorCap (5KB).
+		var fileLines []string
+		for i := 1; i <= 80; i++ {
+			fileLines = append(fileLines, fmt.Sprintf("line-%03d %s", i, strings.Repeat("w", 20)))
+		}
+		content := strings.Join(fileLines, "\n") + "\n"
+		if err := os.WriteFile(filepath.Join(dir, "small.go"), []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		budget := 50000
+		cache := make(map[string]string)
+
+		// Cache miss at line 10 — returns full file (sub-cap).
+		got1 := readFileForFinding(dir, "small.go", 10, "major", &budget, cache)
+		// Cache hit at line 70 — should also return full file, not a snippet.
+		got2 := readFileForFinding(dir, "small.go", 70, "major", &budget, cache)
+
+		if len(got1) != len(got2) {
+			t.Errorf("sub-cap file: cache miss (%d bytes) and cache hit (%d bytes) should return same size", len(got1), len(got2))
+		}
+		if !strings.Contains(got2, "line-001") || !strings.Contains(got2, "line-080") {
+			t.Error("cache hit on sub-cap file should return full content including first and last lines")
+		}
+	})
+
 	t.Run("fallback_context_window_by_severity", func(t *testing.T) {
 		dir := t.TempDir()
 		// 100-line file.

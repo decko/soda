@@ -282,9 +282,14 @@ func readFileForFinding(workDir, file string, line int, severity string, budgetR
 	budgetCap := findingBudgetCap(severity)
 
 	if cached {
-		// Cache hit — extract a window centered on the finding line, capped
-		// to the per-finding budget. This avoids returning the head of the
-		// file when the finding is beyond the cap boundary.
+		// Cache hit — file was already paid for on first access.
+		// If the file fits within the per-finding cap, return the full
+		// content (consistent with cache-miss semantics for sub-cap files).
+		if len(raw) <= budgetCap {
+			return raw
+		}
+		// File exceeds cap — extract a window centered on the finding line
+		// to avoid returning the head when the finding is beyond the boundary.
 		if line > 0 {
 			snippet := extractSnippet(raw, line, contextLines(severity))
 			if len(snippet) > budgetCap {
@@ -296,13 +301,11 @@ func readFileForFinding(workDir, file string, line int, severity string, budgetR
 			return snippet
 		}
 		// No line info — return head of file, capped.
-		if len(raw) > budgetCap {
-			raw = raw[:budgetCap]
-			if idx := strings.LastIndex(raw, "\n"); idx > 0 {
-				raw = raw[:idx+1]
-			}
+		capped := raw[:budgetCap]
+		if idx := strings.LastIndex(capped, "\n"); idx > 0 {
+			capped = capped[:idx+1]
 		}
-		return raw
+		return capped
 	}
 
 	// Cache miss — extract a line-centered snippet capped to per-finding budget.
