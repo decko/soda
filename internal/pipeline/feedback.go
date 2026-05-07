@@ -279,7 +279,7 @@ func readFileForFinding(workDir, file string, line int, severity string, budgetR
 		raw = string(data)
 	}
 
-	cap := findingBudgetCap(severity)
+	budgetCap := findingBudgetCap(severity)
 
 	if cached {
 		// Cache hit — extract a window centered on the finding line, capped
@@ -287,8 +287,8 @@ func readFileForFinding(workDir, file string, line int, severity string, budgetR
 		// file when the finding is beyond the cap boundary.
 		if line > 0 {
 			snippet := extractSnippet(raw, line, contextLines(severity))
-			if len(snippet) > cap {
-				snippet = snippet[:cap]
+			if len(snippet) > budgetCap {
+				snippet = snippet[:budgetCap]
 				if idx := strings.LastIndex(snippet, "\n"); idx > 0 {
 					snippet = snippet[:idx+1]
 				}
@@ -296,8 +296,8 @@ func readFileForFinding(workDir, file string, line int, severity string, budgetR
 			return snippet
 		}
 		// No line info — return head of file, capped.
-		if len(raw) > cap {
-			raw = raw[:cap]
+		if len(raw) > budgetCap {
+			raw = raw[:budgetCap]
 			if idx := strings.LastIndex(raw, "\n"); idx > 0 {
 				raw = raw[:idx+1]
 			}
@@ -310,18 +310,18 @@ func readFileForFinding(workDir, file string, line int, severity string, budgetR
 	// the finding line (same logic as cache-hit path) so the LLM sees the
 	// relevant code regardless of where the finding is in the file.
 	var effective string
-	if len(raw) > cap && line > 0 {
+	if len(raw) > budgetCap && line > 0 {
 		effective = extractSnippet(raw, line, contextLines(severity))
-		if len(effective) > cap {
-			effective = effective[:cap]
+		if len(effective) > budgetCap {
+			effective = effective[:budgetCap]
 			if idx := strings.LastIndex(effective, "\n"); idx > 0 {
 				effective = effective[:idx+1]
 			}
 		}
 	} else {
 		effective = raw
-		if len(effective) > cap {
-			effective = effective[:cap]
+		if len(effective) > budgetCap {
+			effective = effective[:budgetCap]
 			if idx := strings.LastIndex(effective, "\n"); idx > 0 {
 				effective = effective[:idx+1]
 			}
