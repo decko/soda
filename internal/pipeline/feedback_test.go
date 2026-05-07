@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -841,6 +842,37 @@ func TestReadFileForFinding(t *testing.T) {
 		}
 		if budget != budgetAfterFirst {
 			t.Errorf("cache hit should not charge budget: got %d, want %d", budget, budgetAfterFirst)
+		}
+	})
+
+	t.Run("cache_hit_line_beyond_cap_boundary", func(t *testing.T) {
+		dir := t.TempDir()
+		// 300-line file, ~80 chars/line → ~24KB. Larger than both caps.
+		var fileLines []string
+		for i := 1; i <= 300; i++ {
+			fileLines = append(fileLines, fmt.Sprintf("line-%03d %s", i, strings.Repeat("z", 70)))
+		}
+		content := strings.Join(fileLines, "\n") + "\n"
+		if err := os.WriteFile(filepath.Join(dir, "handler.go"), []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		budget := 50000
+		cache := make(map[string]string)
+
+		// First call: critical finding at line 1 — caches the full file,
+		// returns up to criticalCap bytes from head.
+		got1 := readFileForFinding(dir, "handler.go", 1, "critical", &budget, cache)
+		if !strings.Contains(got1, "line-001") {
+			t.Error("first call should contain line-001")
+		}
+
+		// Second call: major finding at line 200 (cache hit).
+		// The major cap (5KB, ~63 lines) doesn't cover line 200.
+		// The fix should center the snippet on line 200, not return head.
+		got2 := readFileForFinding(dir, "handler.go", 200, "major", &budget, cache)
+		if !strings.Contains(got2, "line-200") {
+			t.Errorf("cache hit at line 200 should contain line-200, got snippet starting with: %q", got2[:min(80, len(got2))])
 		}
 	})
 

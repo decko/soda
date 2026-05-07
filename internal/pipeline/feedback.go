@@ -279,25 +279,39 @@ func readFileForFinding(workDir, file string, line int, severity string, budgetR
 		raw = string(data)
 	}
 
-	// Apply the per-finding cap, truncating to the last newline within the cap.
 	cap := findingBudgetCap(severity)
+
+	if cached {
+		// Cache hit — extract a window centered on the finding line, capped
+		// to the per-finding budget. This avoids returning the head of the
+		// file when the finding is beyond the cap boundary.
+		if line > 0 {
+			snippet := extractSnippet(raw, line, contextLines(severity))
+			if len(snippet) > cap {
+				snippet = snippet[:cap]
+				if idx := strings.LastIndex(snippet, "\n"); idx > 0 {
+					snippet = snippet[:idx+1]
+				}
+			}
+			return snippet
+		}
+		// No line info — return head of file, capped.
+		if len(raw) > cap {
+			raw = raw[:cap]
+			if idx := strings.LastIndex(raw, "\n"); idx > 0 {
+				raw = raw[:idx+1]
+			}
+		}
+		return raw
+	}
+
+	// Cache miss — apply per-finding cap, truncating to last newline.
 	effective := raw
 	if len(effective) > cap {
 		effective = effective[:cap]
 		if idx := strings.LastIndex(effective, "\n"); idx > 0 {
 			effective = effective[:idx+1]
 		}
-	}
-
-	if cached {
-		// Cache hit — return severity-appropriate window without charging budget.
-		if effective != "" {
-			return effective
-		}
-		if line > 0 {
-			return extractSnippet(raw, line, contextLines(severity))
-		}
-		return ""
 	}
 
 	// Cache miss — charge budget if the effective content fits.
