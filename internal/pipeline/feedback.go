@@ -338,9 +338,17 @@ func readFileForFinding(workDir, file string, line int, severity string, budgetR
 		return effective
 	}
 
-	// Budget exhausted for capped content — fall back to snippet (free).
+	// Budget exhausted for capped content — fall back to snippet (free),
+	// still respecting the per-finding cap.
 	if line > 0 {
-		return extractSnippet(raw, line, contextLines(severity))
+		snippet := extractSnippet(raw, line, contextLines(severity))
+		if len(snippet) > budgetCap {
+			snippet = snippet[:budgetCap]
+			if idx := strings.LastIndex(snippet, "\n"); idx > 0 {
+				snippet = snippet[:idx+1]
+			}
+		}
+		return snippet
 	}
 
 	return ""
