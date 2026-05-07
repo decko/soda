@@ -246,16 +246,18 @@ func (e *Engine) extractReviewFeedback() *ReworkFeedback {
 }
 
 // readFileForFinding returns file content for a review finding. The raw
-// file is cached on first read; subsequent calls for the same file
-// (possibly with a different severity) extract a severity-appropriate
-// window from the cached content without re-charging the budget.
+// file is cached in rawCache only after a successful budget charge;
+// subsequent calls for the same file (possibly with a different severity)
+// extract a severity-appropriate window from the cached content without
+// re-charging the budget.
 //
-// On a cache miss the full file is read and stored in rawCache. The
-// returned content is capped to findingBudgetCap(severity) bytes
-// (truncated to the last newline within the cap) and charged against
-// budgetRemaining. If the capped content exceeds the remaining budget,
-// a snippet of ±contextLines(severity) around the finding line is
-// returned instead (free — not charged).
+// On a cache miss the full file is read. The returned content is capped
+// to findingBudgetCap(severity) bytes (truncated to the last newline
+// within the cap) and charged against budgetRemaining. If the charge
+// succeeds, the raw content is stored in rawCache for future lookups.
+// If the capped content exceeds the remaining budget, a snippet of
+// ±contextLines(severity) around the finding line is returned instead
+// (free — not charged, not cached).
 //
 // On a cache hit the same per-finding cap is applied to the already-
 // cached raw content, but no budget is charged (the file's bytes were
@@ -275,7 +277,6 @@ func readFileForFinding(workDir, file string, line int, severity string, budgetR
 		}
 
 		raw = string(data)
-		rawCache[file] = raw
 	}
 
 	// Apply the per-finding cap, truncating to the last newline within the cap.
@@ -302,6 +303,7 @@ func readFileForFinding(workDir, file string, line int, severity string, budgetR
 	// Cache miss — charge budget if the effective content fits.
 	if len(effective) <= *budgetRemaining {
 		*budgetRemaining -= len(effective)
+		rawCache[file] = raw // mark file as "paid for"
 		return effective
 	}
 

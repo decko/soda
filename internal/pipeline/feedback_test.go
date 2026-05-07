@@ -723,6 +723,50 @@ func TestReadFileForFinding(t *testing.T) {
 		}
 	})
 
+	t.Run("no_cache_on_budget_exhaustion", func(t *testing.T) {
+		// Regression: when budget is exhausted on a cache miss, the file must
+		// NOT be cached. A second finding for the same file should also fall
+		// back to a snippet, not return full capped content for free.
+		dir := t.TempDir()
+		var fileLines []string
+		for i := 1; i <= 100; i++ {
+			fileLines = append(fileLines, strings.Repeat("z", 50))
+		}
+		content := strings.Join(fileLines, "\n")
+		writeFile(t, dir, "expensive.go", content)
+
+		budget := 0 // budget already exhausted
+		cache := make(map[string]string)
+
+		// First call: cache miss, budget exhausted → snippet fallback, NOT cached.
+		got1 := readFileForFinding(dir, "expensive.go", 50, "major", &budget, cache)
+		if got1 == "" {
+			t.Fatal("first call should return snippet fallback")
+		}
+		if len(got1) > majorFindingCapBytes {
+			t.Errorf("first call returned %d bytes, want ≤ %d (snippet)", len(got1), majorFindingCapBytes)
+		}
+
+		// Second call: should also be a cache miss (file was not cached),
+		// also falls back to snippet — no budget bypass.
+		got2 := readFileForFinding(dir, "expensive.go", 50, "major", &budget, cache)
+		if got2 == "" {
+			t.Fatal("second call should return snippet fallback")
+		}
+		// Both calls should return the same snippet.
+		if got1 != got2 {
+			t.Errorf("both calls should return same snippet, got %d vs %d bytes", len(got1), len(got2))
+		}
+		if budget != 0 {
+			t.Errorf("budget should remain 0, got %d", budget)
+		}
+
+		// Verify the file was NOT cached.
+		if _, inCache := cache["expensive.go"]; inCache {
+			t.Error("file should NOT be in cache after budget-exhausted fallback")
+		}
+	})
+
 	t.Run("nonexistent_file_returns_empty", func(t *testing.T) {
 		dir := t.TempDir()
 		budget := 1000
