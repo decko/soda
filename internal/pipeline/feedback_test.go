@@ -972,6 +972,53 @@ func TestReadFileForFinding(t *testing.T) {
 	})
 }
 
+func TestCapToLine(t *testing.T) {
+	t.Run("under_cap_unchanged", func(t *testing.T) {
+		got := capToLine("abc\ndef\n", 100)
+		if got != "abc\ndef\n" {
+			t.Errorf("under-cap should return unchanged, got %q", got)
+		}
+	})
+
+	t.Run("truncates_at_last_newline", func(t *testing.T) {
+		got := capToLine("line1\nline2\nline3\n", 12)
+		if got != "line1\nline2\n" {
+			t.Errorf("should truncate at last newline within cap, got %q", got)
+		}
+	})
+
+	t.Run("newline_at_position_zero", func(t *testing.T) {
+		got := capToLine("\nrest of content here", 5)
+		if got != "\n" {
+			t.Errorf("should truncate at newline at position 0, got %q", got)
+		}
+	})
+
+	t.Run("no_newlines_rune_safe", func(t *testing.T) {
+		got := capToLine("abcdefghij", 5)
+		if got != "abcde" {
+			t.Errorf("no newlines should truncate at byte boundary, got %q", got)
+		}
+	})
+
+	t.Run("no_newlines_multibyte_rune_safe", func(t *testing.T) {
+		// "héllo" — é is 2 bytes (0xC3 0xA9), so bytes are: h(1) é(2) l(1) l(1) o(1) = 6 bytes
+		// Cap at 2 bytes: "h" + first byte of é → should back up to not split the rune
+		got := capToLine("héllo", 2)
+		if got != "h" {
+			t.Errorf("should not split multi-byte rune, got %q (len=%d)", got, len(got))
+		}
+	})
+
+	t.Run("exact_cap_unchanged", func(t *testing.T) {
+		s := "abc\n"
+		got := capToLine(s, len(s))
+		if got != s {
+			t.Errorf("exact cap should return unchanged, got %q", got)
+		}
+	})
+}
+
 func TestExtractSnippet(t *testing.T) {
 	content := "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n"
 

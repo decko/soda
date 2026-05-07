@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/decko/soda/schemas"
 )
@@ -174,10 +175,36 @@ func contextLines(severity string) int {
 
 // findingBudgetCap returns the maximum bytes a single finding may inject.
 func findingBudgetCap(severity string) int {
-	if strings.ToLower(severity) == "critical" {
+	switch strings.ToLower(severity) {
+	case "critical":
 		return criticalFindingCapBytes
+	case "major":
+		return majorFindingCapBytes
+	default:
+		return majorFindingCapBytes
 	}
-	return majorFindingCapBytes
+}
+
+// capToLine truncates s to at most maxBytes, breaking at the last newline
+// boundary within the cap. If s has no newlines, the result is truncated
+// at a UTF-8 rune boundary to avoid producing invalid output.
+// Returns s unchanged if len(s) <= maxBytes.
+func capToLine(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	truncated := s[:maxBytes]
+	if idx := strings.LastIndex(truncated, "\n"); idx >= 0 {
+		return truncated[:idx+1]
+	}
+	// No newline — trim incomplete trailing rune by walking back past
+	// continuation bytes (10xxxxxx) and their leading byte if the
+	// sequence is incomplete.
+	end := maxBytes
+	for end > 0 && !utf8.Valid([]byte(truncated[:end])) {
+		end--
+	}
+	return truncated[:end]
 }
 
 // extractReviewFeedback reads the review result and returns structured
@@ -245,23 +272,23 @@ func (e *Engine) extractReviewFeedback() *ReworkFeedback {
 	return fb
 }
 
-// readFileForFinding returns file content for a review finding. The raw
-// file is cached in rawCache only after a successful budget charge;
-// subsequent calls for the same file (possibly with a different severity)
-// extract a severity-appropriate window from the cached content without
-// re-charging the budget.
+// readFileForFinding returns file content for a review finding. It is not
+// concurrency-safe — it must be called sequentially within a single
+// extractReviewFeedback invocation.
+//
+// The raw file is cached in rawCache only after a successful budget charge.
+// For files smaller than the per-finding cap, the full content is cached.
+// For larger files, only the resolved path is cached (as a sentinel) to
+// avoid pinning large buffers; subsequent calls re-read from disk.
 //
 // On a cache miss the full file is read. The returned content is capped
-// to findingBudgetCap(severity) bytes (truncated to the last newline
-// within the cap) and charged against budgetRemaining. If the charge
-// succeeds, the raw content is stored in rawCache for future lookups.
-// If the capped content exceeds the remaining budget, a snippet of
-// ±contextLines(severity) around the finding line is returned instead
-// (free — not charged, not cached).
+// via capToLine to findingBudgetCap(severity) bytes and charged against
+// budgetRemaining. If the capped content exceeds the remaining budget,
+// a snippet of ±contextLines(severity) around the finding line is returned
+// instead (free — not charged, not cached).
 //
-// On a cache hit the same per-finding cap is applied to the already-
-// cached raw content, but no budget is charged (the file's bytes were
-// already counted on first access).
+// On a cache hit no budget is charged (the file's bytes were already
+// counted on first access).
 func readFileForFinding(workDir, file string, line int, severity string, budgetRemaining *int, rawCache map[string]string) string {
 	raw, cached := rawCache[file]
 
@@ -283,72 +310,34 @@ func readFileForFinding(workDir, file string, line int, severity string, budgetR
 
 	if cached {
 		// Cache hit — file was already paid for on first access.
-		// If the file fits within the per-finding cap, return the full
-		// content (consistent with cache-miss semantics for sub-cap files).
 		if len(raw) <= budgetCap {
 			return raw
 		}
-		// File exceeds cap — extract a window centered on the finding line
-		// to avoid returning the head when the finding is beyond the boundary.
+		// File exceeds cap — extract a window centered on the finding line.
 		if line > 0 {
-			snippet := extractSnippet(raw, line, contextLines(severity))
-			if len(snippet) > budgetCap {
-				snippet = snippet[:budgetCap]
-				if idx := strings.LastIndex(snippet, "\n"); idx > 0 {
-					snippet = snippet[:idx+1]
-				}
-			}
-			return snippet
+			return capToLine(extractSnippet(raw, line, contextLines(severity)), budgetCap)
 		}
-		// No line info — return head of file, capped.
-		capped := raw[:budgetCap]
-		if idx := strings.LastIndex(capped, "\n"); idx > 0 {
-			capped = capped[:idx+1]
-		}
-		return capped
+		return capToLine(raw, budgetCap)
 	}
 
-	// Cache miss — extract a line-centered snippet capped to per-finding budget.
-	// When the file exceeds the cap and we have a line number, center on
-	// the finding line (same logic as cache-hit path) so the LLM sees the
-	// relevant code regardless of where the finding is in the file.
+	// Cache miss — extract line-centered or head content, capped.
 	var effective string
 	if len(raw) > budgetCap && line > 0 {
-		effective = extractSnippet(raw, line, contextLines(severity))
-		if len(effective) > budgetCap {
-			effective = effective[:budgetCap]
-			if idx := strings.LastIndex(effective, "\n"); idx > 0 {
-				effective = effective[:idx+1]
-			}
-		}
+		effective = capToLine(extractSnippet(raw, line, contextLines(severity)), budgetCap)
 	} else {
-		effective = raw
-		if len(effective) > budgetCap {
-			effective = effective[:budgetCap]
-			if idx := strings.LastIndex(effective, "\n"); idx > 0 {
-				effective = effective[:idx+1]
-			}
-		}
+		effective = capToLine(raw, budgetCap)
 	}
 
-	// Cache miss — charge budget if the effective content fits.
+	// Charge budget if the effective content fits.
 	if len(effective) <= *budgetRemaining {
 		*budgetRemaining -= len(effective)
-		rawCache[file] = raw // store full content for future cache hits
+		rawCache[file] = raw
 		return effective
 	}
 
-	// Budget exhausted for capped content — fall back to snippet (free),
-	// still respecting the per-finding cap.
+	// Budget exhausted — fall back to snippet (free), still capped.
 	if line > 0 {
-		snippet := extractSnippet(raw, line, contextLines(severity))
-		if len(snippet) > budgetCap {
-			snippet = snippet[:budgetCap]
-			if idx := strings.LastIndex(snippet, "\n"); idx > 0 {
-				snippet = snippet[:idx+1]
-			}
-		}
-		return snippet
+		return capToLine(extractSnippet(raw, line, contextLines(severity)), budgetCap)
 	}
 
 	return ""
