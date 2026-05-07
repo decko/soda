@@ -156,14 +156,24 @@ func TestExtractReviewFeedback(t *testing.T) {
 		workDir := t.TempDir()
 		stateDir := t.TempDir()
 
-		// Create a small critical file (well within budget).
-		criticalContent := "package main\n\nfunc main() {}\n"
-		if err := os.WriteFile(filepath.Join(workDir, "critical.go"), []byte(criticalContent), 0644); err != nil {
-			t.Fatal(err)
+		// Create 3 critical files, each exactly criticalFindingCapBytes (10KB).
+		// Combined they consume 3×10KB = 30KB = maxFeedbackContextBytes,
+		// fully exhausting the budget so the major finding is forced into
+		// snippet fallback.
+		criticalNames := []string{"crit1.go", "crit2.go", "crit3.go"}
+		criticalContents := make([]string, 3)
+		for i, name := range criticalNames {
+			content := strings.Repeat(string(rune('a'+i)), criticalFindingCapBytes-1) + "\n"
+			criticalContents[i] = content
+			if err := os.WriteFile(filepath.Join(workDir, name), []byte(content), 0644); err != nil {
+				t.Fatal(err)
+			}
 		}
 
-		// Create a large major file (~25KB) that won't fit in remaining budget
-		// after the critical file consumes its share.
+		// Create a large major file (~25KB, 500 lines). After the per-finding
+		// cap (5KB) the effective content won't fit in the remaining budget
+		// (0 bytes), so the major finding must fall back to a ±10 line snippet
+		// around line 250.
 		var majorLines []string
 		for i := 0; i < 500; i++ {
 			majorLines = append(majorLines, strings.Repeat("x", 50))
@@ -175,11 +185,15 @@ func TestExtractReviewFeedback(t *testing.T) {
 
 		state, _ := LoadOrCreate(stateDir, "TEST-1")
 		_ = state.MarkRunning("review")
+		// Input order: major first, then critical — sort must reorder so
+		// critical findings consume budget first.
 		reviewResult := `{
 			"verdict": "rework",
 			"findings": [
 				{"source":"a","severity":"major","file":"major.go","line":250,"issue":"needs work"},
-				{"source":"b","severity":"critical","file":"critical.go","line":3,"issue":"nil deref"}
+				{"source":"b","severity":"critical","file":"crit1.go","line":1,"issue":"nil deref 1"},
+				{"source":"c","severity":"critical","file":"crit2.go","line":1,"issue":"nil deref 2"},
+				{"source":"d","severity":"critical","file":"crit3.go","line":1,"issue":"nil deref 3"}
 			]
 		}`
 		_ = state.WriteResult("review", json.RawMessage(reviewResult))
@@ -191,29 +205,39 @@ func TestExtractReviewFeedback(t *testing.T) {
 			t.Fatal("expected non-nil feedback for rework verdict")
 		}
 
-		if len(fb.ReviewFindings) != 2 {
-			t.Fatalf("ReviewFindings count = %d, want 2", len(fb.ReviewFindings))
+		if len(fb.ReviewFindings) != 4 {
+			t.Fatalf("ReviewFindings count = %d, want 4", len(fb.ReviewFindings))
 		}
 
-		// Critical finding (sorted first) should get full file content.
-		if fb.ReviewFindings[0].Severity != "critical" {
-			t.Fatalf("first finding severity = %q, want critical", fb.ReviewFindings[0].Severity)
-		}
-		if fb.ReviewFindings[0].CodeSnippet != criticalContent {
-			t.Errorf("critical finding should get full file, got %d bytes", len(fb.ReviewFindings[0].CodeSnippet))
+		// All 3 critical findings (sorted first) should get their full file content.
+		for i := 0; i < 3; i++ {
+			if fb.ReviewFindings[i].Severity != "critical" {
+				t.Fatalf("finding[%d] severity = %q, want critical", i, fb.ReviewFindings[i].Severity)
+			}
+			if fb.ReviewFindings[i].CodeSnippet != criticalContents[i] {
+				t.Errorf("critical finding[%d] should get full file (%d bytes), got %d bytes",
+					i, len(criticalContents[i]), len(fb.ReviewFindings[i].CodeSnippet))
+			}
 		}
 
-		// Major finding should get a snippet (file is too large for full injection
-		// after the per-finding cap is applied).
-		if fb.ReviewFindings[1].Severity != "major" {
-			t.Fatalf("second finding severity = %q, want major", fb.ReviewFindings[1].Severity)
+		// Major finding (last, after budget exhausted by 3 critical files)
+		// should get a ±10 line snippet around line 250, NOT the 5KB capped
+		// content from the top of the file.
+		if fb.ReviewFindings[3].Severity != "major" {
+			t.Fatalf("finding[3] severity = %q, want major", fb.ReviewFindings[3].Severity)
 		}
-		majorSnippet := fb.ReviewFindings[1].CodeSnippet
+		majorSnippet := fb.ReviewFindings[3].CodeSnippet
 		if majorSnippet == "" {
-			t.Error("major finding should get snippet fallback, not empty")
+			t.Fatal("major finding should get snippet fallback, not empty")
+		}
+		// A ±10 line snippet around line 250 of a 500-line file = ~21 lines.
+		// If it were capped content (5KB from top of file) it would be ~100 lines.
+		snippetLines := strings.Split(majorSnippet, "\n")
+		if len(snippetLines) != 21 {
+			t.Errorf("major finding snippet should be 21 lines (±10 around line 250), got %d lines", len(snippetLines))
 		}
 		if majorSnippet == majorContent {
-			t.Error("major finding should NOT get full file (exceeds per-finding cap)")
+			t.Error("major finding should NOT get full file")
 		}
 	})
 }
