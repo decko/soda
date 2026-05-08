@@ -51,11 +51,14 @@ Review the implementation as a Go specialist. Focus on:
 - Are package dependencies clean (no circular imports)?
 - Is the public API surface minimal?
 
+{{- if not .VerifyClean}}
+
 ### 3. Test quality and coverage
 - Do tests cover the acceptance criteria?
 - Are tests functional (testing behavior, not implementation)?
 - Are table-driven tests used where appropriate?
 - Are edge cases covered?
+{{- end}}
 
 ### 4. Performance and concurrency
 - Are there unnecessary allocations or copies?
