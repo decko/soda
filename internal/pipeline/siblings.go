@@ -294,11 +294,11 @@ func BuildSiblingContext(workDir string, planResult json.RawMessage, maxBytes in
 	totalBytes := 0
 	for _, relPath := range files {
 		absPath := filepath.Join(workDir, relPath)
-		absResolved, err := filepath.Abs(absPath)
+		absResolved, err := filepath.EvalSymlinks(absPath)
 		if err != nil {
 			continue
 		}
-		workDirResolved, err := filepath.Abs(workDir)
+		workDirResolved, err := filepath.EvalSymlinks(workDir)
 		if err != nil {
 			continue
 		}
