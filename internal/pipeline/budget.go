@@ -52,16 +52,20 @@ func phaseReductionOrder(phase string) []reductionStep {
 		reduce:  func(d *PromptData) { d.SiblingContext = "" },
 		applies: func(d *PromptData) bool { return d.SiblingContext != "" },
 	}
-	contextStep := reductionStep{
-		label: "Context",
+	projectContextStep := reductionStep{
+		label: "ProjectContext",
 		reduce: func(d *PromptData) {
 			d.Context.ProjectContext = ""
-			d.Context.RepoConventions = ""
 			d.Context.Gotchas = ""
 		},
 		applies: func(d *PromptData) bool {
-			return d.Context.ProjectContext != "" || d.Context.RepoConventions != "" || d.Context.Gotchas != ""
+			return d.Context.ProjectContext != "" || d.Context.Gotchas != ""
 		},
+	}
+	conventionsStep := reductionStep{
+		label:   "RepoConventions",
+		reduce:  func(d *PromptData) { d.Context.RepoConventions = "" },
+		applies: func(d *PromptData) bool { return d.Context.RepoConventions != "" },
 	}
 	extrasStep := reductionStep{
 		label:   "Artifacts.Extras",
@@ -167,30 +171,36 @@ func phaseReductionOrder(phase string) []reductionStep {
 
 	switch phase {
 	case "implement":
-		steps := []reductionStep{siblingStep, contextStep, extrasStep, reviewCommentsStep, diffStep}
+		// Conventions are shed last — they are compact and high-value for implement.
+		steps := []reductionStep{siblingStep, projectContextStep, extrasStep, reviewCommentsStep, diffStep}
 		steps = append(steps, reworkSteps...)
 		steps = append(steps, artifactSteps...)
+		steps = append(steps, conventionsStep)
 		return steps
 	case "review":
-		steps := []reductionStep{siblingStep, extrasStep, diffStep, contextStep}
+		steps := []reductionStep{siblingStep, extrasStep, diffStep, projectContextStep}
 		steps = append(steps, reworkSteps...)
 		steps = append(steps, artifactSteps...)
+		steps = append(steps, conventionsStep)
 		return steps
 	case "verify":
-		steps := []reductionStep{siblingStep, extrasStep, contextStep, diffStep}
+		steps := []reductionStep{siblingStep, extrasStep, projectContextStep, diffStep}
 		steps = append(steps, reworkSteps...)
 		steps = append(steps, artifactSteps...)
+		steps = append(steps, conventionsStep)
 		return steps
 	case "patch":
-		steps := []reductionStep{diffStep, siblingStep, extrasStep, contextStep}
+		steps := []reductionStep{diffStep, siblingStep, extrasStep, projectContextStep}
 		steps = append(steps, reworkSteps...)
 		steps = append(steps, artifactSteps...)
+		steps = append(steps, conventionsStep)
 		return steps
 	default:
 		// Sensible default for unknown/custom phases.
-		steps := []reductionStep{siblingStep, extrasStep, reviewCommentsStep, diffStep, contextStep}
+		steps := []reductionStep{siblingStep, extrasStep, reviewCommentsStep, diffStep, projectContextStep}
 		steps = append(steps, reworkSteps...)
 		steps = append(steps, artifactSteps...)
+		steps = append(steps, conventionsStep)
 		return steps
 	}
 }
