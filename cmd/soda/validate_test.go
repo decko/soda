@@ -377,6 +377,93 @@ func TestRunValidate_ErrorOutput(t *testing.T) {
 	}
 }
 
+func TestValidateConventionChecklist_Empty(t *testing.T) {
+	cfg := &config.Config{}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	validateConventionChecklist(&buf, result, cfg)
+
+	if result.hasErrors() {
+		t.Error("empty checklist should not produce errors")
+	}
+	if len(result.warnings) != 1 {
+		t.Fatalf("expected 1 warning, got %d: %v", len(result.warnings), result.warnings)
+	}
+	if !strings.Contains(result.warnings[0], "not set") {
+		t.Errorf("warning should mention 'not set', got: %s", result.warnings[0])
+	}
+	output := buf.String()
+	if !strings.Contains(output, "⚠ convention_checklist: not set") {
+		t.Errorf("expected '⚠ convention_checklist: not set', got: %s", output)
+	}
+}
+
+func TestValidateConventionChecklist_Populated(t *testing.T) {
+	cfg := &config.Config{
+		ConventionChecklist: "- Use table-driven tests\n- Wrap errors with fmt.Errorf\n",
+	}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	validateConventionChecklist(&buf, result, cfg)
+
+	if result.hasErrors() {
+		t.Error("populated checklist should not produce errors")
+	}
+	if len(result.warnings) != 0 {
+		t.Errorf("expected no warnings, got: %v", result.warnings)
+	}
+	output := buf.String()
+	if !strings.Contains(output, "✓ convention_checklist:") {
+		t.Errorf("expected '✓ convention_checklist:', got: %s", output)
+	}
+	if !strings.Contains(output, "bytes") {
+		t.Errorf("expected byte count in output, got: %s", output)
+	}
+}
+
+func TestRunValidate_WithConventionChecklist(t *testing.T) {
+	cfg := &config.Config{
+		TicketSource:        "github",
+		Mode:                "autonomous",
+		Model:               "claude-sonnet-4-20250514",
+		ConventionChecklist: "- Always use gofmt\n",
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := runValidate(&stdout, &stderr, cfg, "")
+	if err != nil {
+		t.Fatalf("runValidate() error: %v", err)
+	}
+
+	output := stdout.String()
+	if !strings.Contains(output, "✓ convention_checklist:") {
+		t.Errorf("expected convention_checklist valid message, got: %s", output)
+	}
+}
+
+func TestRunValidate_WithoutConventionChecklist(t *testing.T) {
+	cfg := &config.Config{
+		TicketSource: "github",
+		Mode:         "autonomous",
+		Model:        "claude-sonnet-4-20250514",
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := runValidate(&stdout, &stderr, cfg, "")
+	if err != nil {
+		t.Fatalf("runValidate() error: %v", err)
+	}
+
+	output := stdout.String()
+	if !strings.Contains(output, "⚠ convention_checklist: not set") {
+		t.Errorf("expected convention_checklist warning, got: %s", output)
+	}
+	errOutput := stderr.String()
+	if !strings.Contains(errOutput, "convention_checklist") {
+		t.Errorf("expected convention_checklist warning on stderr, got: %s", errOutput)
+	}
+}
+
 func TestValidateNotify_NoHooksConfigured(t *testing.T) {
 	cfg := &config.Config{}
 	result := &validationResult{}
