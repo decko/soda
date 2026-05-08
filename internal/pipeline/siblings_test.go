@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -626,7 +627,7 @@ func TestIsNewFile(t *testing.T) {
 		gitAdd(t, dir, "existing.go")
 		gitCommit(t, dir, "add existing.go")
 
-		if isNewFile(dir, "existing.go", "main") {
+		if isNewFile(context.Background(), dir, "existing.go", "main") {
 			t.Error("committed file should return false")
 		}
 	})
@@ -635,14 +636,14 @@ func TestIsNewFile(t *testing.T) {
 		dir := t.TempDir()
 		initGitRepo(t, dir)
 
-		if !isNewFile(dir, "newfile.go", "main") {
+		if !isNewFile(context.Background(), dir, "newfile.go", "main") {
 			t.Error("uncommitted file should return true")
 		}
 	})
 
 	t.Run("non_repo_workdir_returns_true", func(t *testing.T) {
 		dir := t.TempDir()
-		if !isNewFile(dir, "anything.go", "main") {
+		if !isNewFile(context.Background(), dir, "anything.go", "main") {
 			t.Error("non-repo workdir should return true (graceful)")
 		}
 	})
@@ -774,7 +775,7 @@ func ExistingFunc(s string) error {
 			"verification": {"commands":["go test ./..."]}
 		}`
 
-		result := BuildPackageExemplars(dir, json.RawMessage(plan), "main", 0)
+		result := BuildPackageExemplars(context.Background(), dir, json.RawMessage(plan), "main", 0)
 		if result == "" {
 			t.Fatal("expected non-empty exemplar context")
 		}
@@ -801,7 +802,7 @@ func ExistingFunc(s string) error {
 			"verification": {"commands":[]}
 		}`
 
-		result := BuildPackageExemplars(dir, json.RawMessage(plan), "main", 0)
+		result := BuildPackageExemplars(context.Background(), dir, json.RawMessage(plan), "main", 0)
 		if result != "" {
 			t.Errorf("expected empty for all-modified files, got: %s", result)
 		}
@@ -826,7 +827,7 @@ func ExistingFunc(s string) error {
 			"verification": {"commands":[]}
 		}`
 
-		result := BuildPackageExemplars(dir, json.RawMessage(plan), "main", 0)
+		result := BuildPackageExemplars(context.Background(), dir, json.RawMessage(plan), "main", 0)
 		if result != "" {
 			t.Errorf("expected empty for test-only dir, got: %s", result)
 		}
@@ -850,7 +851,7 @@ func ExistingFunc(s string) error {
 			"verification": {"commands":[]}
 		}`
 
-		result := BuildPackageExemplars(dir, json.RawMessage(plan), "main", 0)
+		result := BuildPackageExemplars(context.Background(), dir, json.RawMessage(plan), "main", 0)
 		if result != "" {
 			t.Errorf("expected empty for generated-only dir, got: %s", result)
 		}
@@ -881,14 +882,14 @@ func ExistingFunc(s string) error {
 		}`
 
 		const budget = 200
-		result := BuildPackageExemplars(dir, json.RawMessage(plan), "main", budget)
+		result := BuildPackageExemplars(context.Background(), dir, json.RawMessage(plan), "main", budget)
 		if len(result) > budget {
 			t.Errorf("exceeded budget: %d > %d", len(result), budget)
 		}
 	})
 
 	t.Run("nil_plan_returns_empty", func(t *testing.T) {
-		result := BuildPackageExemplars(t.TempDir(), nil, "main", 0)
+		result := BuildPackageExemplars(context.Background(), t.TempDir(), nil, "main", 0)
 		if result != "" {
 			t.Errorf("expected empty for nil plan, got: %s", result)
 		}

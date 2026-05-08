@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"go/ast"
@@ -403,8 +404,8 @@ func formatSignaturesSection(relPath string, sigs []string) string {
 // isNewFile returns true if the given file (relative to workDir) does not
 // exist on the baseBranch in git. This is used to detect files that the
 // plan intends to create rather than modify.
-func isNewFile(workDir, file, baseBranch string) bool {
-	cmd := exec.Command("git", "show", baseBranch+":"+file)
+func isNewFile(ctx context.Context, workDir, file, baseBranch string) bool {
+	cmd := exec.CommandContext(ctx, "git", "show", baseBranch+":"+file)
 	cmd.Dir = workDir
 	if err := cmd.Run(); err != nil {
 		return true
@@ -485,8 +486,9 @@ func findExemplarFiles(absDir string, maxFiles int) []string {
 // baseBranch), finds existing Go files in the same package directories, and
 // extracts function signatures to give the LLM guidance on naming conventions
 // and API surface. maxBytes limits the total output size; when 0 the default
-// maxPackageExemplarBytes is used.
-func BuildPackageExemplars(workDir string, planResult json.RawMessage, baseBranch string, maxBytes int) string {
+// maxPackageExemplarBytes is used. The context is threaded to isNewFile's git
+// subprocess so cancellation (e.g. cost cap, timeout) stops spawned processes.
+func BuildPackageExemplars(ctx context.Context, workDir string, planResult json.RawMessage, baseBranch string, maxBytes int) string {
 	if maxBytes <= 0 {
 		maxBytes = maxPackageExemplarBytes
 	}
@@ -500,7 +502,7 @@ func BuildPackageExemplars(workDir string, planResult json.RawMessage, baseBranc
 	seen := make(map[string]bool)
 	var pkgDirs []string
 	for _, relPath := range files {
-		if !isNewFile(workDir, relPath, baseBranch) {
+		if !isNewFile(ctx, workDir, relPath, baseBranch) {
 			continue
 		}
 		dir := filepath.Dir(relPath)

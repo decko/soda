@@ -208,7 +208,7 @@ func (e *Engine) runParallelReview(ctx context.Context, phase PhaseConfig) error
 	e.emit(Event{Phase: phase.Name, Kind: EventPhaseStarted, Data: map[string]any{"generation": e.state.Meta().Phases[phase.Name].Generation}})
 
 	// Build prompt data shared by all reviewers.
-	promptData, err := e.buildPromptData(phase)
+	promptData, err := e.buildPromptData(ctx, phase)
 	if err != nil {
 		_ = e.state.MarkFailed(phase.Name, err)
 		e.emitPhaseFailed(phase.Name, err)
