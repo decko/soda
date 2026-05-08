@@ -538,6 +538,86 @@ func TestTruncateArtifact(t *testing.T) {
 	}
 }
 
+func TestFitToBudget_ConventionsSurvivesLongerThanProjectContext_Implement(t *testing.T) {
+	data := makeData()
+	data.Context.ProjectContext = strings.Repeat("project-ctx ", 200)
+	data.Context.RepoConventions = strings.Repeat("conventions ", 50)
+
+	// Set a budget that requires dropping ProjectContext but not RepoConventions.
+	// Remove ProjectContext+Gotchas worth of tokens from full render.
+	withoutProject := data
+	withoutProject.Context.ProjectContext = ""
+	withoutProject.Context.Gotchas = ""
+	withoutProject.SiblingContext = ""
+	withoutProject.ContextFitted = true
+	withoutProject.ManifestNote = "[context-fitted] The following sections were reduced to fit the context window: SiblingContext, ProjectContext. Use file-read and search tools to retrieve any missing context you need."
+	renderedWithout, _ := RenderPrompt(simpleTmpl, withoutProject)
+	budget := estimateTokens(len(renderedWithout), 3.3) + manifestReserveTokens + 5
+
+	fitted, reduced, err := fitToBudget(simpleTmpl, data, "implement", budget, 3.3)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// ProjectContext should be gone.
+	if fitted.Context.ProjectContext != "" {
+		t.Error("ProjectContext should be cleared")
+	}
+	// RepoConventions should survive.
+	if fitted.Context.RepoConventions == "" {
+		t.Error("RepoConventions should survive when ProjectContext reduction suffices")
+	}
+
+	// Verify reduction order: ProjectContext shed before RepoConventions.
+	foundProject := false
+	foundConventions := false
+	for _, r := range reduced {
+		if r == "ProjectContext" {
+			foundProject = true
+		}
+		if r == "RepoConventions" {
+			foundConventions = true
+		}
+	}
+	if !foundProject {
+		t.Errorf("expected ProjectContext in reduced, got %v", reduced)
+	}
+	if foundConventions {
+		t.Error("RepoConventions should NOT be in reduced list when budget is met without it")
+	}
+}
+
+func TestFitToBudget_ConventionsShedLast_AllPhases(t *testing.T) {
+	// Verify that for all known phases, RepoConventions appears after
+	// ProjectContext in the reduction order.
+	phases := []string{"implement", "review", "verify", "patch", "custom-phase"}
+
+	for _, phase := range phases {
+		t.Run(phase, func(t *testing.T) {
+			steps := phaseReductionOrder(phase)
+			projectIdx := -1
+			conventionsIdx := -1
+			for i, s := range steps {
+				if s.label == "ProjectContext" {
+					projectIdx = i
+				}
+				if s.label == "RepoConventions" {
+					conventionsIdx = i
+				}
+			}
+			if projectIdx == -1 {
+				t.Fatal("ProjectContext step not found")
+			}
+			if conventionsIdx == -1 {
+				t.Fatal("RepoConventions step not found")
+			}
+			if conventionsIdx <= projectIdx {
+				t.Errorf("RepoConventions (idx=%d) should be shed after ProjectContext (idx=%d)", conventionsIdx, projectIdx)
+			}
+		})
+	}
+}
+
 // isContextBudgetError is a helper to check for *ContextBudgetError,
 // working around the fact that errors.As requires a pointer-to-pointer.
 func isContextBudgetError(err error, target **ContextBudgetError) bool {
