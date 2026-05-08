@@ -3202,3 +3202,397 @@ func TestDeduplicateFindings_ReworkCycleRoundTrip(t *testing.T) {
 		t.Fatalf("expected 2 findings for ai-harness (merged critical + minor), got %d", len(aiFindings))
 	}
 }
+
+func TestEvalReviewerCondition(t *testing.T) {
+	tests := []struct {
+		name      string
+		condition string
+		data      reviewerConditionData
+		wantRun   bool
+		wantErr   bool
+	}{
+		{
+			name:      "empty_condition_runs",
+			condition: "",
+			data:      reviewerConditionData{Complexity: "low"},
+			wantRun:   true,
+		},
+		{
+			name:      "condition_true_runs",
+			condition: `{{ ne .Complexity "low" }}`,
+			data:      reviewerConditionData{Complexity: "high"},
+			wantRun:   true,
+		},
+		{
+			name:      "condition_false_skips",
+			condition: `{{ ne .Complexity "low" }}`,
+			data:      reviewerConditionData{Complexity: "low"},
+			wantRun:   false,
+		},
+		{
+			name:      "rework_cycle_condition",
+			condition: `{{ gt .ReworkCycle 0 }}`,
+			data:      reviewerConditionData{ReworkCycle: 1},
+			wantRun:   true,
+		},
+		{
+			name:      "rework_cycle_zero_false",
+			condition: `{{ gt .ReworkCycle 0 }}`,
+			data:      reviewerConditionData{ReworkCycle: 0},
+			wantRun:   false,
+		},
+		{
+			name:      "invalid_template_fallback_run",
+			condition: `{{ .NonExistentField }}`,
+			data:      reviewerConditionData{Complexity: "low"},
+			wantRun:   true,
+			wantErr:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			shouldRun, err := evalReviewerCondition(tt.condition, tt.data)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if shouldRun != tt.wantRun {
+				t.Errorf("shouldRun = %v, want %v", shouldRun, tt.wantRun)
+			}
+		})
+	}
+}
+
+func TestEngine_ParallelReview_ConditionSkipsReviewer(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:  "review",
+			Type:  "parallel-review",
+			Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Reviewers: []ReviewerConfig{
+				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+				{Name: "ai-harness", Prompt: "prompts/review-harness.md", Focus: "AI harness", Condition: `{{ ne .Complexity "low" }}`},
+			},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"review/go-specialist": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[],"verdict":"pass"}`),
+					RawText: "No issues found",
+					CostUSD: 0.10,
+				},
+			}},
+			// ai-harness should NOT be called, so no response needed.
+		},
+	}
+
+	var events []Event
+	engine, state := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(e Event) {
+			events = append(events, e)
+		}
+	})
+
+	// Write a triage result with complexity=low so the condition skips ai-harness.
+	triageResult := json.RawMessage(`{"complexity":"low","automatable":"yes"}`)
+	if err := state.WriteResult("triage", triageResult); err != nil {
+		t.Fatalf("WriteResult triage: %v", err)
+	}
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !state.IsCompleted("review") {
+		t.Error("review should be completed")
+	}
+
+	// Only go-specialist should have been called.
+	mock.mu.Lock()
+	callCount := len(mock.calls)
+	mock.mu.Unlock()
+	if callCount != 1 {
+		t.Errorf("runner called %d times, want 1 (ai-harness should be skipped)", callCount)
+	}
+
+	// Verify reviewer_skipped event for ai-harness.
+	skippedFound := false
+	for _, e := range events {
+		if e.Kind == EventReviewerSkipped {
+			reviewer, _ := e.Data["reviewer"].(string)
+			if reviewer == "ai-harness" {
+				reason, _ := e.Data["reason"].(string)
+				if !strings.Contains(reason, "condition") {
+					t.Errorf("skip reason = %q, want mention of condition", reason)
+				}
+				skippedFound = true
+			}
+		}
+	}
+	if !skippedFound {
+		t.Error("expected reviewer_skipped event for ai-harness")
+	}
+}
+
+func TestEngine_ParallelReview_ConditionRunsReviewer(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:  "review",
+			Type:  "parallel-review",
+			Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Reviewers: []ReviewerConfig{
+				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+				{Name: "ai-harness", Prompt: "prompts/review-harness.md", Focus: "AI harness", Condition: `{{ ne .Complexity "low" }}`},
+			},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"review/go-specialist": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[],"verdict":"pass"}`),
+					RawText: "No issues found",
+					CostUSD: 0.10,
+				},
+			}},
+			"review/ai-harness": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[],"verdict":"pass"}`),
+					RawText: "No issues found",
+					CostUSD: 0.08,
+				},
+			}},
+		},
+	}
+
+	engine, state := setupReviewEngine(t, phases, mock)
+
+	// Write a triage result with complexity=high so the condition allows ai-harness.
+	triageResult := json.RawMessage(`{"complexity":"high","automatable":"yes"}`)
+	if err := state.WriteResult("triage", triageResult); err != nil {
+		t.Fatalf("WriteResult triage: %v", err)
+	}
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !state.IsCompleted("review") {
+		t.Error("review should be completed")
+	}
+
+	// Both reviewers should have been called.
+	mock.mu.Lock()
+	callCount := len(mock.calls)
+	mock.mu.Unlock()
+	if callCount != 2 {
+		t.Errorf("runner called %d times, want 2 (both reviewers should run)", callCount)
+	}
+}
+
+func TestEngine_ParallelReview_ConditionFallbackOnError(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:  "review",
+			Type:  "parallel-review",
+			Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Reviewers: []ReviewerConfig{
+				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+				{Name: "ai-harness", Prompt: "prompts/review-harness.md", Focus: "AI harness", Condition: `{{ .NonExistentField }}`},
+			},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"review/go-specialist": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[],"verdict":"pass"}`),
+					RawText: "No issues found",
+					CostUSD: 0.10,
+				},
+			}},
+			"review/ai-harness": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[],"verdict":"pass"}`),
+					RawText: "No issues found",
+					CostUSD: 0.08,
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, state := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(e Event) {
+			events = append(events, e)
+		}
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !state.IsCompleted("review") {
+		t.Error("review should be completed")
+	}
+
+	// Both reviewers should have been called (fallback to run on error).
+	mock.mu.Lock()
+	callCount := len(mock.calls)
+	mock.mu.Unlock()
+	if callCount != 2 {
+		t.Errorf("runner called %d times, want 2 (condition error should fallback to run)", callCount)
+	}
+
+	// Verify condition_eval_fallback event.
+	fallbackFound := false
+	for _, e := range events {
+		if e.Kind == EventConditionEvalFallback {
+			reviewer, _ := e.Data["reviewer"].(string)
+			if reviewer == "ai-harness" {
+				fallbackFound = true
+			}
+		}
+	}
+	if !fallbackFound {
+		t.Error("expected condition_eval_fallback event for ai-harness")
+	}
+}
+
+func TestEngine_ParallelReview_ConditionSkipCarriesFindings(t *testing.T) {
+	// When a condition-skipped reviewer had findings in a prior cycle,
+	// those findings must be carried forward — the same way the
+	// prior-review skip path carries findings. Otherwise minor findings
+	// are silently dropped (verdict becomes "pass" instead of
+	// "pass-with-follow-ups") and critical/major findings are never
+	// re-verified.
+	phases := []PhaseConfig{
+		{
+			Name:         "implement",
+			Prompt:       "implement.md",
+			Retry:        RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			FeedbackFrom: []string{"review"},
+		},
+		{
+			Name:      "review",
+			Type:      "parallel-review",
+			DependsOn: []string{"implement"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Rework:    &ReworkConfig{Target: "implement"},
+			Reviewers: []ReviewerConfig{
+				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+				// ai-harness runs only on first cycle (ReworkCycle == 0).
+				{Name: "ai-harness", Prompt: "prompts/review-harness.md", Focus: "AI harness",
+					Condition: `{{ le .ReworkCycle 0 }}`},
+			},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true,"commits":1}`),
+					RawText: "Impl v1",
+					CostUSD: 0.50,
+				}},
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true,"commits":2}`),
+					RawText: "Impl v2",
+					CostUSD: 0.50,
+				}},
+			},
+			// go-specialist: critical in cycle 1, clean in cycle 2.
+			"review/go-specialist": {
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[{"severity":"critical","file":"x.go","line":1,"issue":"nil deref","suggestion":"fix"}]}`),
+					RawText: "Critical issue",
+					CostUSD: 0.15,
+				}},
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[]}`),
+					RawText: "All clear",
+					CostUSD: 0.10,
+				}},
+			},
+			// ai-harness: minor finding in cycle 1. Condition-skipped in
+			// cycle 2 (ReworkCycle > 0), but its minor finding must be
+			// carried forward.
+			"review/ai-harness": {
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[{"severity":"minor","file":"p.md","line":5,"issue":"naming nit","suggestion":"use camelCase"}]}`),
+					RawText: "Minor issue",
+					CostUSD: 0.10,
+				}},
+			},
+		},
+	}
+
+	var events []Event
+	engine, state := setupReviewEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(e Event) {
+			events = append(events, e)
+		}
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !state.IsCompleted("review") {
+		t.Fatal("review should be completed")
+	}
+
+	// Read final review result.
+	raw, err := state.ReadResult("review")
+	if err != nil {
+		t.Fatalf("ReadResult: %v", err)
+	}
+	var reviewOut schemas.ReviewOutput
+	if err := json.Unmarshal(raw, &reviewOut); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	// Verdict MUST be "pass-with-follow-ups" because the carried minor
+	// finding from the condition-skipped ai-harness should be present.
+	if reviewOut.Verdict != "pass-with-follow-ups" {
+		t.Errorf("verdict = %q, want %q", reviewOut.Verdict, "pass-with-follow-ups")
+	}
+
+	// The merged findings should include the carried minor finding.
+	if len(reviewOut.Findings) != 1 {
+		t.Fatalf("findings count = %d, want 1", len(reviewOut.Findings))
+	}
+	f := reviewOut.Findings[0]
+	if f.Source != "ai-harness" {
+		t.Errorf("finding source = %q, want %q", f.Source, "ai-harness")
+	}
+	if f.Severity != "minor" {
+		t.Errorf("finding severity = %q, want %q", f.Severity, "minor")
+	}
+
+	// The reviewer_skipped event for ai-harness in the second cycle
+	// should include carried_findings count.
+	condSkipped := false
+	for _, ev := range events {
+		if ev.Kind == EventReviewerSkipped {
+			reviewer, _ := ev.Data["reviewer"].(string)
+			reason, _ := ev.Data["reason"].(string)
+			if reviewer == "ai-harness" && strings.Contains(reason, "condition") {
+				condSkipped = true
+				carried, _ := ev.Data["carried_findings"].(int)
+				if carried != 1 {
+					t.Errorf("carried_findings = %d, want 1", carried)
+				}
+			}
+		}
+	}
+	if !condSkipped {
+		t.Error("expected reviewer_skipped event with condition reason for ai-harness in rework cycle")
+	}
+}

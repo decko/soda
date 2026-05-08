@@ -129,6 +129,7 @@ phases:
       - name: ai-harness
         prompt: prompts/review-harness.md
         focus: "prompt engineering, context budget, Claude CLI integration, sandbox, structured output"
+        condition: '{{ ne .Complexity "low" }}'
     reviewer_stagger: 5s
     rework:
       target: implement

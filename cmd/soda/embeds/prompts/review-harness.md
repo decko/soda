@@ -62,10 +62,13 @@ Review the implementation as an AI harness specialist. Focus on:
 - Are file paths resolved correctly within worktrees?
 - Are there hardcoded paths or environment assumptions?
 
+{{- if not .VerifyClean}}
+
 ### 5. Structured output schema alignment
 - Do JSON schemas match the Go struct definitions?
 - Are required fields marked correctly?
 - Could schema mismatches cause parse errors?
+{{- end}}
 
 Read the actual code in the worktree. Do not rely solely on the implementation report.
 

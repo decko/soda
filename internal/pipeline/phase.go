@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"text/template"
 	"time"
 
 	"github.com/decko/soda/schemas"
@@ -67,10 +68,11 @@ type CorrectiveConfig struct {
 // ReviewerConfig holds configuration for a single specialist reviewer
 // in a parallel-review phase.
 type ReviewerConfig struct {
-	Name   string `yaml:"name"`
-	Prompt string `yaml:"prompt"`
-	Focus  string `yaml:"focus"`
-	Model  string `yaml:"model,omitempty"`
+	Name      string `yaml:"name"`
+	Prompt    string `yaml:"prompt"`
+	Focus     string `yaml:"focus"`
+	Model     string `yaml:"model,omitempty"`
+	Condition string `yaml:"condition,omitempty"` // Go text/template evaluated at runtime; output "false" skips the reviewer
 }
 
 // RetryConfig holds per-category retry limits.
@@ -157,6 +159,13 @@ func LoadPipeline(path string) (*PhasePipeline, error) {
 		}
 		if phase.MinReviewers > len(phase.Reviewers) {
 			return nil, fmt.Errorf("pipeline: phase %q min_reviewers (%d) exceeds number of configured reviewers (%d)", phase.Name, phase.MinReviewers, len(phase.Reviewers))
+		}
+		for _, reviewer := range phase.Reviewers {
+			if reviewer.Condition != "" {
+				if _, err := template.New("condition").Parse(reviewer.Condition); err != nil {
+					return nil, fmt.Errorf("pipeline: phase %q reviewer %q has invalid condition template: %w", phase.Name, reviewer.Name, err)
+				}
+			}
 		}
 		if phase.Corrective != nil {
 			if _, ok := phaseNames[phase.Corrective.Phase]; !ok {

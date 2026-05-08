@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/decko/soda/internal/git"
 )
@@ -63,6 +64,18 @@ func (e *Engine) buildPromptData(phase PhaseConfig) (PromptData, error) {
 	if data.Artifacts.Plan != "" {
 		if planResult, err := e.state.ReadResult("plan"); err == nil {
 			data.SiblingContext = BuildSiblingContext(e.workDir(phase), planResult, e.config.MaxSiblingContextBytes)
+		}
+	}
+
+	// Populate VerifyClean from the verify result verdict. When verify
+	// produced a "pass" verdict, review templates can skip test-gap and
+	// schema-alignment sections to reduce cost on clean runs.
+	if verifyResult, err := e.state.ReadResult("verify"); err == nil {
+		var vr struct {
+			Verdict string `json:"verdict"`
+		}
+		if json.Unmarshal(verifyResult, &vr) == nil && strings.EqualFold(vr.Verdict, "pass") {
+			data.VerifyClean = true
 		}
 	}
 
