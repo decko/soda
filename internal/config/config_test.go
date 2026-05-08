@@ -95,6 +95,12 @@ func TestLoad(t *testing.T) {
 				if cfg.Jira.Extraction.SubtaskField != "subtasks" {
 					t.Errorf("Jira.Extraction.SubtaskField = %q, want %q", cfg.Jira.Extraction.SubtaskField, "subtasks")
 				}
+				if cfg.ConventionChecklist == "" {
+					t.Error("ConventionChecklist should be non-empty")
+				}
+				if !strings.Contains(cfg.ConventionChecklist, "table-driven") {
+					t.Errorf("ConventionChecklist should contain 'table-driven', got %q", cfg.ConventionChecklist)
+				}
 				if cfg.GitHub.Owner != "myorg" {
 					t.Errorf("GitHub.Owner = %q, want %q", cfg.GitHub.Owner, "myorg")
 				}
@@ -428,6 +434,47 @@ func TestLoad_TildeExpansion(t *testing.T) {
 	want := filepath.Join(home, ".local/bin/get-key")
 	if cfg.Auth.ApiKeyHelper != want {
 		t.Errorf("Auth.ApiKeyHelper = %q, want %q (tilde should be expanded)", cfg.Auth.ApiKeyHelper, want)
+	}
+}
+
+func TestLoad_ConventionChecklist_ExactLimit(t *testing.T) {
+	dir := t.TempDir()
+
+	// 2000 bytes should be accepted.
+	checklist2000 := strings.Repeat("x", maxConventionChecklistBytes)
+	cfgFile := filepath.Join(dir, "ok.yaml")
+	content := "convention_checklist: " + checklist2000 + "\n"
+	if err := os.WriteFile(cfgFile, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(cfgFile)
+	if err != nil {
+		t.Fatalf("2000-byte checklist should be accepted, got error: %v", err)
+	}
+	if len(cfg.ConventionChecklist) != maxConventionChecklistBytes {
+		t.Errorf("expected %d bytes, got %d", maxConventionChecklistBytes, len(cfg.ConventionChecklist))
+	}
+}
+
+func TestLoad_ConventionChecklist_OverLimit(t *testing.T) {
+	dir := t.TempDir()
+
+	// 2001 bytes should be rejected.
+	checklist2001 := strings.Repeat("x", maxConventionChecklistBytes+1)
+	cfgFile := filepath.Join(dir, "bad.yaml")
+	content := "convention_checklist: " + checklist2001 + "\n"
+	if err := os.WriteFile(cfgFile, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(cfgFile)
+	if err == nil {
+		t.Fatal("2001-byte checklist should be rejected")
+	}
+	if !strings.Contains(err.Error(), "convention_checklist") {
+		t.Errorf("error should mention convention_checklist, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "2000") {
+		t.Errorf("error should mention the limit, got: %v", err)
 	}
 }
 

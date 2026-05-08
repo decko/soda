@@ -92,6 +92,7 @@ func runRender(cmd *cobra.Command, cfg *config.Config, phaseName, ticketKey stri
 			ExistingSpec:       t.ExistingSpec,
 			ExistingPlan:       t.ExistingPlan,
 		},
+		Context: buildPromptContext(cfg),
 	}
 
 	// Load artifacts from state if they exist

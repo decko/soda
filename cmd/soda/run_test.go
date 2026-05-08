@@ -815,6 +815,26 @@ func TestPrintSummaryGenericError(t *testing.T) {
 	}
 }
 
+func TestBuildPromptContext_ConventionChecklist(t *testing.T) {
+	tests := []struct {
+		name            string
+		checklist       string
+		wantConventions string
+	}{
+		{"populated", "- Use gofmt\n", "- Use gofmt\n"},
+		{"empty", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{ConventionChecklist: tt.checklist}
+			ctx := buildPromptContext(cfg)
+			if ctx.RepoConventions != tt.wantConventions {
+				t.Errorf("RepoConventions = %q, want %q", ctx.RepoConventions, tt.wantConventions)
+			}
+		})
+	}
+}
+
 func TestBuildPromptConfigDetectDefaults(t *testing.T) {
 	t.Run("detected_values_fill_empty_fields", func(t *testing.T) {
 		cfg := &config.Config{

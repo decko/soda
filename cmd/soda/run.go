@@ -1396,6 +1396,11 @@ func buildPromptContext(cfg *config.Config) pipeline.ContextData {
 		ctx.ProjectContext = strings.Join(projectParts, "\n\n---\n\n")
 	}
 
+	// Wire convention checklist into prompt context.
+	if cfg.ConventionChecklist != "" {
+		ctx.RepoConventions = cfg.ConventionChecklist
+	}
+
 	// Load gotchas if referenced in any phase context
 	if paths, ok := cfg.PhaseContext["plan"]; ok {
 		for _, path := range paths {

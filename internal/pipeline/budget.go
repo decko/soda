@@ -38,13 +38,17 @@ type reductionStep struct {
 // given phase name. Protected fields (ticket description, acceptance
 // criteria, plan artifact) are never included.
 //
-// The order is phase-specific:
-//   - implement: siblings → context → extras → review comments → diff
-//   - review:    siblings → extras → diff → context
-//   - verify:    siblings → extras → context → diff
-//   - patch:     diff → siblings → extras → context
+// Context is split into two steps: projectContext (ProjectContext+Gotchas,
+// shed early) and conventions (RepoConventions, shed last). This keeps
+// the compact, high-value convention checklist available as long as possible.
 //
-// For unknown phases a sensible default order is used.
+// The order is phase-specific:
+//   - implement: siblings → projectContext → extras → review comments → diff → (rework) → (artifacts) → conventions
+//   - review:    siblings → extras → diff → projectContext → (rework) → (artifacts) → conventions
+//   - verify:    siblings → extras → projectContext → diff → (rework) → (artifacts)  (no conventions — verify.md never renders RepoConventions)
+//   - patch:     diff → siblings → extras → projectContext → (rework) → (artifacts) → conventions
+//
+// For unknown phases a sensible default order is used (conventions always last).
 func phaseReductionOrder(phase string) []reductionStep {
 	// Common steps used across multiple phases.
 	siblingStep := reductionStep{
@@ -52,16 +56,20 @@ func phaseReductionOrder(phase string) []reductionStep {
 		reduce:  func(d *PromptData) { d.SiblingContext = "" },
 		applies: func(d *PromptData) bool { return d.SiblingContext != "" },
 	}
-	contextStep := reductionStep{
-		label: "Context",
+	projectContextStep := reductionStep{
+		label: "ProjectContext",
 		reduce: func(d *PromptData) {
 			d.Context.ProjectContext = ""
-			d.Context.RepoConventions = ""
 			d.Context.Gotchas = ""
 		},
 		applies: func(d *PromptData) bool {
-			return d.Context.ProjectContext != "" || d.Context.RepoConventions != "" || d.Context.Gotchas != ""
+			return d.Context.ProjectContext != "" || d.Context.Gotchas != ""
 		},
+	}
+	conventionsStep := reductionStep{
+		label:   "RepoConventions",
+		reduce:  func(d *PromptData) { d.Context.RepoConventions = "" },
+		applies: func(d *PromptData) bool { return d.Context.RepoConventions != "" },
 	}
 	extrasStep := reductionStep{
 		label:   "Artifacts.Extras",
@@ -167,30 +175,39 @@ func phaseReductionOrder(phase string) []reductionStep {
 
 	switch phase {
 	case "implement":
-		steps := []reductionStep{siblingStep, contextStep, extrasStep, reviewCommentsStep, diffStep}
+		// Conventions are shed last — they are compact and high-value for implement.
+		steps := []reductionStep{siblingStep, projectContextStep, extrasStep, reviewCommentsStep, diffStep}
 		steps = append(steps, reworkSteps...)
 		steps = append(steps, artifactSteps...)
+		steps = append(steps, conventionsStep)
 		return steps
 	case "review":
-		steps := []reductionStep{siblingStep, extrasStep, diffStep, contextStep}
+		steps := []reductionStep{siblingStep, extrasStep, diffStep, projectContextStep}
 		steps = append(steps, reworkSteps...)
 		steps = append(steps, artifactSteps...)
+		steps = append(steps, conventionsStep)
 		return steps
 	case "verify":
-		steps := []reductionStep{siblingStep, extrasStep, contextStep, diffStep}
+		// verify.md does not render RepoConventions, so conventionsStep is
+		// omitted — shedding a field the template never emits would produce
+		// a false manifest note ("RepoConventions reduced") for a field the
+		// model never saw.
+		steps := []reductionStep{siblingStep, extrasStep, projectContextStep, diffStep}
 		steps = append(steps, reworkSteps...)
 		steps = append(steps, artifactSteps...)
 		return steps
 	case "patch":
-		steps := []reductionStep{diffStep, siblingStep, extrasStep, contextStep}
+		steps := []reductionStep{diffStep, siblingStep, extrasStep, projectContextStep}
 		steps = append(steps, reworkSteps...)
 		steps = append(steps, artifactSteps...)
+		steps = append(steps, conventionsStep)
 		return steps
 	default:
 		// Sensible default for unknown/custom phases.
-		steps := []reductionStep{siblingStep, extrasStep, reviewCommentsStep, diffStep, contextStep}
+		steps := []reductionStep{siblingStep, extrasStep, reviewCommentsStep, diffStep, projectContextStep}
 		steps = append(steps, reworkSteps...)
 		steps = append(steps, artifactSteps...)
+		steps = append(steps, conventionsStep)
 		return steps
 	}
 }

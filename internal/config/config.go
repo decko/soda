@@ -10,25 +10,31 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// maxConventionChecklistBytes is the hard limit on the convention_checklist
+// field size. Checklists exceeding this limit cause Load to return an error,
+// preventing accidentally bloated prompts.
+const maxConventionChecklistBytes = 2000
+
 // Config holds all SODA configuration loaded from a YAML file.
 type Config struct {
-	TicketSource string              `yaml:"ticket_source"`
-	Jira         JiraConfig          `yaml:"jira"`
-	GitHub       GitHubTicketConfig  `yaml:"github"`
-	Mode         string              `yaml:"mode"`
-	Model        string              `yaml:"model"`
-	Auth         AuthConfig          `yaml:"auth"`
-	Sandbox      SandboxConfig       `yaml:"sandbox"`
-	Limits       LimitsConfig        `yaml:"limits"`
-	PhasesPath   string              `yaml:"phases_path"`  // explicit path to pipeline YAML; overrides CWD discovery
-	PromptsPath  string              `yaml:"prompts_path"` // base directory for prompt templates; overrides CWD discovery
-	WorktreeDir  string              `yaml:"worktree_dir"`
-	StateDir     string              `yaml:"state_dir"`
-	Context      []string            `yaml:"context"`
-	PhaseContext map[string][]string `yaml:"phase_context"`
-	Repos        []RepoConfig        `yaml:"repos"`
-	Monitor      MonitorConfig       `yaml:"monitor"`
-	Notify       NotifyConfig        `yaml:"notify"`
+	TicketSource        string              `yaml:"ticket_source"`
+	Jira                JiraConfig          `yaml:"jira"`
+	GitHub              GitHubTicketConfig  `yaml:"github"`
+	Mode                string              `yaml:"mode"`
+	Model               string              `yaml:"model"`
+	Auth                AuthConfig          `yaml:"auth"`
+	Sandbox             SandboxConfig       `yaml:"sandbox"`
+	Limits              LimitsConfig        `yaml:"limits"`
+	PhasesPath          string              `yaml:"phases_path"`  // explicit path to pipeline YAML; overrides CWD discovery
+	PromptsPath         string              `yaml:"prompts_path"` // base directory for prompt templates; overrides CWD discovery
+	WorktreeDir         string              `yaml:"worktree_dir"`
+	StateDir            string              `yaml:"state_dir"`
+	Context             []string            `yaml:"context"`
+	PhaseContext        map[string][]string `yaml:"phase_context"`
+	ConventionChecklist string              `yaml:"convention_checklist"` // short checklist of repo-specific conventions injected into implement prompts; max 2000 bytes
+	Repos               []RepoConfig        `yaml:"repos"`
+	Monitor             MonitorConfig       `yaml:"monitor"`
+	Notify              NotifyConfig        `yaml:"notify"`
 }
 
 // AuthConfig holds authentication settings for the Claude Code CLI.
@@ -261,6 +267,12 @@ func Load(path string) (*Config, error) {
 
 	// Expand ~ prefix in paths that users commonly set to home-relative values.
 	cfg.Auth.ApiKeyHelper = expandHome(cfg.Auth.ApiKeyHelper)
+
+	// Enforce hard limit on convention_checklist to prevent prompt bloat.
+	if len(cfg.ConventionChecklist) > maxConventionChecklistBytes {
+		return nil, fmt.Errorf("config: convention_checklist exceeds %d-byte limit (%d bytes)",
+			maxConventionChecklistBytes, len(cfg.ConventionChecklist))
+	}
 
 	return &cfg, nil
 }
