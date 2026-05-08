@@ -36,6 +36,16 @@ Use these to understand the surrounding code, naming conventions, and interfaces
 {{.SiblingContext}}
 {{- end}}
 
+{{- if .PackageExemplars}}
+
+## Package Exemplars
+
+The following function signatures are from existing files in the same packages as the new files you are creating.
+Use these as a guide to the package API surface, naming conventions, and structural patterns.
+
+{{.PackageExemplars}}
+{{- end}}
+
 {{- if .ReworkFeedback}}
 {{- if .ReworkFeedback.ImplementDiff}}
 
