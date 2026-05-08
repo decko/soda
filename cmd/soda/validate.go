@@ -79,7 +79,10 @@ func runValidate(w io.Writer, errW io.Writer, cfg *config.Config, pipelineName s
 	// Stage 5: Context files
 	validateContextFiles(w, result, cfg)
 
-	// Stage 6: Notify hooks
+	// Stage 6: Convention checklist
+	validateConventionChecklist(w, result, cfg)
+
+	// Stage 7: Notify hooks
 	validateNotify(w, result, cfg)
 
 	// Print summary
@@ -228,6 +231,18 @@ func validateContextFiles(w io.Writer, result *validationResult, cfg *config.Con
 		fmt.Fprintf(w, "✓ context: %d of %d file(s) found (%d missing)\n",
 			len(cfg.Context)-missing, len(cfg.Context), missing)
 	}
+}
+
+// validateConventionChecklist checks whether a convention checklist is
+// configured. An empty checklist is a warning (conventions won't be injected
+// into implement prompts); a populated checklist is reported as valid.
+func validateConventionChecklist(w io.Writer, result *validationResult, cfg *config.Config) {
+	if cfg.ConventionChecklist == "" {
+		result.addWarning("convention_checklist: not set — implement prompts will not include repo conventions")
+		fmt.Fprintln(w, "⚠ convention_checklist: not set")
+		return
+	}
+	fmt.Fprintf(w, "✓ convention_checklist: %d bytes\n", len(cfg.ConventionChecklist))
 }
 
 // validateNotify checks notify hook configuration for obvious errors.
