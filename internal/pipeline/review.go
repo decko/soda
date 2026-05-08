@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -8,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"text/template"
 
 	"github.com/decko/soda/internal/progress"
 	"github.com/decko/soda/internal/runner"
@@ -121,6 +123,58 @@ func priorFindingsForReviewer(prev *schemas.ReviewOutput, reviewerName string) [
 	return findings
 }
 
+// reviewerConditionData is the minimal context passed to reviewer condition
+// templates. It is intentionally small to keep conditions simple and fast.
+type reviewerConditionData struct {
+	Complexity  string // from triage result; e.g. "low", "medium", "high"
+	ReworkCycle int    // current rework cycle count from pipeline meta
+}
+
+// readReviewerConditionData builds a reviewerConditionData from pipeline state.
+// Triage complexity is extracted from the triage result JSON; on read/parse
+// failure the field is left empty (conditions should handle the zero value).
+func (e *Engine) readReviewerConditionData() reviewerConditionData {
+	data := reviewerConditionData{
+		ReworkCycle: e.state.Meta().ReworkCycles,
+	}
+	raw, err := e.state.ReadResult("triage")
+	if err != nil {
+		return data
+	}
+	var triage struct {
+		Complexity string `json:"complexity"`
+	}
+	if err := json.Unmarshal(raw, &triage); err == nil {
+		data.Complexity = triage.Complexity
+	}
+	return data
+}
+
+// evalReviewerCondition evaluates a reviewer's condition template against
+// the given data. Returns true if the reviewer should run. When the
+// condition is empty the reviewer always runs. The rendered output is
+// trimmed and compared case-insensitively to "false"; only an exact
+// "false" skips the reviewer. On template errors the function returns
+// (true, err) so the caller can fall back to running the reviewer.
+func evalReviewerCondition(condition string, data reviewerConditionData) (bool, error) {
+	if condition == "" {
+		return true, nil
+	}
+	tmpl, err := template.New("condition").Parse(condition)
+	if err != nil {
+		return true, fmt.Errorf("parse condition: %w", err)
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return true, fmt.Errorf("execute condition: %w", err)
+	}
+	result := strings.TrimSpace(buf.String())
+	if strings.EqualFold(result, "false") {
+		return false, nil
+	}
+	return true, nil
+}
+
 // runParallelReview dispatches specialist reviewer subagents in parallel,
 // collects their findings, merges them into a single ReviewOutput, and
 // computes a verdict.
@@ -193,6 +247,9 @@ func (e *Engine) runParallelReview(ctx context.Context, phase PhaseConfig) error
 	priorReview := e.loadPriorReview(phase.Name)
 	neededReviewers := neededReviewersFromPrior(priorReview)
 
+	// Build condition data once for all reviewer condition evaluations.
+	condData := e.readReviewerConditionData()
+
 	// Channel for reviewer goroutines to send messages to the parent.
 	msgCh := make(chan reviewerMsg, len(phase.Reviewers)*10)
 
@@ -203,6 +260,27 @@ func (e *Engine) runParallelReview(ctx context.Context, phase PhaseConfig) error
 	for idx, reviewer := range phase.Reviewers {
 		if idx > 0 && phase.ReviewerStagger.Duration > 0 {
 			e.config.SleepFunc(phase.ReviewerStagger.Duration)
+		}
+
+		// Evaluate reviewer condition — skip when output is "false".
+		if reviewer.Condition != "" {
+			shouldRun, condErr := evalReviewerCondition(reviewer.Condition, condData)
+			if condErr != nil {
+				// Condition evaluation failed — fallback to running the reviewer.
+				e.emit(Event{
+					Phase: phase.Name,
+					Kind:  EventConditionEvalFallback,
+					Data:  map[string]any{"reviewer": reviewer.Name, "error": condErr.Error()},
+				})
+			} else if !shouldRun {
+				e.emit(Event{
+					Phase: phase.Name,
+					Kind:  EventReviewerSkipped,
+					Data:  map[string]any{"reviewer": reviewer.Name, "reason": "condition evaluated to false"},
+				})
+				results[idx] = reviewerResult{Name: reviewer.Name}
+				continue
+			}
 		}
 
 		// Skip reviewers that had no critical/major findings in the prior
