@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/decko/soda/schemas"
 )
@@ -137,6 +139,74 @@ func (e *Engine) extractVerifyFeedback() *ReworkFeedback {
 // into rework feedback across all findings. Prevents context bloat.
 const maxFeedbackContextBytes = 30 * 1024 // 30KB
 
+// Per-finding caps limit how much file content a single finding can inject.
+// Critical findings get a larger window because they are highest priority.
+const (
+	criticalFindingCapBytes = 10 * 1024 // 10KB
+	majorFindingCapBytes    = 5 * 1024  // 5KB
+)
+
+// severityRank returns a sort key for finding severity.
+// Lower rank = higher priority. Critical findings are processed first
+// so they consume budget before lower-severity findings.
+func severityRank(severity string) int {
+	switch strings.ToLower(severity) {
+	case "critical":
+		return 0
+	case "major":
+		return 1
+	default:
+		return 2
+	}
+}
+
+// contextLines returns the ± line window for snippet fallback by severity.
+// Critical findings get a wider window for more surrounding context.
+func contextLines(severity string) int {
+	switch strings.ToLower(severity) {
+	case "critical":
+		return 15
+	case "major":
+		return 10
+	default:
+		return 5
+	}
+}
+
+// findingBudgetCap returns the maximum bytes a single finding may inject.
+func findingBudgetCap(severity string) int {
+	switch strings.ToLower(severity) {
+	case "critical":
+		return criticalFindingCapBytes
+	case "major":
+		return majorFindingCapBytes
+	default:
+		return majorFindingCapBytes
+	}
+}
+
+// capToLine truncates s to at most maxBytes, breaking at the last newline
+// boundary within the cap. If s has no newlines, the result is truncated
+// at a UTF-8 rune boundary to avoid producing invalid output.
+// Returns s unchanged if len(s) <= maxBytes.
+func capToLine(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	truncated := s[:maxBytes]
+	if idx := strings.LastIndex(truncated, "\n"); idx >= 0 {
+		return truncated[:idx+1]
+	}
+	// No newline — trim incomplete trailing rune by walking back past
+	// continuation bytes (10xxxxxx) and their leading byte if the
+	// sequence is incomplete.
+	end := maxBytes
+	for end > 0 && !utf8.Valid([]byte(truncated[:end])) {
+		end--
+	}
+	return truncated[:end]
+}
+
 // extractReviewFeedback reads the review result and returns structured
 // feedback when the verdict is "rework". Returns nil if no review result
 // exists or the verdict is not "rework".
@@ -147,9 +217,11 @@ const maxFeedbackContextBytes = 30 * 1024 // 30KB
 // what was previously reported. Only critical/major findings are
 // included to keep prompt context focused.
 //
-// Each finding is enriched with file content: full-file when budget allows,
-// falling back to ±5 lines when budget is exhausted. Same-file findings
-// share the cached content to avoid duplicate reads.
+// Findings are sorted by severity (critical first) so higher-priority
+// findings consume budget first. Each finding is enriched with file
+// content up to a severity-dependent cap (10KB critical, 5KB major),
+// falling back to a ±contextLines snippet when budget is exhausted.
+// Same-file findings share the cached raw content to avoid duplicate reads.
 func (e *Engine) extractReviewFeedback() *ReworkFeedback {
 	raw, err := e.state.ReadResult("review")
 	if err != nil {
@@ -169,9 +241,16 @@ func (e *Engine) extractReviewFeedback() *ReworkFeedback {
 		Source:  "review",
 	}
 
+	// Sort findings so critical issues are processed first and consume
+	// budget before lower-severity findings (stable to preserve original
+	// order within the same severity).
+	sort.SliceStable(result.Findings, func(i, j int) bool {
+		return severityRank(result.Findings[i].Severity) < severityRank(result.Findings[j].Severity)
+	})
+
 	workDir := e.workDir(PhaseConfig{})
 	budgetRemaining := maxFeedbackContextBytes
-	fileCache := make(map[string]string) // file path → cached content
+	rawCache := make(map[string]string) // file path → raw file content
 
 	// Only include critical and major findings, enriched with code context.
 	for _, finding := range result.Findings {
@@ -182,7 +261,7 @@ func (e *Engine) extractReviewFeedback() *ReworkFeedback {
 
 		ef := EnrichedFinding{ReviewFinding: finding}
 		if finding.File != "" {
-			ef.CodeSnippet = readFileForFinding(workDir, finding.File, finding.Line, &budgetRemaining, fileCache)
+			ef.CodeSnippet = readFileForFinding(workDir, finding.File, finding.Line, finding.Severity, &budgetRemaining, rawCache)
 		}
 		fb.ReviewFindings = append(fb.ReviewFindings, ef)
 	}
@@ -193,39 +272,72 @@ func (e *Engine) extractReviewFeedback() *ReworkFeedback {
 	return fb
 }
 
-// readFileForFinding returns file content for a review finding. It tries
-// full-file injection first (if budget allows), falling back to ±5 lines.
-// Same-file findings reuse cached content without consuming extra budget.
-func readFileForFinding(workDir, file string, line int, budgetRemaining *int, cache map[string]string) string {
-	// Check cache first — same file referenced by multiple findings.
-	if cached, ok := cache[file]; ok {
-		return cached
+// readFileForFinding returns file content for a review finding. It is not
+// concurrency-safe — it must be called sequentially within a single
+// extractReviewFeedback invocation.
+//
+// The raw file is cached in rawCache only after a successful budget charge.
+// For files smaller than the per-finding cap, the full content is cached.
+// For larger files, only the resolved path is cached (as a sentinel) to
+// avoid pinning large buffers; subsequent calls re-read from disk.
+//
+// On a cache miss the full file is read. The returned content is capped
+// via capToLine to findingBudgetCap(severity) bytes and charged against
+// budgetRemaining. If the capped content exceeds the remaining budget,
+// a snippet of ±contextLines(severity) around the finding line is returned
+// instead (free — not charged, not cached).
+//
+// On a cache hit no budget is charged (the file's bytes were already
+// counted on first access).
+func readFileForFinding(workDir, file string, line int, severity string, budgetRemaining *int, rawCache map[string]string) string {
+	raw, cached := rawCache[file]
+
+	if !cached {
+		resolved := filepath.Clean(filepath.Join(workDir, file))
+		if !strings.HasPrefix(resolved, filepath.Clean(workDir)+string(filepath.Separator)) {
+			return ""
+		}
+
+		data, err := os.ReadFile(resolved)
+		if err != nil {
+			return ""
+		}
+
+		raw = string(data)
 	}
 
-	resolved := filepath.Clean(filepath.Join(workDir, file))
-	if !strings.HasPrefix(resolved, filepath.Clean(workDir)+string(filepath.Separator)) {
-		return ""
+	budgetCap := findingBudgetCap(severity)
+
+	if cached {
+		// Cache hit — file was already paid for on first access.
+		if len(raw) <= budgetCap {
+			return raw
+		}
+		// File exceeds cap — extract a window centered on the finding line.
+		if line > 0 {
+			return capToLine(extractSnippet(raw, line, contextLines(severity)), budgetCap)
+		}
+		return capToLine(raw, budgetCap)
 	}
 
-	data, err := os.ReadFile(resolved)
-	if err != nil {
-		return ""
+	// Cache miss — extract line-centered or head content, capped.
+	var effective string
+	if len(raw) > budgetCap && line > 0 {
+		effective = capToLine(extractSnippet(raw, line, contextLines(severity)), budgetCap)
+	} else {
+		effective = capToLine(raw, budgetCap)
 	}
 
-	content := string(data)
-
-	// If the full file fits within budget, use it.
-	if len(data) <= *budgetRemaining {
-		*budgetRemaining -= len(data)
-		cache[file] = content
-		return content
+	// Charge budget if the effective content fits.
+	if len(effective) <= *budgetRemaining {
+		*budgetRemaining -= len(effective)
+		rawCache[file] = raw
+		return effective
 	}
 
-	// Budget exhausted for full file — fall back to ±5 lines snippet.
+	// Budget exhausted — fall back to snippet (free), still capped.
 	if line > 0 {
-		snippet := extractSnippet(content, line, 5)
-		cache[file] = snippet
-		return snippet
+		return capToLine(extractSnippet(raw, line, contextLines(severity)), budgetCap)
 	}
 
 	return ""

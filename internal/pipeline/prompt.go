@@ -72,7 +72,7 @@ type ReworkFeedback struct {
 // EnrichedFinding wraps a ReviewFinding with code context for rework prompts.
 type EnrichedFinding struct {
 	schemas.ReviewFinding
-	CodeSnippet string // full file content (budget-controlled) or ±5 lines fallback; empty if unavailable
+	CodeSnippet string // full file content (budget-controlled) or ±15 lines (critical) or ±10 lines (major) fallback; empty if unavailable
 }
 
 // PriorCycle holds a summarized snapshot of feedback from a previous

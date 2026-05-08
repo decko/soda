@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -115,6 +116,129 @@ func TestExtractReviewFeedback(t *testing.T) {
 		}
 		if fb.ReviewFindings[1].Source != "ai-harness" || fb.ReviewFindings[1].Severity != "major" {
 			t.Errorf("second finding = %+v, want ai-harness/major", fb.ReviewFindings[1])
+		}
+	})
+
+	t.Run("sort_order_critical_before_major", func(t *testing.T) {
+		stateDir := t.TempDir()
+		state, _ := LoadOrCreate(stateDir, "TEST-1")
+		_ = state.MarkRunning("review")
+		// Input order: major, critical, minor — output should be critical, major
+		// (minor excluded). This verifies the severity sort.
+		reviewResult := `{
+			"verdict": "rework",
+			"findings": [
+				{"source":"a","severity":"major","issue":"second priority"},
+				{"source":"b","severity":"critical","issue":"top priority"},
+				{"source":"c","severity":"minor","issue":"excluded"}
+			]
+		}`
+		_ = state.WriteResult("review", json.RawMessage(reviewResult))
+		_ = state.MarkCompleted("review")
+
+		engine := &Engine{state: state, config: EngineConfig{}}
+		fb := engine.extractReviewFeedback()
+		if fb == nil {
+			t.Fatal("expected non-nil feedback for rework verdict")
+		}
+
+		if len(fb.ReviewFindings) != 2 {
+			t.Fatalf("ReviewFindings count = %d, want 2", len(fb.ReviewFindings))
+		}
+		if fb.ReviewFindings[0].Severity != "critical" {
+			t.Errorf("first finding severity = %q, want critical", fb.ReviewFindings[0].Severity)
+		}
+		if fb.ReviewFindings[1].Severity != "major" {
+			t.Errorf("second finding severity = %q, want major", fb.ReviewFindings[1].Severity)
+		}
+	})
+
+	t.Run("budget_priority_critical_gets_full_file", func(t *testing.T) {
+		workDir := t.TempDir()
+		stateDir := t.TempDir()
+
+		// Create 3 critical files, each exactly criticalFindingCapBytes (10KB).
+		// Combined they consume 3×10KB = 30KB = maxFeedbackContextBytes,
+		// fully exhausting the budget so the major finding is forced into
+		// snippet fallback.
+		criticalNames := []string{"crit1.go", "crit2.go", "crit3.go"}
+		criticalContents := make([]string, 3)
+		for i, name := range criticalNames {
+			content := strings.Repeat(string(rune('a'+i)), criticalFindingCapBytes-1) + "\n"
+			criticalContents[i] = content
+			if err := os.WriteFile(filepath.Join(workDir, name), []byte(content), 0644); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		// Create a large major file (~25KB, 500 lines). After the per-finding
+		// cap (5KB) the effective content won't fit in the remaining budget
+		// (0 bytes), so the major finding must fall back to a ±10 line snippet
+		// around line 250.
+		var majorLines []string
+		for i := 0; i < 500; i++ {
+			majorLines = append(majorLines, strings.Repeat("x", 50))
+		}
+		majorContent := strings.Join(majorLines, "\n")
+		if err := os.WriteFile(filepath.Join(workDir, "major.go"), []byte(majorContent), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		state, _ := LoadOrCreate(stateDir, "TEST-1")
+		_ = state.MarkRunning("review")
+		// Input order: major first, then critical — sort must reorder so
+		// critical findings consume budget first.
+		reviewResult := `{
+			"verdict": "rework",
+			"findings": [
+				{"source":"a","severity":"major","file":"major.go","line":250,"issue":"needs work"},
+				{"source":"b","severity":"critical","file":"crit1.go","line":1,"issue":"nil deref 1"},
+				{"source":"c","severity":"critical","file":"crit2.go","line":1,"issue":"nil deref 2"},
+				{"source":"d","severity":"critical","file":"crit3.go","line":1,"issue":"nil deref 3"}
+			]
+		}`
+		_ = state.WriteResult("review", json.RawMessage(reviewResult))
+		_ = state.MarkCompleted("review")
+
+		engine := &Engine{state: state, config: EngineConfig{WorkDir: workDir}}
+		fb := engine.extractReviewFeedback()
+		if fb == nil {
+			t.Fatal("expected non-nil feedback for rework verdict")
+		}
+
+		if len(fb.ReviewFindings) != 4 {
+			t.Fatalf("ReviewFindings count = %d, want 4", len(fb.ReviewFindings))
+		}
+
+		// All 3 critical findings (sorted first) should get their full file content.
+		for i := 0; i < 3; i++ {
+			if fb.ReviewFindings[i].Severity != "critical" {
+				t.Fatalf("finding[%d] severity = %q, want critical", i, fb.ReviewFindings[i].Severity)
+			}
+			if fb.ReviewFindings[i].CodeSnippet != criticalContents[i] {
+				t.Errorf("critical finding[%d] should get full file (%d bytes), got %d bytes",
+					i, len(criticalContents[i]), len(fb.ReviewFindings[i].CodeSnippet))
+			}
+		}
+
+		// Major finding (last, after budget exhausted by 3 critical files)
+		// should get a ±10 line snippet around line 250, NOT the 5KB capped
+		// content from the top of the file.
+		if fb.ReviewFindings[3].Severity != "major" {
+			t.Fatalf("finding[3] severity = %q, want major", fb.ReviewFindings[3].Severity)
+		}
+		majorSnippet := fb.ReviewFindings[3].CodeSnippet
+		if majorSnippet == "" {
+			t.Fatal("major finding should get snippet fallback, not empty")
+		}
+		// A ±10 line snippet around line 250 of a 500-line file = ~21 lines.
+		// If it were capped content (5KB from top of file) it would be ~100 lines.
+		snippetLines := strings.Split(majorSnippet, "\n")
+		if len(snippetLines) != 21 {
+			t.Errorf("major finding snippet should be 21 lines (±10 around line 250), got %d lines", len(snippetLines))
+		}
+		if majorSnippet == majorContent {
+			t.Error("major finding should NOT get full file")
 		}
 	})
 }
@@ -536,7 +660,7 @@ func TestReadFileForFinding(t *testing.T) {
 
 		budget := 1000
 		cache := make(map[string]string)
-		got := readFileForFinding(dir, "small.go", 3, &budget, cache)
+		got := readFileForFinding(dir, "small.go", 3, "major", &budget, cache)
 
 		if got != content {
 			t.Errorf("got %q, want full file content", got)
@@ -548,7 +672,9 @@ func TestReadFileForFinding(t *testing.T) {
 
 	t.Run("falls_back_to_snippet_when_over_budget", func(t *testing.T) {
 		dir := t.TempDir()
-		// 20-line file — snippet at line 10 with ±5 context = 11 lines, not all 20.
+		// 20-line file — snippet at line 10 with ±5 context (minor) = 11 lines, not all 20.
+		// Using "minor" severity to keep the ±5 fallback window so the snippet
+		// is clearly shorter than the full 20-line file.
 		var longLines []string
 		for i := 1; i <= 20; i++ {
 			longLines = append(longLines, strings.Repeat("x", 10))
@@ -558,7 +684,7 @@ func TestReadFileForFinding(t *testing.T) {
 
 		budget := 50 // too small for full file (~220 bytes)
 		cache := make(map[string]string)
-		got := readFileForFinding(dir, "big.go", 10, &budget, cache)
+		got := readFileForFinding(dir, "big.go", 10, "minor", &budget, cache)
 
 		if got == content {
 			t.Error("should NOT return full file when over budget")
@@ -581,12 +707,12 @@ func TestReadFileForFinding(t *testing.T) {
 		budget := 1000
 		cache := make(map[string]string)
 
-		got1 := readFileForFinding(dir, "shared.go", 1, &budget, cache)
+		got1 := readFileForFinding(dir, "shared.go", 1, "major", &budget, cache)
 		budgetAfterFirst := budget
-		got2 := readFileForFinding(dir, "shared.go", 2, &budget, cache)
+		got2 := readFileForFinding(dir, "shared.go", 2, "major", &budget, cache)
 
-		if got1 != got2 {
-			t.Errorf("same file should return same content: %q vs %q", got1, got2)
+		if got1 == "" || got2 == "" {
+			t.Errorf("both calls should return content: got1=%q, got2=%q", got1, got2)
 		}
 		if budget != budgetAfterFirst {
 			t.Errorf("second read should not consume budget: %d vs %d", budget, budgetAfterFirst)
@@ -608,12 +734,12 @@ func TestReadFileForFinding(t *testing.T) {
 		budget := 120 // enough for first file (101 bytes) but not second (~220 bytes)
 		cache := make(map[string]string)
 
-		got1 := readFileForFinding(dir, "first.go", 1, &budget, cache)
+		got1 := readFileForFinding(dir, "first.go", 1, "major", &budget, cache)
 		if got1 != file1Content {
 			t.Error("first file should get full content")
 		}
 
-		got2 := readFileForFinding(dir, "second.go", 15, &budget, cache)
+		got2 := readFileForFinding(dir, "second.go", 15, "major", &budget, cache)
 		if got2 == file2Content {
 			t.Error("second file should NOT get full content (over budget)")
 		}
@@ -622,11 +748,55 @@ func TestReadFileForFinding(t *testing.T) {
 		}
 	})
 
+	t.Run("no_cache_on_budget_exhaustion", func(t *testing.T) {
+		// Regression: when budget is exhausted on a cache miss, the file must
+		// NOT be cached. A second finding for the same file should also fall
+		// back to a snippet, not return full capped content for free.
+		dir := t.TempDir()
+		var fileLines []string
+		for i := 1; i <= 100; i++ {
+			fileLines = append(fileLines, strings.Repeat("z", 50))
+		}
+		content := strings.Join(fileLines, "\n")
+		writeFile(t, dir, "expensive.go", content)
+
+		budget := 0 // budget already exhausted
+		cache := make(map[string]string)
+
+		// First call: cache miss, budget exhausted → snippet fallback, NOT cached.
+		got1 := readFileForFinding(dir, "expensive.go", 50, "major", &budget, cache)
+		if got1 == "" {
+			t.Fatal("first call should return snippet fallback")
+		}
+		if len(got1) > majorFindingCapBytes {
+			t.Errorf("first call returned %d bytes, want ≤ %d (snippet)", len(got1), majorFindingCapBytes)
+		}
+
+		// Second call: should also be a cache miss (file was not cached),
+		// also falls back to snippet — no budget bypass.
+		got2 := readFileForFinding(dir, "expensive.go", 50, "major", &budget, cache)
+		if got2 == "" {
+			t.Fatal("second call should return snippet fallback")
+		}
+		// Both calls should return the same snippet.
+		if got1 != got2 {
+			t.Errorf("both calls should return same snippet, got %d vs %d bytes", len(got1), len(got2))
+		}
+		if budget != 0 {
+			t.Errorf("budget should remain 0, got %d", budget)
+		}
+
+		// Verify the file was NOT cached.
+		if _, inCache := cache["expensive.go"]; inCache {
+			t.Error("file should NOT be in cache after budget-exhausted fallback")
+		}
+	})
+
 	t.Run("nonexistent_file_returns_empty", func(t *testing.T) {
 		dir := t.TempDir()
 		budget := 1000
 		cache := make(map[string]string)
-		got := readFileForFinding(dir, "nope.go", 1, &budget, cache)
+		got := readFileForFinding(dir, "nope.go", 1, "major", &budget, cache)
 		if got != "" {
 			t.Errorf("expected empty for nonexistent file, got: %q", got)
 		}
@@ -640,9 +810,211 @@ func TestReadFileForFinding(t *testing.T) {
 
 		budget := 1000
 		cache := make(map[string]string)
-		got := readFileForFinding(dir, "../secret.txt", 1, &budget, cache)
+		got := readFileForFinding(dir, "../secret.txt", 1, "major", &budget, cache)
 		if got != "" {
 			t.Errorf("expected empty for path traversal, got: %q", got)
+		}
+	})
+
+	t.Run("cross_severity_cache_same_file_different_content", func(t *testing.T) {
+		dir := t.TempDir()
+		// 7KB file — larger than majorCap (5KB) but smaller than criticalCap (10KB).
+		content := strings.Repeat("x", 7*1024) + "\n"
+		if err := os.WriteFile(filepath.Join(dir, "mid.go"), []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		budget := 50000
+		cache := make(map[string]string)
+
+		// First call with "critical" — file is under criticalCap (10KB), returns full content.
+		got1 := readFileForFinding(dir, "mid.go", 1, "critical", &budget, cache)
+		budgetAfterFirst := budget
+
+		// Second call (same file, "major", cache hit) — returns ≤5KB without charging budget.
+		got2 := readFileForFinding(dir, "mid.go", 1, "major", &budget, cache)
+
+		if len(got1) <= len(got2) {
+			t.Errorf("critical content (%d bytes) should be larger than major content (%d bytes)", len(got1), len(got2))
+		}
+		if len(got2) > majorFindingCapBytes {
+			t.Errorf("major cache hit should be ≤ %d bytes, got %d", majorFindingCapBytes, len(got2))
+		}
+		if budget != budgetAfterFirst {
+			t.Errorf("cache hit should not charge budget: got %d, want %d", budget, budgetAfterFirst)
+		}
+	})
+
+	t.Run("cache_hit_line_beyond_cap_boundary", func(t *testing.T) {
+		dir := t.TempDir()
+		// 300-line file, ~80 chars/line → ~24KB. Larger than both caps.
+		var fileLines []string
+		for i := 1; i <= 300; i++ {
+			fileLines = append(fileLines, fmt.Sprintf("line-%03d %s", i, strings.Repeat("z", 70)))
+		}
+		content := strings.Join(fileLines, "\n") + "\n"
+		if err := os.WriteFile(filepath.Join(dir, "handler.go"), []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		budget := 50000
+		cache := make(map[string]string)
+
+		// First call: critical finding at line 1 — caches the full file,
+		// returns up to criticalCap bytes from head.
+		got1 := readFileForFinding(dir, "handler.go", 1, "critical", &budget, cache)
+		if !strings.Contains(got1, "line-001") {
+			t.Error("first call should contain line-001")
+		}
+
+		// Second call: major finding at line 200 (cache hit).
+		// The major cap (5KB, ~63 lines) doesn't cover line 200.
+		// The fix should center the snippet on line 200, not return head.
+		got2 := readFileForFinding(dir, "handler.go", 200, "major", &budget, cache)
+		if !strings.Contains(got2, "line-200") {
+			t.Errorf("cache hit at line 200 should contain line-200, got snippet starting with: %q", got2[:min(80, len(got2))])
+		}
+	})
+
+	t.Run("cache_miss_line_beyond_cap_centers_on_line", func(t *testing.T) {
+		dir := t.TempDir()
+		// 300-line file, ~80 chars/line → ~24KB. Larger than both caps.
+		var fileLines []string
+		for i := 1; i <= 300; i++ {
+			fileLines = append(fileLines, fmt.Sprintf("line-%03d %s", i, strings.Repeat("z", 70)))
+		}
+		content := strings.Join(fileLines, "\n") + "\n"
+		if err := os.WriteFile(filepath.Join(dir, "service.go"), []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		budget := 50000
+		cache := make(map[string]string)
+
+		// Cache miss, major finding at line 200. The file exceeds majorCap (5KB),
+		// so the returned content should be centered on line 200, not the head.
+		got := readFileForFinding(dir, "service.go", 200, "major", &budget, cache)
+		if !strings.Contains(got, "line-200") {
+			t.Errorf("cache miss at line 200 should contain line-200, got snippet starting with: %q", got[:min(80, len(got))])
+		}
+		if strings.Contains(got, "line-001") {
+			t.Error("cache miss at line 200 should NOT contain line-001 (should not return head)")
+		}
+	})
+
+	t.Run("cache_hit_sub_cap_file_returns_full_content", func(t *testing.T) {
+		dir := t.TempDir()
+		// 80-line file, ~32 chars/line → ~2.5KB, smaller than majorCap (5KB).
+		var fileLines []string
+		for i := 1; i <= 80; i++ {
+			fileLines = append(fileLines, fmt.Sprintf("line-%03d %s", i, strings.Repeat("w", 20)))
+		}
+		content := strings.Join(fileLines, "\n") + "\n"
+		if err := os.WriteFile(filepath.Join(dir, "small.go"), []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		budget := 50000
+		cache := make(map[string]string)
+
+		// Cache miss at line 10 — returns full file (sub-cap).
+		got1 := readFileForFinding(dir, "small.go", 10, "major", &budget, cache)
+		// Cache hit at line 70 — should also return full file, not a snippet.
+		got2 := readFileForFinding(dir, "small.go", 70, "major", &budget, cache)
+
+		if len(got1) != len(got2) {
+			t.Errorf("sub-cap file: cache miss (%d bytes) and cache hit (%d bytes) should return same size", len(got1), len(got2))
+		}
+		if !strings.Contains(got2, "line-001") || !strings.Contains(got2, "line-080") {
+			t.Error("cache hit on sub-cap file should return full content including first and last lines")
+		}
+	})
+
+	t.Run("fallback_context_window_by_severity", func(t *testing.T) {
+		dir := t.TempDir()
+		// 100-line file.
+		var fileLines []string
+		for i := 1; i <= 100; i++ {
+			fileLines = append(fileLines, strings.Repeat("y", 20))
+		}
+		content := strings.Join(fileLines, "\n")
+		if err := os.WriteFile(filepath.Join(dir, "big.go"), []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		// Budget=0 forces the snippet fallback path on cache miss.
+		budgetZero := 0
+
+		// Critical: ±15 lines around line 50 → lines 35..65 = 31 lines.
+		cache1 := make(map[string]string)
+		gotCritical := readFileForFinding(dir, "big.go", 50, "critical", &budgetZero, cache1)
+		criticalLines := strings.Split(gotCritical, "\n")
+
+		// Major: ±10 lines around line 50 → lines 40..60 = 21 lines.
+		cache2 := make(map[string]string)
+		gotMajor := readFileForFinding(dir, "big.go", 50, "major", &budgetZero, cache2)
+		majorLines := strings.Split(gotMajor, "\n")
+
+		// Minor: ±5 lines around line 50 → lines 45..55 = 11 lines.
+		cache3 := make(map[string]string)
+		gotMinor := readFileForFinding(dir, "big.go", 50, "minor", &budgetZero, cache3)
+		minorLines := strings.Split(gotMinor, "\n")
+
+		if len(criticalLines) != 31 {
+			t.Errorf("critical snippet: got %d lines, want 31 (±15)", len(criticalLines))
+		}
+		if len(majorLines) != 21 {
+			t.Errorf("major snippet: got %d lines, want 21 (±10)", len(majorLines))
+		}
+		if len(minorLines) != 11 {
+			t.Errorf("minor snippet: got %d lines, want 11 (±5)", len(minorLines))
+		}
+	})
+}
+
+func TestCapToLine(t *testing.T) {
+	t.Run("under_cap_unchanged", func(t *testing.T) {
+		got := capToLine("abc\ndef\n", 100)
+		if got != "abc\ndef\n" {
+			t.Errorf("under-cap should return unchanged, got %q", got)
+		}
+	})
+
+	t.Run("truncates_at_last_newline", func(t *testing.T) {
+		got := capToLine("line1\nline2\nline3\n", 12)
+		if got != "line1\nline2\n" {
+			t.Errorf("should truncate at last newline within cap, got %q", got)
+		}
+	})
+
+	t.Run("newline_at_position_zero", func(t *testing.T) {
+		got := capToLine("\nrest of content here", 5)
+		if got != "\n" {
+			t.Errorf("should truncate at newline at position 0, got %q", got)
+		}
+	})
+
+	t.Run("no_newlines_rune_safe", func(t *testing.T) {
+		got := capToLine("abcdefghij", 5)
+		if got != "abcde" {
+			t.Errorf("no newlines should truncate at byte boundary, got %q", got)
+		}
+	})
+
+	t.Run("no_newlines_multibyte_rune_safe", func(t *testing.T) {
+		// "héllo" — é is 2 bytes (0xC3 0xA9), so bytes are: h(1) é(2) l(1) l(1) o(1) = 6 bytes
+		// Cap at 2 bytes: "h" + first byte of é → should back up to not split the rune
+		got := capToLine("héllo", 2)
+		if got != "h" {
+			t.Errorf("should not split multi-byte rune, got %q (len=%d)", got, len(got))
+		}
+	})
+
+	t.Run("exact_cap_unchanged", func(t *testing.T) {
+		s := "abc\n"
+		got := capToLine(s, len(s))
+		if got != s {
+			t.Errorf("exact cap should return unchanged, got %q", got)
 		}
 	})
 }
