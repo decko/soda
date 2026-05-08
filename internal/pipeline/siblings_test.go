@@ -294,6 +294,115 @@ func Listen(ch <-chan string) chan int {
 			t.Errorf("sigs[0] = %q", sigs[0])
 		}
 	})
+
+	t.Run("handles_generic_function_single_type_param", func(t *testing.T) {
+		dir := t.TempDir()
+		src := `package example
+
+func Filter[T any](items []T, fn func(T) bool) []T {
+	return nil
+}
+`
+		path := filepath.Join(dir, "generics.go")
+		if err := os.WriteFile(path, []byte(src), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		sigs, err := ExtractGoSignatures(path)
+		if err != nil {
+			t.Fatalf("ExtractGoSignatures: %v", err)
+		}
+		if len(sigs) != 1 {
+			t.Fatalf("got %d signatures, want 1: %v", len(sigs), sigs)
+		}
+		want := "func Filter[T any](items []T, fn func(T) bool) []T"
+		if sigs[0] != want {
+			t.Errorf("sigs[0] = %q, want %q", sigs[0], want)
+		}
+	})
+
+	t.Run("handles_generic_function_multiple_type_params", func(t *testing.T) {
+		dir := t.TempDir()
+		src := `package example
+
+func NewStore[K comparable, V any](name string) *Store[K, V] {
+	return nil
+}
+`
+		path := filepath.Join(dir, "store.go")
+		if err := os.WriteFile(path, []byte(src), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		sigs, err := ExtractGoSignatures(path)
+		if err != nil {
+			t.Fatalf("ExtractGoSignatures: %v", err)
+		}
+		if len(sigs) != 1 {
+			t.Fatalf("got %d signatures, want 1: %v", len(sigs), sigs)
+		}
+		want := "func NewStore[K comparable, V any](name string) *Store[K, V]"
+		if sigs[0] != want {
+			t.Errorf("sigs[0] = %q, want %q", sigs[0], want)
+		}
+	})
+
+	t.Run("handles_generic_receiver_type", func(t *testing.T) {
+		dir := t.TempDir()
+		src := `package example
+
+type Cache[K comparable, V any] struct{}
+
+func (c *Cache[K, V]) Get(key K) (V, bool) {
+	var zero V
+	return zero, false
+}
+`
+		path := filepath.Join(dir, "cache.go")
+		if err := os.WriteFile(path, []byte(src), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		sigs, err := ExtractGoSignatures(path)
+		if err != nil {
+			t.Fatalf("ExtractGoSignatures: %v", err)
+		}
+		if len(sigs) != 1 {
+			t.Fatalf("got %d signatures, want 1: %v", len(sigs), sigs)
+		}
+		want := "func (c *Cache[K, V]) Get(key K) (V, bool)"
+		if sigs[0] != want {
+			t.Errorf("sigs[0] = %q, want %q", sigs[0], want)
+		}
+	})
+
+	t.Run("handles_single_generic_instantiation", func(t *testing.T) {
+		dir := t.TempDir()
+		src := `package example
+
+type Container[T any] struct{}
+
+func NewIntContainer() *Container[int] {
+	return nil
+}
+`
+		path := filepath.Join(dir, "container.go")
+		if err := os.WriteFile(path, []byte(src), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		sigs, err := ExtractGoSignatures(path)
+		if err != nil {
+			t.Fatalf("ExtractGoSignatures: %v", err)
+		}
+		if len(sigs) != 1 {
+			t.Fatalf("got %d signatures, want 1: %v", len(sigs), sigs)
+		}
+		want := "func NewIntContainer() *Container[int]"
+		if sigs[0] != want {
+			t.Errorf("sigs[0] = %q, want %q", sigs[0], want)
+		}
+	})
 }
 
 func TestBuildSiblingContext(t *testing.T) {

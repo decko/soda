@@ -127,6 +127,13 @@ func formatFuncSignature(fn *ast.FuncDecl) string {
 
 	b.WriteString(fn.Name.Name)
 
+	// Type parameters (generics).
+	if fn.Type.TypeParams != nil && len(fn.Type.TypeParams.List) > 0 {
+		b.WriteByte('[')
+		b.WriteString(fieldListString(fn.Type.TypeParams))
+		b.WriteByte(']')
+	}
+
 	// Parameters.
 	b.WriteByte('(')
 	b.WriteString(fieldListString(fn.Type.Params))
@@ -216,6 +223,14 @@ func exprString(expr ast.Expr) string {
 		return "..." + exprString(e.Elt)
 	case *ast.ParenExpr:
 		return "(" + exprString(e.X) + ")"
+	case *ast.IndexExpr:
+		return exprString(e.X) + "[" + exprString(e.Index) + "]"
+	case *ast.IndexListExpr:
+		parts := make([]string, len(e.Indices))
+		for i, idx := range e.Indices {
+			parts[i] = exprString(idx)
+		}
+		return exprString(e.X) + "[" + strings.Join(parts, ", ") + "]"
 	default:
 		return "?"
 	}
