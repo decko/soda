@@ -971,15 +971,25 @@ func ExistingFunc(s string) error {
 		initGitRepo(t, dir)
 
 		os.MkdirAll(filepath.Join(dir, "pkg"), 0755)
-		// Create a file with many functions.
+
+		// Create the larger file first (older mtime) — would exceed budget alone.
 		var src strings.Builder
 		src.WriteString("package pkg\n\n")
 		for i := 0; i < 50; i++ {
-			src.WriteString(fmt.Sprintf("func Func%d() error { return nil }\n\n", i))
+			src.WriteString(fmt.Sprintf("func Large%d() error { return nil }\n\n", i))
 		}
 		os.WriteFile(filepath.Join(dir, "pkg", "big.go"), []byte(src.String()), 0644)
 		gitAdd(t, dir, "pkg/big.go")
 		gitCommit(t, dir, "add big file")
+
+		// Sleep to ensure different mtime, then create the small file (newer mtime).
+		// findExemplarFiles sorts by mtime descending, so small.go is processed first.
+		time.Sleep(50 * time.Millisecond)
+		os.WriteFile(filepath.Join(dir, "pkg", "small.go"), []byte(
+			"package pkg\n\nfunc Alpha() error { return nil }\n\nfunc Beta() error { return nil }\n",
+		), 0644)
+		gitAdd(t, dir, "pkg/small.go")
+		gitCommit(t, dir, "add small file")
 
 		plan := `{
 			"ticket_key": "TEST-1",
@@ -990,10 +1000,22 @@ func ExistingFunc(s string) error {
 			"verification": {"commands":[]}
 		}`
 
+		// Budget large enough for the small file's signatures but not both.
+		// small.go signatures: "// pkg/small.go\nfunc Alpha() error\nfunc Beta() error" ≈ 55 bytes
+		// big.go signatures: 50 lines ≈ 1200+ bytes
 		const budget = 200
 		result := BuildPackageExemplars(context.Background(), dir, json.RawMessage(plan), "main", budget)
+
 		if len(result) > budget {
 			t.Errorf("exceeded budget: %d > %d", len(result), budget)
+		}
+		// Must include some content (the small file should fit).
+		if result == "" {
+			t.Error("expected non-empty result: small file signatures should fit within budget")
+		}
+		// Must NOT include the large file's functions.
+		if strings.Contains(result, "Large0") {
+			t.Error("large file signatures should be excluded by budget cap")
 		}
 	})
 
