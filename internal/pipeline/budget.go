@@ -43,10 +43,10 @@ type reductionStep struct {
 // the compact, high-value convention checklist available as long as possible.
 //
 // The order is phase-specific:
-//   - implement: siblings → projectContext → extras → review comments → diff → (rework) → (artifacts) → conventions
-//   - review:    siblings → extras → diff → projectContext → (rework) → (artifacts) → conventions
-//   - verify:    siblings → extras → projectContext → diff → (rework) → (artifacts)  (no conventions — verify.md never renders RepoConventions)
-//   - patch:     diff → siblings → extras → projectContext → (rework) → (artifacts) → conventions
+//   - implement: siblings → exemplars → projectContext → extras → review comments → diff → (rework) → (artifacts) → conventions
+//   - review:    siblings → exemplars → extras → diff → projectContext → (rework) → (artifacts) → conventions
+//   - verify:    siblings → exemplars → extras → projectContext → diff → (rework) → (artifacts)  (no conventions — verify.md never renders RepoConventions)
+//   - patch:     diff → siblings → exemplars → extras → projectContext → (rework) → (artifacts) → conventions
 //
 // For unknown phases a sensible default order is used (conventions always last).
 func phaseReductionOrder(phase string) []reductionStep {
@@ -55,6 +55,11 @@ func phaseReductionOrder(phase string) []reductionStep {
 		label:   "SiblingContext",
 		reduce:  func(d *PromptData) { d.SiblingContext = "" },
 		applies: func(d *PromptData) bool { return d.SiblingContext != "" },
+	}
+	exemplarStep := reductionStep{
+		label:   "PackageExemplars",
+		reduce:  func(d *PromptData) { d.PackageExemplars = "" },
+		applies: func(d *PromptData) bool { return d.PackageExemplars != "" },
 	}
 	projectContextStep := reductionStep{
 		label: "ProjectContext",
@@ -176,13 +181,13 @@ func phaseReductionOrder(phase string) []reductionStep {
 	switch phase {
 	case "implement":
 		// Conventions are shed last — they are compact and high-value for implement.
-		steps := []reductionStep{siblingStep, projectContextStep, extrasStep, reviewCommentsStep, diffStep}
+		steps := []reductionStep{siblingStep, exemplarStep, projectContextStep, extrasStep, reviewCommentsStep, diffStep}
 		steps = append(steps, reworkSteps...)
 		steps = append(steps, artifactSteps...)
 		steps = append(steps, conventionsStep)
 		return steps
 	case "review":
-		steps := []reductionStep{siblingStep, extrasStep, diffStep, projectContextStep}
+		steps := []reductionStep{siblingStep, exemplarStep, extrasStep, diffStep, projectContextStep}
 		steps = append(steps, reworkSteps...)
 		steps = append(steps, artifactSteps...)
 		steps = append(steps, conventionsStep)
@@ -192,19 +197,19 @@ func phaseReductionOrder(phase string) []reductionStep {
 		// omitted — shedding a field the template never emits would produce
 		// a false manifest note ("RepoConventions reduced") for a field the
 		// model never saw.
-		steps := []reductionStep{siblingStep, extrasStep, projectContextStep, diffStep}
+		steps := []reductionStep{siblingStep, exemplarStep, extrasStep, projectContextStep, diffStep}
 		steps = append(steps, reworkSteps...)
 		steps = append(steps, artifactSteps...)
 		return steps
 	case "patch":
-		steps := []reductionStep{diffStep, siblingStep, extrasStep, projectContextStep}
+		steps := []reductionStep{diffStep, siblingStep, exemplarStep, extrasStep, projectContextStep}
 		steps = append(steps, reworkSteps...)
 		steps = append(steps, artifactSteps...)
 		steps = append(steps, conventionsStep)
 		return steps
 	default:
 		// Sensible default for unknown/custom phases.
-		steps := []reductionStep{siblingStep, extrasStep, reviewCommentsStep, diffStep, projectContextStep}
+		steps := []reductionStep{siblingStep, exemplarStep, extrasStep, reviewCommentsStep, diffStep, projectContextStep}
 		steps = append(steps, reworkSteps...)
 		steps = append(steps, artifactSteps...)
 		steps = append(steps, conventionsStep)

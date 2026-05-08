@@ -16,6 +16,9 @@ Plan: {{.Artifacts.Plan}}
 {{- if .SiblingContext}}
 Siblings: {{.SiblingContext}}
 {{- end}}
+{{- if .PackageExemplars}}
+Exemplars: {{.PackageExemplars}}
+{{- end}}
 {{- if .DiffContext}}
 Diff: {{.DiffContext}}
 {{- end}}
@@ -83,9 +86,10 @@ func makeData() PromptData {
 			Plan:   "The plan content — always protected.",
 			Extras: map[string]string{"custom": "custom artifact content"},
 		},
-		SiblingContext: strings.Repeat("sibling-ctx ", 100),
-		DiffContext:    strings.Repeat("diff-line ", 100),
-		ReviewComments: "some review comments",
+		SiblingContext:   strings.Repeat("sibling-ctx ", 100),
+		PackageExemplars: strings.Repeat("exemplar-sig ", 50),
+		DiffContext:      strings.Repeat("diff-line ", 100),
+		ReviewComments:   "some review comments",
 		Context: ContextData{
 			ProjectContext:  strings.Repeat("project-ctx ", 50),
 			RepoConventions: strings.Repeat("conventions ", 50),
@@ -630,6 +634,52 @@ func TestFitToBudget_VerifyPhaseOmitsConventions(t *testing.T) {
 		if s.label == "RepoConventions" {
 			t.Fatal("verify phase should not include RepoConventions reduction step — verify.md never renders it")
 		}
+	}
+}
+
+func TestFitToBudget_ReducesExemplarsBeforeProjectContext_Implement(t *testing.T) {
+	data := makeData()
+	data.PackageExemplars = strings.Repeat("exemplar ", 500)
+	data.Context.ProjectContext = strings.Repeat("project ", 500)
+
+	// Compute budget with SiblingContext and PackageExemplars removed but
+	// ProjectContext still present + manifest overhead.
+	expected := data
+	expected.SiblingContext = ""
+	expected.PackageExemplars = ""
+	expected.ContextFitted = true
+	expected.ManifestNote = "[context-fitted] The following sections were reduced to fit the context window: SiblingContext, PackageExemplars. Use file-read and search tools to retrieve any missing context you need."
+	renderedExpected, _ := RenderPrompt(simpleTmpl, expected)
+	budget := estimateTokens(len(renderedExpected), 3.3) + manifestReserveTokens + 5
+
+	fitted, reduced, err := fitToBudget(simpleTmpl, data, "implement", budget, 3.3)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// PackageExemplars should be shed before ProjectContext.
+	exemplarIdx := -1
+	projectIdx := -1
+	for i, r := range reduced {
+		if r == "PackageExemplars" {
+			exemplarIdx = i
+		}
+		if r == "ProjectContext" {
+			projectIdx = i
+		}
+	}
+	if exemplarIdx == -1 {
+		t.Fatalf("expected PackageExemplars in reduced, got %v", reduced)
+	}
+	if fitted.PackageExemplars != "" {
+		t.Error("PackageExemplars should be cleared")
+	}
+	// ProjectContext should still be present (budget was met without it).
+	if fitted.Context.ProjectContext == "" {
+		t.Error("ProjectContext should survive when exemplar reduction suffices")
+	}
+	if projectIdx != -1 {
+		t.Error("ProjectContext should NOT be in reduced list when budget is met without it")
 	}
 }
 
