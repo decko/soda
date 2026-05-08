@@ -27,7 +27,8 @@ type PromptData struct {
 	ReviewComments string
 	ReworkFeedback *ReworkFeedback
 	DiffContext    string // git diff of current branch vs base, injected for monitor and corrective phases
-	SiblingContext string // function signatures from files referenced in the plan; helps implement see surrounding code
+	SiblingContext    string // function signatures from files referenced in the plan; helps implement see surrounding code
+	PackageExemplars string // function signatures from existing files in the same packages as new files being created
 	VerifyClean    bool   // true when the verify phase produced a "pass" verdict (no failures)
 	ContextFitted  bool   // true when fitToBudget reduced the prompt to fit the context window
 	ManifestNote   string // injected note telling the model which sections were trimmed and to use tools for missing context
