@@ -273,12 +273,17 @@ func (e *Engine) runParallelReview(ctx context.Context, phase PhaseConfig) error
 					Data:  map[string]any{"reviewer": reviewer.Name, "error": condErr.Error()},
 				})
 			} else if !shouldRun {
+				// Carry forward prior findings (same logic as the
+				// prior-review skip path below) so minor findings are
+				// not silently dropped and critical/major findings from
+				// a prior cycle remain visible in the merged output.
+				carried := priorFindingsForReviewer(priorReview, reviewer.Name)
 				e.emit(Event{
 					Phase: phase.Name,
 					Kind:  EventReviewerSkipped,
-					Data:  map[string]any{"reviewer": reviewer.Name, "reason": "condition evaluated to false"},
+					Data:  map[string]any{"reviewer": reviewer.Name, "reason": "condition evaluated to false", "carried_findings": len(carried)},
 				})
-				results[idx] = reviewerResult{Name: reviewer.Name}
+				results[idx] = reviewerResult{Name: reviewer.Name, Findings: carried}
 				continue
 			}
 		}
