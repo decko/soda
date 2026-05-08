@@ -45,7 +45,7 @@ type reductionStep struct {
 // The order is phase-specific:
 //   - implement: siblings → projectContext → extras → review comments → diff → (rework) → (artifacts) → conventions
 //   - review:    siblings → extras → diff → projectContext → (rework) → (artifacts) → conventions
-//   - verify:    siblings → extras → projectContext → diff → (rework) → (artifacts) → conventions
+//   - verify:    siblings → extras → projectContext → diff → (rework) → (artifacts)  (no conventions — verify.md never renders RepoConventions)
 //   - patch:     diff → siblings → extras → projectContext → (rework) → (artifacts) → conventions
 //
 // For unknown phases a sensible default order is used (conventions always last).
@@ -188,10 +188,13 @@ func phaseReductionOrder(phase string) []reductionStep {
 		steps = append(steps, conventionsStep)
 		return steps
 	case "verify":
+		// verify.md does not render RepoConventions, so conventionsStep is
+		// omitted — shedding a field the template never emits would produce
+		// a false manifest note ("RepoConventions reduced") for a field the
+		// model never saw.
 		steps := []reductionStep{siblingStep, extrasStep, projectContextStep, diffStep}
 		steps = append(steps, reworkSteps...)
 		steps = append(steps, artifactSteps...)
-		steps = append(steps, conventionsStep)
 		return steps
 	case "patch":
 		steps := []reductionStep{diffStep, siblingStep, extrasStep, projectContextStep}

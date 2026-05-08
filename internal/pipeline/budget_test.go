@@ -588,9 +588,11 @@ func TestFitToBudget_ConventionsSurvivesLongerThanProjectContext_Implement(t *te
 }
 
 func TestFitToBudget_ConventionsShedLast_AllPhases(t *testing.T) {
-	// Verify that for all known phases, RepoConventions appears after
-	// ProjectContext in the reduction order.
-	phases := []string{"implement", "review", "verify", "patch", "custom-phase"}
+	// For phases whose templates render RepoConventions, verify that
+	// conventionsStep appears after projectContextStep in the reduction order.
+	// verify.md does NOT render RepoConventions, so it is excluded — see
+	// TestFitToBudget_VerifyPhaseOmitsConventions for that assertion.
+	phases := []string{"implement", "review", "patch", "custom-phase"}
 
 	for _, phase := range phases {
 		t.Run(phase, func(t *testing.T) {
@@ -615,6 +617,19 @@ func TestFitToBudget_ConventionsShedLast_AllPhases(t *testing.T) {
 				t.Errorf("RepoConventions (idx=%d) should be shed after ProjectContext (idx=%d)", conventionsIdx, projectIdx)
 			}
 		})
+	}
+}
+
+func TestFitToBudget_VerifyPhaseOmitsConventions(t *testing.T) {
+	// verify.md does not render {{.Context.RepoConventions}}, so the verify
+	// phase must not include a conventionsStep. Including it would produce a
+	// false manifest note claiming "RepoConventions" was reduced when the
+	// model never saw the field.
+	steps := phaseReductionOrder("verify")
+	for _, s := range steps {
+		if s.label == "RepoConventions" {
+			t.Fatal("verify phase should not include RepoConventions reduction step — verify.md never renders it")
+		}
 	}
 }
 
