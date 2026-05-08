@@ -3,6 +3,10 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/decko/soda/internal/runner"
@@ -119,6 +123,71 @@ func TestBuildPromptData_VerifyClean(t *testing.T) {
 			t.Error("VerifyClean should be false when no verify result exists")
 		}
 	})
+}
+
+// TestVerifyCleanTemplateGating renders the real embedded review-go.md and
+// review-harness.md templates with VerifyClean=true and VerifyClean=false,
+// asserting that gated sections are absent/present accordingly. This catches
+// logic inversions (e.g. {{if .VerifyClean}} instead of {{if not .VerifyClean}})
+// that the unit-level VerifyClean population tests cannot detect.
+func TestVerifyCleanTemplateGating(t *testing.T) {
+	// Locate the embedded templates relative to this source file.
+	_, thisFile, _, _ := runtime.Caller(0)
+	repoRoot := filepath.Join(filepath.Dir(thisFile), "..", "..")
+	embedDir := filepath.Join(repoRoot, "cmd", "soda", "embeds", "prompts")
+
+	cases := []struct {
+		template    string
+		gatedPhrase string // text that must appear only when VerifyClean=false
+	}{
+		{"review-go.md", "Test quality and coverage"},
+		{"review-harness.md", "Structured output schema alignment"},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.template, func(t *testing.T) {
+			raw, err := os.ReadFile(filepath.Join(embedDir, tc.template))
+			if err != nil {
+				t.Fatalf("read template %s: %v", tc.template, err)
+			}
+			tmpl := string(raw)
+
+			// Provide enough data for the template to render without errors.
+			baseData := PromptData{
+				Ticket: TicketData{Key: "TEST-1", Summary: "Test"},
+				Artifacts: ArtifactData{
+					Plan:      "plan content",
+					Implement: "impl content",
+					Verify:    "verify content",
+				},
+				WorktreePath: "/tmp/test",
+				Branch:       "test-branch",
+			}
+
+			// VerifyClean=false → gated section should appear.
+			dataFalse := baseData
+			dataFalse.VerifyClean = false
+			rendered, err := RenderPrompt(tmpl, dataFalse)
+			if err != nil {
+				t.Fatalf("RenderPrompt(VerifyClean=false): %v", err)
+			}
+			if !strings.Contains(rendered, tc.gatedPhrase) {
+				t.Errorf("VerifyClean=false: expected %q section to be present", tc.gatedPhrase)
+			}
+
+			// VerifyClean=true → gated section should be absent.
+			dataTrue := baseData
+			dataTrue.VerifyClean = true
+			rendered, err = RenderPrompt(tmpl, dataTrue)
+			if err != nil {
+				t.Fatalf("RenderPrompt(VerifyClean=true): %v", err)
+			}
+			if strings.Contains(rendered, tc.gatedPhrase) {
+				t.Errorf("VerifyClean=true: expected %q section to be absent", tc.gatedPhrase)
+			}
+		})
+	}
 }
 
 // Ensure buildPromptData is callable (basic smoke test to prevent import cycle issues).
