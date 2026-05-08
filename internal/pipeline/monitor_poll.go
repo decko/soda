@@ -761,7 +761,7 @@ func (e *Engine) respondToComments(ctx context.Context, phase PhaseConfig, class
 	})
 
 	// Build prompt data from phase dependencies.
-	promptData, err := e.buildPromptData(phase)
+	promptData, err := e.buildPromptData(ctx, phase)
 	if err != nil {
 		return nil, fmt.Errorf("engine: build prompt data for monitor response: %w", err)
 	}

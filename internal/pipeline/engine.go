@@ -31,45 +31,46 @@ const DefaultMaxReworkCycles = 2
 
 // EngineConfig holds everything needed to construct an Engine.
 type EngineConfig struct {
-	Pipeline               *PhasePipeline
-	Loader                 *PromptLoader
-	Ticket                 TicketData
-	PromptConfig           PromptConfigData
-	PromptContext          ContextData
-	DetectedStack          DetectedStackData // auto-detected project stack info; zero value if detection was skipped
-	Model                  string
-	PipelineName           string // pipeline config name (e.g. "fast"); empty means "default"
-	BinaryVersion          string // binary build identifier; recorded in meta on first run, checked for staleness on resume
-	WorkDir                string
-	WorktreeBase           string
-	BaseBranch             string
-	MaxCostUSD             float64
-	MaxCostPerPhase        float64       // per-phase cost cap; 0 means no per-phase limit
-	MaxCostPerGeneration   float64       // per-generation cost cap (ps.Cost); 0 means no per-generation limit
-	MaxPipelineDuration    time.Duration // max wall-clock time for the entire pipeline; 0 means no limit
-	MaxReworkCycles        int           // max review→implement rework loops; 0 means use default (2)
-	MaxDiffBytes           int           // max bytes of git diff injected into rework prompts; 0 means use default (50000)
-	MaxAPIConcurrency      int           // max concurrent runner.Run calls; 0 means unlimited
-	MaxSiblingContextBytes int           // max bytes of sibling-function context injected into implement prompts; 0 means use default (20000)
-	Mode                   Mode
-	OnEvent                func(Event)
-	PauseSignal            <-chan bool // receives true=pause, false=resume from TUI; nil disables
-	SleepFunc              func(time.Duration)
-	JitterFunc             func(max time.Duration) time.Duration
-	PRPoller               PRPoller          // for monitor phase polling; nil disables monitor
-	NowFunc                func() time.Time  // for testability; defaults to time.Now
-	AuthorityResolver      AuthorityResolver // for comment authority checks; nil → all authoritative
-	MonitorProfile         *MonitorProfile   // behavioral profile; nil → use polling config as-is
-	SelfUser               string            // PR author username for self-comment filtering
-	BotUsers               []string          // known bot usernames to filter
-	Stderr                 io.Writer         // destination for warning messages; defaults to os.Stderr
-	TokenBudget            TokenBudgetConfig // prompt token budget estimation; zero value disables checks
-	ContextBudget          int               // global default context budget in tokens; 0 disables adaptive fitting
-	Notify                 NotifyConfig      // notification hooks fired on pipeline completion; zero value disables
-	ApiKeyHelper           string            // path to script that prints an API key; wired into runner.RunOpts
-	MergeMethod            string            // merge method: "merge", "squash", "rebase"; defaults to "squash"
-	MergeLabels            []string          // required PR labels before auto-merge proceeds
-	AutoMergeTimeout       time.Duration     // max wait after approval before giving up; defaults to 30m
+	Pipeline                *PhasePipeline
+	Loader                  *PromptLoader
+	Ticket                  TicketData
+	PromptConfig            PromptConfigData
+	PromptContext           ContextData
+	DetectedStack           DetectedStackData // auto-detected project stack info; zero value if detection was skipped
+	Model                   string
+	PipelineName            string // pipeline config name (e.g. "fast"); empty means "default"
+	BinaryVersion           string // binary build identifier; recorded in meta on first run, checked for staleness on resume
+	WorkDir                 string
+	WorktreeBase            string
+	BaseBranch              string
+	MaxCostUSD              float64
+	MaxCostPerPhase         float64       // per-phase cost cap; 0 means no per-phase limit
+	MaxCostPerGeneration    float64       // per-generation cost cap (ps.Cost); 0 means no per-generation limit
+	MaxPipelineDuration     time.Duration // max wall-clock time for the entire pipeline; 0 means no limit
+	MaxReworkCycles         int           // max review→implement rework loops; 0 means use default (2)
+	MaxDiffBytes            int           // max bytes of git diff injected into rework prompts; 0 means use default (50000)
+	MaxAPIConcurrency       int           // max concurrent runner.Run calls; 0 means unlimited
+	MaxSiblingContextBytes  int           // max bytes of sibling-function context injected into implement prompts; 0 means use default (20000)
+	MaxPackageExemplarBytes int           // max bytes of package-exemplar context injected into prompts for new-file creation; 0 means use default (5000)
+	Mode                    Mode
+	OnEvent                 func(Event)
+	PauseSignal             <-chan bool // receives true=pause, false=resume from TUI; nil disables
+	SleepFunc               func(time.Duration)
+	JitterFunc              func(max time.Duration) time.Duration
+	PRPoller                PRPoller          // for monitor phase polling; nil disables monitor
+	NowFunc                 func() time.Time  // for testability; defaults to time.Now
+	AuthorityResolver       AuthorityResolver // for comment authority checks; nil → all authoritative
+	MonitorProfile          *MonitorProfile   // behavioral profile; nil → use polling config as-is
+	SelfUser                string            // PR author username for self-comment filtering
+	BotUsers                []string          // known bot usernames to filter
+	Stderr                  io.Writer         // destination for warning messages; defaults to os.Stderr
+	TokenBudget             TokenBudgetConfig // prompt token budget estimation; zero value disables checks
+	ContextBudget           int               // global default context budget in tokens; 0 disables adaptive fitting
+	Notify                  NotifyConfig      // notification hooks fired on pipeline completion; zero value disables
+	ApiKeyHelper            string            // path to script that prints an API key; wired into runner.RunOpts
+	MergeMethod             string            // merge method: "merge", "squash", "rebase"; defaults to "squash"
+	MergeLabels             []string          // required PR labels before auto-merge proceeds
+	AutoMergeTimeout        time.Duration     // max wait after approval before giving up; defaults to 30m
 }
 
 // TokenBudgetConfig configures the prompt-size estimation check.
@@ -562,7 +563,7 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 	e.emit(Event{Phase: phase.Name, Kind: EventPhaseStarted, Data: map[string]any{"generation": e.state.Meta().Phases[phase.Name].Generation}})
 
 	// Build prompt data and render template.
-	promptData, err := e.buildPromptData(phase)
+	promptData, err := e.buildPromptData(ctx, phase)
 	if err != nil {
 		_ = e.state.MarkFailed(phase.Name, err)
 		e.emitPhaseFailed(phase.Name, err)

@@ -1,12 +1,14 @@
 package pipeline
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -19,6 +21,10 @@ import (
 // reference many large source files from inflating the prompt beyond
 // the model's context window.
 const maxSiblingContextBytes = 20000
+
+// maxPackageExemplarBytes limits the total size of the package-exemplar
+// context string injected into prompts for new-file creation.
+const maxPackageExemplarBytes = 5000
 
 // ExtractPlanFiles parses a plan result JSON and returns a deduplicated,
 // sorted list of file paths referenced across all tasks.
@@ -121,6 +127,13 @@ func formatFuncSignature(fn *ast.FuncDecl) string {
 
 	b.WriteString(fn.Name.Name)
 
+	// Type parameters (generics).
+	if fn.Type.TypeParams != nil && len(fn.Type.TypeParams.List) > 0 {
+		b.WriteByte('[')
+		b.WriteString(fieldListString(fn.Type.TypeParams))
+		b.WriteByte(']')
+	}
+
 	// Parameters.
 	b.WriteByte('(')
 	b.WriteString(fieldListString(fn.Type.Params))
@@ -210,6 +223,14 @@ func exprString(expr ast.Expr) string {
 		return "..." + exprString(e.Elt)
 	case *ast.ParenExpr:
 		return "(" + exprString(e.X) + ")"
+	case *ast.IndexExpr:
+		return exprString(e.X) + "[" + exprString(e.Index) + "]"
+	case *ast.IndexListExpr:
+		parts := make([]string, len(e.Indices))
+		for i, idx := range e.Indices {
+			parts[i] = exprString(idx)
+		}
+		return exprString(e.X) + "[" + strings.Join(parts, ", ") + "]"
 	default:
 		return "?"
 	}
@@ -294,11 +315,11 @@ func BuildSiblingContext(workDir string, planResult json.RawMessage, maxBytes in
 	totalBytes := 0
 	for _, relPath := range files {
 		absPath := filepath.Join(workDir, relPath)
-		absResolved, err := filepath.Abs(absPath)
+		absResolved, err := filepath.EvalSymlinks(absPath)
 		if err != nil {
 			continue
 		}
-		workDirResolved, err := filepath.Abs(workDir)
+		workDirResolved, err := filepath.EvalSymlinks(workDir)
 		if err != nil {
 			continue
 		}
@@ -393,4 +414,176 @@ func formatSignaturesSection(relPath string, sigs []string) string {
 		b.WriteString("`\n")
 	}
 	return b.String()
+}
+
+// isNewFile returns true if the given file (relative to workDir) does not
+// exist on the baseBranch in git. This is used to detect files that the
+// plan intends to create rather than modify.
+func isNewFile(ctx context.Context, workDir, file, baseBranch string) bool {
+	cmd := exec.CommandContext(ctx, "git", "show", baseBranch+":"+file)
+	cmd.Dir = workDir
+	if err := cmd.Run(); err != nil {
+		return true
+	}
+	return false
+}
+
+// isGeneratedGoFile reads the first 512 bytes of a Go file and returns
+// true if it contains the standard "// Code generated" marker.
+func isGeneratedGoFile(absPath string) bool {
+	f, err := os.Open(absPath)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+
+	buf := make([]byte, 512)
+	n, _ := f.Read(buf)
+	if n == 0 {
+		return false
+	}
+	return strings.Contains(string(buf[:n]), "// Code generated")
+}
+
+// findExemplarFiles returns up to maxFiles non-test, non-generated Go source
+// files from the given directory, sorted by modification time (newest first).
+func findExemplarFiles(absDir string, maxFiles int) []string {
+	entries, err := os.ReadDir(absDir)
+	if err != nil {
+		return nil
+	}
+
+	type fileEntry struct {
+		path  string
+		mtime int64
+	}
+
+	var candidates []fileEntry
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".go") {
+			continue
+		}
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		absPath := filepath.Join(absDir, name)
+		if isGeneratedGoFile(absPath) {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		candidates = append(candidates, fileEntry{path: absPath, mtime: info.ModTime().UnixNano()})
+	}
+
+	// Sort by modification time descending (newest first).
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].mtime > candidates[j].mtime
+	})
+
+	if len(candidates) > maxFiles {
+		candidates = candidates[:maxFiles]
+	}
+
+	result := make([]string, len(candidates))
+	for i, c := range candidates {
+		result[i] = c.path
+	}
+	return result
+}
+
+// BuildPackageExemplars parses the plan result, identifies new files (not on
+// baseBranch), finds existing Go files in the same package directories, and
+// extracts function signatures to give the LLM guidance on naming conventions
+// and API surface. maxBytes limits the total output size; when 0 the default
+// maxPackageExemplarBytes is used. The context is threaded to isNewFile's git
+// subprocess so cancellation (e.g. cost cap, timeout) stops spawned processes.
+func BuildPackageExemplars(ctx context.Context, workDir string, planResult json.RawMessage, baseBranch string, maxBytes int) string {
+	if maxBytes <= 0 {
+		maxBytes = maxPackageExemplarBytes
+	}
+
+	files, err := ExtractPlanFiles(planResult)
+	if err != nil || len(files) == 0 {
+		return ""
+	}
+
+	// Collect unique package directories for new files only.
+	seen := make(map[string]bool)
+	var pkgDirs []string
+	for _, relPath := range files {
+		if !isNewFile(ctx, workDir, relPath, baseBranch) {
+			continue
+		}
+		dir := filepath.Dir(relPath)
+		if seen[dir] {
+			continue
+		}
+		seen[dir] = true
+		pkgDirs = append(pkgDirs, dir)
+	}
+
+	if len(pkgDirs) == 0 {
+		return ""
+	}
+
+	var sections []string
+	totalBytes := 0
+
+	for _, pkgDir := range pkgDirs {
+		absDir := filepath.Join(workDir, pkgDir)
+
+		// Validate path stays within workDir using EvalSymlinks.
+		absResolved, err := filepath.EvalSymlinks(absDir)
+		if err != nil {
+			continue
+		}
+		workDirResolved, err := filepath.EvalSymlinks(workDir)
+		if err != nil {
+			continue
+		}
+		if !strings.HasPrefix(absResolved, workDirResolved+string(filepath.Separator)) && absResolved != workDirResolved {
+			continue
+		}
+
+		exemplars := findExemplarFiles(absDir, 5)
+		if len(exemplars) == 0 {
+			continue
+		}
+
+		for _, absPath := range exemplars {
+			sigs, sigErr := ExtractGoSignatures(absPath)
+			if sigErr != nil || len(sigs) == 0 {
+				continue
+			}
+
+			// Build relative path for display.
+			relPath, err := filepath.Rel(workDir, absPath)
+			if err != nil {
+				relPath = absPath
+			}
+
+			section := formatSignaturesSection(relPath, sigs)
+
+			sepCost := 0
+			if len(sections) > 0 {
+				sepCost = 1
+			}
+			if totalBytes+sepCost+len(section) > maxBytes {
+				return strings.Join(sections, "\n")
+			}
+			totalBytes += sepCost + len(section)
+			sections = append(sections, section)
+		}
+	}
+
+	if len(sections) == 0 {
+		return ""
+	}
+	return strings.Join(sections, "\n")
 }

@@ -15,7 +15,9 @@ import (
 const defaultMaxDiffBytes = 50000
 
 // buildPromptData constructs the PromptData for a phase from its dependencies.
-func (e *Engine) buildPromptData(phase PhaseConfig) (PromptData, error) {
+// The context is threaded to subprocess-spawning helpers (e.g. BuildPackageExemplars)
+// so that cancellation (cost cap, timeout, Ctrl-C) propagates to child processes.
+func (e *Engine) buildPromptData(ctx context.Context, phase PhaseConfig) (PromptData, error) {
 	data := PromptData{
 		Ticket:        e.config.Ticket,
 		Config:        e.config.PromptConfig,
@@ -64,6 +66,18 @@ func (e *Engine) buildPromptData(phase PhaseConfig) (PromptData, error) {
 	if data.Artifacts.Plan != "" {
 		if planResult, err := e.state.ReadResult("plan"); err == nil {
 			data.SiblingContext = BuildSiblingContext(e.workDir(phase), planResult, e.config.MaxSiblingContextBytes)
+
+			// Inject package-exemplar context for new-file creation.
+			// This finds existing Go files in the same packages as new
+			// files and extracts their signatures so the LLM can follow
+			// the established naming conventions and API patterns.
+			baseBranch := e.config.BaseBranch
+			if baseBranch == "" {
+				baseBranch = "main"
+			}
+			data.PackageExemplars = BuildPackageExemplars(
+				ctx, e.workDir(phase), planResult, baseBranch, e.config.MaxPackageExemplarBytes,
+			)
 		}
 	}
 

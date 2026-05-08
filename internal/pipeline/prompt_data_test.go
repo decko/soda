@@ -42,7 +42,7 @@ func TestBuildPromptData_VerifyClean(t *testing.T) {
 		}
 
 		phase := PhaseConfig{Name: "review", DependsOn: []string{"verify"}}
-		data, err := engine.buildPromptData(phase)
+		data, err := engine.buildPromptData(context.Background(), phase)
 		if err != nil {
 			t.Fatalf("buildPromptData: %v", err)
 		}
@@ -81,7 +81,7 @@ func TestBuildPromptData_VerifyClean(t *testing.T) {
 		}
 
 		phase := PhaseConfig{Name: "review", DependsOn: []string{"verify"}}
-		data, err := engine.buildPromptData(phase)
+		data, err := engine.buildPromptData(context.Background(), phase)
 		if err != nil {
 			t.Fatalf("buildPromptData: %v", err)
 		}
@@ -114,7 +114,7 @@ func TestBuildPromptData_VerifyClean(t *testing.T) {
 		engine, _ := setupEngine(t, phases, mock)
 
 		phase := PhaseConfig{Name: "review", DependsOn: []string{}}
-		data, err := engine.buildPromptData(phase)
+		data, err := engine.buildPromptData(context.Background(), phase)
 		if err != nil {
 			t.Fatalf("buildPromptData: %v", err)
 		}
@@ -213,7 +213,7 @@ func TestBuildPromptData_Smoke(t *testing.T) {
 	engine, _ := setupEngine(t, phases, mock)
 
 	phase := PhaseConfig{Name: "triage", DependsOn: []string{}}
-	data, err := engine.buildPromptData(phase)
+	data, err := engine.buildPromptData(context.Background(), phase)
 	if err != nil {
 		t.Fatalf("buildPromptData: %v", err)
 	}
