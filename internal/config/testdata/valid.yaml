@@ -51,6 +51,10 @@ phase_context:
     - docs/gotchas.md
   implement:
     - docs/gotchas.md
+convention_checklist: |
+  - Use table-driven tests with t.Run sub-tests
+  - All errors must be wrapped with fmt.Errorf("pkg: ...: %w", err)
+  - No exported function without a doc comment
 repos:
   - name: my-service
     forge: github
