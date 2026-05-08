@@ -38,13 +38,17 @@ type reductionStep struct {
 // given phase name. Protected fields (ticket description, acceptance
 // criteria, plan artifact) are never included.
 //
-// The order is phase-specific:
-//   - implement: siblings → context → extras → review comments → diff
-//   - review:    siblings → extras → diff → context
-//   - verify:    siblings → extras → context → diff
-//   - patch:     diff → siblings → extras → context
+// Context is split into two steps: projectContext (ProjectContext+Gotchas,
+// shed early) and conventions (RepoConventions, shed last). This keeps
+// the compact, high-value convention checklist available as long as possible.
 //
-// For unknown phases a sensible default order is used.
+// The order is phase-specific:
+//   - implement: siblings → projectContext → extras → review comments → diff → (rework) → (artifacts) → conventions
+//   - review:    siblings → extras → diff → projectContext → (rework) → (artifacts) → conventions
+//   - verify:    siblings → extras → projectContext → diff → (rework) → (artifacts) → conventions
+//   - patch:     diff → siblings → extras → projectContext → (rework) → (artifacts) → conventions
+//
+// For unknown phases a sensible default order is used (conventions always last).
 func phaseReductionOrder(phase string) []reductionStep {
 	// Common steps used across multiple phases.
 	siblingStep := reductionStep{
