@@ -501,7 +501,7 @@ func TestEngine_phaseCondition_FullPipeline(t *testing.T) {
 			Name:      "plan",
 			Prompt:    "plan.md",
 			DependsOn: []string{"triage"},
-			Condition: `{{ ne .Complexity "small" }}`,
+			Condition: `{{ ne .Complexity "low" }}`,
 			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
 		},
 		{Name: "implement", Prompt: "implement.md", DependsOn: []string{"plan"}, Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1}},
@@ -511,7 +511,7 @@ func TestEngine_phaseCondition_FullPipeline(t *testing.T) {
 		responses: map[string][]flexResponse{
 			"triage": {{
 				result: &runner.RunResult{
-					Output:  json.RawMessage(`{"complexity":"small","automatable":true}`),
+					Output:  json.RawMessage(`{"complexity":"low","automatable":"yes"}`),
 					RawText: "triage result",
 					CostUSD: 0.01,
 				},
