@@ -1,0 +1,8 @@
+{"type":"system","subtype":"init","session_id":"abc123","tools":["Read","Write","Edit","Bash"],"mcp_servers":[]}
+{"type":"assistant","message":{"id":"msg_001","type":"message","role":"assistant","content":[{"type":"text","text":"I'll start by reading the relevant files."}],"model":"claude-sonnet-4-20250514","stop_reason":"tool_use","usage":{"input_tokens":100,"output_tokens":20}}}
+{"type":"assistant","message":{"id":"msg_002","type":"message","role":"assistant","content":[{"type":"tool_use","id":"tu_001","name":"Read","input":{"file_path":"src/main.go"}}],"model":"claude-sonnet-4-20250514","stop_reason":"tool_use","usage":{"input_tokens":100,"output_tokens":30}}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_001","content":"package main\nfunc main() {}"}]}}
+{"type":"assistant","message":{"id":"msg_003","type":"message","role":"assistant","content":[{"type":"tool_use","id":"tu_002","name":"Bash","input":{"command":"go test ./..."}}],"model":"claude-sonnet-4-20250514","stop_reason":"tool_use","usage":{"input_tokens":200,"output_tokens":40}}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_002","content":"PASS\nok  \tpkg\t0.5s"}]}}
+{"type":"assistant","message":{"id":"msg_004","type":"message","role":"assistant","content":[{"type":"text","text":"All tests pass. Implementation complete."}],"model":"claude-sonnet-4-20250514","stop_reason":"end_turn","usage":{"input_tokens":300,"output_tokens":50}}}
+{"type":"result","subtype":"success","result":"Done.","structured_output":{"key":"value"},"total_cost_usd":0.05,"usage":{"input_tokens":700,"output_tokens":140},"num_turns":3,"duration_ms":5000}
