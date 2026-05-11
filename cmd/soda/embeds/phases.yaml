@@ -7,7 +7,7 @@ phases:
   - name: triage
     prompt: prompts/triage.md
     schema: |
-      {"type":"object","properties":{"ticket_key":{"type":"string"},"repo":{"type":"string"},"code_area":{"type":"string"},"files":{"type":"array","items":{"type":"string"}},"complexity":{"type":"string"},"approach":{"type":"string"},"risks":{"type":"array","items":{"type":"string"}},"automatable":{"type":"boolean"},"block_reason":{"type":"string"},"skip_plan":{"type":"boolean","default":false}},"required":["ticket_key","repo","code_area","files","complexity","approach","risks","automatable"]}
+      {"type":"object","properties":{"ticket_key":{"type":"string"},"repo":{"type":"string"},"code_area":{"type":"string"},"files":{"type":"array","items":{"type":"string"}},"complexity":{"type":"string","enum":["low","medium","high"]},"approach":{"type":"string"},"risks":{"type":"array","items":{"type":"string"}},"automatable":{"type":"string","enum":["yes","no","partial"]},"block_reason":{"type":"string"},"skip_plan":{"type":"boolean","default":false}},"required":["ticket_key","repo","code_area","files","complexity","approach","risks","automatable"]}
     tools:
       - Read
       - Glob
