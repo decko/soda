@@ -930,7 +930,6 @@ func TestLoadPipeline_TimeoutOverrides(t *testing.T) {
     timeout_overrides:
       - condition: '{{ eq .Complexity "high" }}'
         timeout: 45m
-        label: high-complexity
       - condition: '{{ eq .Complexity "low" }}'
         timeout: 10m
 `
@@ -955,19 +954,13 @@ func TestLoadPipeline_TimeoutOverrides(t *testing.T) {
 		if phase.TimeoutOverrides[0].Timeout.Duration != 45*time.Minute {
 			t.Errorf("override[0].Timeout = %v, want 45m", phase.TimeoutOverrides[0].Timeout.Duration)
 		}
-		if phase.TimeoutOverrides[0].Label != "high-complexity" {
-			t.Errorf("override[0].Label = %q, want %q", phase.TimeoutOverrides[0].Label, "high-complexity")
-		}
 
-		// Second override (no label)
+		// Second override
 		if phase.TimeoutOverrides[1].Condition != `{{ eq .Complexity "low" }}` {
 			t.Errorf("override[1].Condition = %q", phase.TimeoutOverrides[1].Condition)
 		}
 		if phase.TimeoutOverrides[1].Timeout.Duration != 10*time.Minute {
 			t.Errorf("override[1].Timeout = %v, want 10m", phase.TimeoutOverrides[1].Timeout.Duration)
-		}
-		if phase.TimeoutOverrides[1].Label != "" {
-			t.Errorf("override[1].Label = %q, want empty", phase.TimeoutOverrides[1].Label)
 		}
 	})
 
