@@ -426,15 +426,15 @@ func TestEngine_readPhaseConditionData(t *testing.T) {
 
 	engine, state := setupEngine(t, phases, &flexMockRunner{})
 	_ = state.MarkRunning("triage")
-	_ = state.WriteResult("triage", json.RawMessage(`{"complexity":"large","automatable":true}`))
+	_ = state.WriteResult("triage", json.RawMessage(`{"complexity":"high","automatable":"yes"}`))
 	state.Meta().ReworkCycles = 2
 
 	data := engine.readPhaseConditionData()
-	if data.Complexity != "large" {
-		t.Errorf("Complexity = %q, want %q", data.Complexity, "large")
+	if data.Complexity != "high" {
+		t.Errorf("Complexity = %q, want %q", data.Complexity, "high")
 	}
-	if !data.Automatable {
-		t.Error("Automatable = false, want true")
+	if data.Automatable != "yes" {
+		t.Errorf("Automatable = %q, want %q", data.Automatable, "yes")
 	}
 	if data.ReworkCycle != 2 {
 		t.Errorf("ReworkCycle = %d, want 2", data.ReworkCycle)

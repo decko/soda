@@ -173,8 +173,8 @@ func (e *Engine) skipPlanFromTriage() error {
 // templates. It mirrors reviewerConditionData but adds Automatable for
 // triage-driven phase gating.
 type phaseConditionData struct {
-	Complexity  string // "small", "medium", "large" from triage
-	Automatable bool   // from triage result
+	Complexity  string // "low", "medium", "high" from triage
+	Automatable string // "yes", "no", "partial" from triage
 	ReworkCycle int    // current rework cycle count from pipeline meta
 }
 
@@ -192,7 +192,7 @@ func (e *Engine) readPhaseConditionData() phaseConditionData {
 	}
 	var triage struct {
 		Complexity  string `json:"complexity"`
-		Automatable bool   `json:"automatable"`
+		Automatable string `json:"automatable"`
 	}
 	if err := json.Unmarshal(raw, &triage); err == nil {
 		data.Complexity = triage.Complexity
