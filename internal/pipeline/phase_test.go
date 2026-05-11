@@ -527,6 +527,53 @@ func TestLoadPipeline(t *testing.T) {
 		}
 	})
 
+	t.Run("valid_phase_condition", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "phases.yaml")
+		content := `phases:
+  - name: plan
+    prompt: prompts/plan.md
+    timeout: 5m
+    condition: '{{ ne .Complexity "small" }}'
+`
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		pipeline, err := LoadPipeline(path)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if pipeline.Phases[0].Condition != `{{ ne .Complexity "small" }}` {
+			t.Errorf("condition = %q, want template string", pipeline.Phases[0].Condition)
+		}
+	})
+
+	t.Run("errors_on_invalid_phase_condition", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "phases.yaml")
+		content := `phases:
+  - name: plan
+    prompt: prompts/plan.md
+    timeout: 5m
+    condition: '{{ invalid {{ syntax }}'
+`
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		_, err := LoadPipeline(path)
+		if err == nil {
+			t.Fatal("expected error for invalid phase condition template")
+		}
+		if !strings.Contains(err.Error(), "invalid condition template") {
+			t.Errorf("error = %q, want mention of invalid condition template", err)
+		}
+		if !strings.Contains(err.Error(), "plan") {
+			t.Errorf("error = %q, want mention of phase name", err)
+		}
+	})
+
 	t.Run("errors_on_invalid_reviewer_condition", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "phases.yaml")
