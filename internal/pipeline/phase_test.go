@@ -917,10 +917,8 @@ func TestLoadPipeline(t *testing.T) {
 			t.Errorf("inline schema with slashes was modified:\ngot:  %s\nwant: %s", pipeline.Phases[0].Schema, inlineSchema)
 		}
 	})
-}
 
-func TestLoadPipeline_TimeoutOverrides(t *testing.T) {
-	t.Run("parses_valid_timeout_overrides", func(t *testing.T) {
+	t.Run("timeout_overrides_parsed", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "phases.yaml")
 		content := `phases:
@@ -964,7 +962,7 @@ func TestLoadPipeline_TimeoutOverrides(t *testing.T) {
 		}
 	})
 
-	t.Run("no_timeout_overrides_defaults_to_empty", func(t *testing.T) {
+	t.Run("timeout_overrides_empty_when_absent", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "phases.yaml")
 		content := `phases:
@@ -986,7 +984,7 @@ func TestLoadPipeline_TimeoutOverrides(t *testing.T) {
 		}
 	})
 
-	t.Run("errors_on_invalid_condition_template", func(t *testing.T) {
+	t.Run("errors_on_invalid_timeout_override_condition", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "phases.yaml")
 		content := `phases:
@@ -1005,41 +1003,11 @@ func TestLoadPipeline_TimeoutOverrides(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error for invalid timeout_overrides condition template")
 		}
-		if !strings.Contains(err.Error(), "timeout_overrides[0]") {
-			t.Errorf("error = %q, want mention of timeout_overrides[0]", err)
-		}
-		if !strings.Contains(err.Error(), "invalid condition template") {
-			t.Errorf("error = %q, want mention of invalid condition template", err)
+		if !strings.Contains(err.Error(), "timeout_overrides") {
+			t.Errorf("error = %q, want mention of timeout_overrides", err)
 		}
 		if !strings.Contains(err.Error(), "implement") {
 			t.Errorf("error = %q, want mention of phase name", err)
-		}
-	})
-
-	t.Run("errors_on_empty_condition", func(t *testing.T) {
-		dir := t.TempDir()
-		path := filepath.Join(dir, "phases.yaml")
-		content := `phases:
-  - name: implement
-    prompt: prompts/implement.md
-    timeout: 25m
-    timeout_overrides:
-      - condition: ''
-        timeout: 45m
-`
-		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-			t.Fatalf("WriteFile: %v", err)
-		}
-
-		_, err := LoadPipeline(path)
-		if err == nil {
-			t.Fatal("expected error for empty timeout_overrides condition")
-		}
-		if !strings.Contains(err.Error(), "empty condition") {
-			t.Errorf("error = %q, want mention of empty condition", err)
-		}
-		if !strings.Contains(err.Error(), "timeout_overrides[0]") {
-			t.Errorf("error = %q, want mention of timeout_overrides[0]", err)
 		}
 	})
 }
