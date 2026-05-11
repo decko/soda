@@ -216,8 +216,9 @@ func (e *Engine) runParallelReview(ctx context.Context, phase PhaseConfig) error
 		return fmt.Errorf("engine: build prompt data for %s: %w", phase.Name, err)
 	}
 
-	// Resolve timeout before launching goroutines — avoid concurrent Meta() reads.
+	// Resolve timeout and model before launching goroutines — avoid concurrent Meta() reads.
 	resolvedTimeout := e.resolvePhaseTimeout(phase)
+	resolvedModel := e.resolvePhaseModel(phase)
 
 	// Snapshot budget before launching goroutines — avoid concurrent Meta() reads.
 	budgetRemaining := 0.0
@@ -312,7 +313,7 @@ func (e *Engine) runParallelReview(ctx context.Context, phase PhaseConfig) error
 		wg.Add(1)
 		go func(idx int, reviewer ReviewerConfig) {
 			defer wg.Done()
-			e.runReviewer(ctx, phase, reviewer, promptData, budgetRemaining, resolvedTimeout, idx, msgCh)
+			e.runReviewer(ctx, phase, reviewer, promptData, budgetRemaining, resolvedTimeout, resolvedModel, idx, msgCh)
 		}(idx, reviewer)
 	}
 
@@ -485,7 +486,7 @@ func (e *Engine) runParallelReview(ctx context.Context, phase PhaseConfig) error
 // runReviewer executes a single specialist reviewer, sending events and results
 // through msgCh to avoid concurrent State access. budgetRemaining and timeout
 // are snapshots taken before goroutines launch.
-func (e *Engine) runReviewer(ctx context.Context, phase PhaseConfig, reviewer ReviewerConfig, promptData PromptData, budgetRemaining float64, timeout time.Duration, idx int, msgCh chan<- reviewerMsg) {
+func (e *Engine) runReviewer(ctx context.Context, phase PhaseConfig, reviewer ReviewerConfig, promptData PromptData, budgetRemaining float64, timeout time.Duration, resolvedModel string, idx int, msgCh chan<- reviewerMsg) {
 	sendEvent := func(evt Event) {
 		msgCh <- reviewerMsg{Event: &evt, Index: idx}
 	}
@@ -573,8 +574,9 @@ func (e *Engine) runReviewer(ctx context.Context, phase PhaseConfig, reviewer Re
 	}
 
 	// Use the parent phase's schema for the reviewer findings.
-	// Prefer per-reviewer model if set, otherwise use the global model.
-	model := e.config.Model
+	// Prefer per-reviewer model if set, otherwise use the phase-resolved model
+	// (which already accounts for model_overrides → phase.Model → global fallback).
+	model := resolvedModel
 	if reviewer.Model != "" {
 		model = reviewer.Model
 	}
