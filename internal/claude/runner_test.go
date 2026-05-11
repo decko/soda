@@ -113,9 +113,15 @@ func TestStream_Success(t *testing.T) {
 	if result.Turns != 3 {
 		t.Errorf("Turns = %d, want 3", result.Turns)
 	}
-	// Should have streaming lines: "Thinking...", "Reading files...", and the JSON line
-	if len(chunks) < 3 {
-		t.Errorf("expected at least 3 chunks, got %d: %v", len(chunks), chunks)
+	// With stream-json, onChunk receives extracted display text from assistant messages.
+	// The mock outputs two assistant text messages ("Thinking..." and "Reading files...").
+	// System and result events produce no display text.
+	if len(chunks) < 2 {
+		t.Errorf("expected at least 2 chunks, got %d: %v", len(chunks), chunks)
+	}
+	// Verify display text extraction works — first chunk should be "Thinking..."
+	if len(chunks) > 0 && chunks[0] != "Thinking..." {
+		t.Errorf("chunks[0] = %q, want %q", chunks[0], "Thinking...")
 	}
 }
 

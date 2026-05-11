@@ -122,6 +122,22 @@ func TestParseResponse(t *testing.T) {
 			errType: "parse",
 		},
 		{
+			name:    "stream_json",
+			fixture: "testdata/stream_json_success.jsonl",
+			checkResult: func(t *testing.T, r *RunResult) {
+				t.Helper()
+				if r.Result != "Done." {
+					t.Errorf("Result = %q, want %q", r.Result, "Done.")
+				}
+				if r.CostUSD != 0.05 {
+					t.Errorf("CostUSD = %v, want 0.05", r.CostUSD)
+				}
+				if r.Turns != 3 {
+					t.Errorf("Turns = %d, want 3", r.Turns)
+				}
+			},
+		},
+		{
 			name:    "fake_envelope_in_tool_output",
 			fixture: "testdata/fake_envelope_in_tool_output.txt",
 			checkResult: func(t *testing.T, r *RunResult) {

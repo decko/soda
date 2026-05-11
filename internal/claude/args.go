@@ -24,7 +24,7 @@ func BuildArgs(opts RunOpts, model string) []string {
 	args := []string{
 		"--print",
 		"--bare",
-		"--output-format", "json",
+		"--output-format", "stream-json",
 		"--permission-mode", "bypassPermissions",
 	}
 

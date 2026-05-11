@@ -27,7 +27,7 @@ func TestBuildArgs(t *testing.T) {
 			contains: []string{
 				"--print",
 				"--bare",
-				"--output-format", "json",
+				"--output-format", "stream-json",
 				"--permission-mode", "bypassPermissions",
 				"--system-prompt-file", "/tmp/prompt.md",
 				"--json-schema", `{"type":"object"}`,
@@ -44,7 +44,7 @@ func TestBuildArgs(t *testing.T) {
 			contains: []string{
 				"--print",
 				"--bare",
-				"--output-format", "json",
+				"--output-format", "stream-json",
 				"--permission-mode", "bypassPermissions",
 			},
 			excludes: []string{
