@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"text/template"
+	"time"
 
 	"github.com/decko/soda/schemas"
 )
@@ -233,6 +234,7 @@ func evalPhaseCondition(condition string, data phaseConditionData) (bool, error)
 	}
 	return true, nil
 }
+
 
 // skipPhaseByCondition marks a phase as completed with an empty artifact
 // so downstream dependency checks and shouldSkip work correctly, then
