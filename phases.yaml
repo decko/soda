@@ -23,6 +23,10 @@ phases:
   - name: plan
     prompt: prompts/plan.md
     # schema: generated from schemas.PlanOutput (go generate ./schemas/...)
+    # condition: Go text/template evaluated at runtime; output "false" skips
+    # the phase. Available fields: .Complexity, .Automatable, .ReworkCycle.
+    # Example: skip plan for low-complexity tickets:
+    # condition: '{{ ne .Complexity "low" }}'
     tools:
       - Read
       - Glob

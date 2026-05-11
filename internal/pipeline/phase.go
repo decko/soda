@@ -48,6 +48,7 @@ type PhaseConfig struct {
 	Corrective      *CorrectiveConfig `yaml:"corrective,omitempty"`
 	FeedbackFrom    []string          `yaml:"feedback_from,omitempty"` // ordered feedback sources injected into prompt
 	ContextBudget   int               `yaml:"prompt_budget,omitempty"` // max prompt tokens for adaptive fitting; 0 uses global default
+	Condition       string            `yaml:"condition,omitempty"`     // Go text/template evaluated at runtime; output "false" skips the phase
 }
 
 // ReworkConfig configures rework routing for a phase. When a phase with
@@ -165,6 +166,11 @@ func LoadPipeline(path string) (*PhasePipeline, error) {
 				if _, err := template.New("condition").Parse(reviewer.Condition); err != nil {
 					return nil, fmt.Errorf("pipeline: phase %q reviewer %q has invalid condition template: %w", phase.Name, reviewer.Name, err)
 				}
+			}
+		}
+		if phase.Condition != "" {
+			if _, err := template.New("condition").Parse(phase.Condition); err != nil {
+				return nil, fmt.Errorf("pipeline: phase %q has invalid condition template: %w", phase.Name, err)
 			}
 		}
 		if phase.Corrective != nil {

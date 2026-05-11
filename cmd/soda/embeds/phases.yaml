@@ -7,7 +7,7 @@ phases:
   - name: triage
     prompt: prompts/triage.md
     schema: |
-      {"type":"object","properties":{"ticket_key":{"type":"string"},"repo":{"type":"string"},"code_area":{"type":"string"},"files":{"type":"array","items":{"type":"string"}},"complexity":{"type":"string"},"approach":{"type":"string"},"risks":{"type":"array","items":{"type":"string"}},"automatable":{"type":"boolean"},"block_reason":{"type":"string"},"skip_plan":{"type":"boolean","default":false}},"required":["ticket_key","repo","code_area","files","complexity","approach","risks","automatable"]}
+      {"type":"object","properties":{"ticket_key":{"type":"string"},"repo":{"type":"string"},"code_area":{"type":"string"},"files":{"type":"array","items":{"type":"string"}},"complexity":{"type":"string","enum":["low","medium","high"]},"approach":{"type":"string"},"risks":{"type":"array","items":{"type":"string"}},"automatable":{"type":"string","enum":["yes","no","partial"]},"block_reason":{"type":"string"},"skip_plan":{"type":"boolean","default":false}},"required":["ticket_key","repo","code_area","files","complexity","approach","risks","automatable"]}
     tools:
       - Read
       - Glob
@@ -23,6 +23,10 @@ phases:
 
   - name: plan
     prompt: prompts/plan.md
+    # condition: Go text/template evaluated at runtime; output "false" skips
+    # the phase. Available fields: .Complexity, .Automatable, .ReworkCycle.
+    # Example: skip plan for low-complexity tickets:
+    # condition: '{{ ne .Complexity "low" }}'
     schema: |
       {"type":"object","properties":{"ticket_key":{"type":"string"},"approach":{"type":"string"},"tasks":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"description":{"type":"string"},"files":{"type":"array","items":{"type":"string"}},"done_when":{"type":"string"},"depends_on":{"type":"array","items":{"type":"string"}}},"required":["id","description","files","done_when"]}},"verification":{"type":"object","properties":{"commands":{"type":"array","items":{"type":"string"}},"manual_steps":{"type":"array","items":{"type":"string"}}},"required":["commands"]},"deviations":{"type":"array","items":{"type":"string"}}},"required":["ticket_key","approach","tasks","verification"]}
     tools:

@@ -1,8 +1,11 @@
 package pipeline
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"strings"
+	"text/template"
 
 	"github.com/decko/soda/schemas"
 )
@@ -160,6 +163,113 @@ func (e *Engine) skipPlanFromTriage() error {
 		Data: map[string]any{
 			"duration_ms": e.state.Meta().Phases["plan"].DurationMs,
 			"cost":        e.state.Meta().Phases["plan"].Cost,
+		},
+	})
+
+	return nil
+}
+
+// phaseConditionData is the minimal context passed to phase condition
+// templates. It mirrors reviewerConditionData but adds Automatable for
+// triage-driven phase gating.
+type phaseConditionData struct {
+	Complexity  string // "low", "medium", "high" from triage
+	Automatable string // "yes", "no", "partial" from triage
+	ReworkCycle int    // current rework cycle count from pipeline meta
+}
+
+// readPhaseConditionData builds a phaseConditionData from pipeline state.
+// Triage fields are extracted from the triage result JSON; on read/parse
+// failure the fields are left at their zero values (conditions should
+// handle the defaults).
+func (e *Engine) readPhaseConditionData() phaseConditionData {
+	data := phaseConditionData{
+		ReworkCycle: e.state.Meta().ReworkCycles,
+	}
+	raw, err := e.state.ReadResult("triage")
+	if err != nil {
+		return data
+	}
+	// Unmarshal each field independently so that a type mismatch on one
+	// field (e.g. automatable is a JSON boolean in the embedded schema
+	// but a string in the generated schema) does not prevent the other
+	// field from being read.
+	var comp struct {
+		Complexity string `json:"complexity"`
+	}
+	if err := json.Unmarshal(raw, &comp); err == nil {
+		data.Complexity = comp.Complexity
+	}
+	var auto struct {
+		Automatable string `json:"automatable"`
+	}
+	if err := json.Unmarshal(raw, &auto); err == nil {
+		data.Automatable = auto.Automatable
+	}
+	return data
+}
+
+// evalPhaseCondition evaluates a phase's condition template against the
+// given data. Returns true if the phase should run. When the condition is
+// empty the phase always runs. The rendered output is trimmed and compared
+// case-insensitively to "false"; only an exact "false" skips the phase.
+// On template errors the function returns (true, err) so the caller can
+// fall back to running the phase (fail-safe).
+func evalPhaseCondition(condition string, data phaseConditionData) (bool, error) {
+	if condition == "" {
+		return true, nil
+	}
+	tmpl, err := template.New("condition").Parse(condition)
+	if err != nil {
+		return true, fmt.Errorf("parse condition: %w", err)
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return true, fmt.Errorf("execute condition: %w", err)
+	}
+	result := strings.TrimSpace(buf.String())
+	if strings.EqualFold(result, "false") {
+		return false, nil
+	}
+	return true, nil
+}
+
+// skipPhaseByCondition marks a phase as completed with an empty artifact
+// so downstream dependency checks and shouldSkip work correctly, then
+// emits condition-skipped and phase-completed events. The empty artifact
+// prevents ReadArtifact ErrNotExist errors on dependent phases.
+func (e *Engine) skipPhaseByCondition(phase PhaseConfig, reason string) error {
+	// Mark running so the PhaseState entry is created/archived.
+	if err := e.state.MarkRunning(phase.Name); err != nil {
+		return fmt.Errorf("engine: skip phase by condition: mark running %s: %w", phase.Name, err)
+	}
+	e.emit(Event{Phase: phase.Name, Kind: EventPhaseStarted, Data: map[string]any{"generation": e.state.Meta().Phases[phase.Name].Generation}})
+
+	// Write an empty artifact so downstream ReadArtifact calls don't get
+	// ErrNotExist and shouldSkip works correctly on resume.
+	if err := e.state.WriteArtifact(phase.Name, []byte{}); err != nil {
+		return fmt.Errorf("engine: skip phase by condition: write artifact %s: %w", phase.Name, err)
+	}
+
+	// Mark completed so downstream dependency checks pass.
+	if err := e.state.MarkCompleted(phase.Name); err != nil {
+		return fmt.Errorf("engine: skip phase by condition: mark completed %s: %w", phase.Name, err)
+	}
+
+	e.emit(Event{
+		Phase: phase.Name,
+		Kind:  EventPhaseConditionSkipped,
+		Data: map[string]any{
+			"reason": reason,
+		},
+	})
+
+	e.emit(Event{
+		Phase: phase.Name,
+		Kind:  EventPhaseCompleted,
+		Data: map[string]any{
+			"duration_ms": e.state.Meta().Phases[phase.Name].DurationMs,
+			"cost":        e.state.Meta().Phases[phase.Name].Cost,
 		},
 	})
 

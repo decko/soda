@@ -99,6 +99,7 @@ const (
 	EventRebaseConflict           = "rebase_conflict"
 	EventContextFitted            = "context_fitted"
 	EventConditionEvalFallback    = "condition_eval_fallback"
+	EventPhaseConditionSkipped    = "phase_condition_skipped"
 )
 
 // FormatEvent formats an event as a compact, human-readable line:
