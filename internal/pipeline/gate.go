@@ -190,13 +190,21 @@ func (e *Engine) readPhaseConditionData() phaseConditionData {
 	if err != nil {
 		return data
 	}
-	var triage struct {
-		Complexity  string `json:"complexity"`
+	// Unmarshal each field independently so that a type mismatch on one
+	// field (e.g. automatable is a JSON boolean in the embedded schema
+	// but a string in the generated schema) does not prevent the other
+	// field from being read.
+	var comp struct {
+		Complexity string `json:"complexity"`
+	}
+	if err := json.Unmarshal(raw, &comp); err == nil {
+		data.Complexity = comp.Complexity
+	}
+	var auto struct {
 		Automatable string `json:"automatable"`
 	}
-	if err := json.Unmarshal(raw, &triage); err == nil {
-		data.Complexity = triage.Complexity
-		data.Automatable = triage.Automatable
+	if err := json.Unmarshal(raw, &auto); err == nil {
+		data.Automatable = auto.Automatable
 	}
 	return data
 }

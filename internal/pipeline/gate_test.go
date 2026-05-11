@@ -441,6 +441,30 @@ func TestEngine_readPhaseConditionData(t *testing.T) {
 	}
 }
 
+func TestEngine_readPhaseConditionData_BooleanAutomatable(t *testing.T) {
+	// When the embedded schema produces automatable as a JSON boolean
+	// (e.g. true instead of "yes"), the Complexity field must still be
+	// populated. This guards against a single json.Unmarshal dropping
+	// both fields on a type mismatch for one of them.
+	phases := []PhaseConfig{
+		{Name: "triage", Prompt: "triage.md", Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1}},
+	}
+
+	engine, state := setupEngine(t, phases, &flexMockRunner{})
+	_ = state.MarkRunning("triage")
+	// automatable is a JSON boolean — this is what the embedded schema produces.
+	_ = state.WriteResult("triage", json.RawMessage(`{"complexity":"low","automatable":true}`))
+
+	data := engine.readPhaseConditionData()
+	if data.Complexity != "low" {
+		t.Errorf("Complexity = %q, want %q — boolean automatable must not prevent Complexity from being read", data.Complexity, "low")
+	}
+	// Automatable should be empty because the JSON boolean can't unmarshal into a string.
+	if data.Automatable != "" {
+		t.Errorf("Automatable = %q, want %q — JSON boolean should not unmarshal into string", data.Automatable, "")
+	}
+}
+
 func TestEngine_skipPhaseByCondition(t *testing.T) {
 	phases := []PhaseConfig{
 		{Name: "plan", Prompt: "plan.md", Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1}},
