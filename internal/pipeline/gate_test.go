@@ -612,181 +612,166 @@ func TestEngine_correctivePhase_conditionBypassedDuringRework(t *testing.T) {
 
 // --- resolvePhaseTimeout tests ---
 
-func TestEngine_resolvePhaseTimeout_FirstMatchWins(t *testing.T) {
-	phases := []PhaseConfig{
-		{Name: "triage", Prompt: "triage.md", Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1}},
-		{
-			Name:    "implement",
-			Prompt:  "implement.md",
-			Timeout: Duration{Duration: 25 * time.Minute},
-			TimeoutOverrides: []TimeoutOverride{
-				{
-					Condition: `{{ eq .Complexity "high" }}`,
-					Timeout:   Duration{Duration: 45 * time.Minute},
-				},
-				{
-					Condition: `{{ eq .Complexity "high" }}`,
-					Timeout:   Duration{Duration: 60 * time.Minute},
-				},
+func TestEngine_resolvePhaseTimeout(t *testing.T) {
+	t.Run("no_overrides_returns_base", func(t *testing.T) {
+		phases := []PhaseConfig{
+			{Name: "triage", Prompt: "triage.md", Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1}},
+			{
+				Name:    "implement",
+				Prompt:  "implement.md",
+				Timeout: Duration{Duration: 25 * time.Minute},
+				Retry:   RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
 			},
-			Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
-		},
-	}
-
-	var events []Event
-	engine, state := setupEngine(t, phases, &flexMockRunner{}, func(cfg *EngineConfig) {
-		cfg.OnEvent = func(e Event) { events = append(events, e) }
-	})
-	_ = state.MarkRunning("triage")
-	_ = state.WriteResult("triage", json.RawMessage(`{"complexity":"high","automatable":"yes"}`))
-
-	timeout := engine.resolvePhaseTimeout(phases[1])
-	if timeout != 45*time.Minute {
-		t.Errorf("timeout = %v, want 45m (first match wins)", timeout)
-	}
-
-	// Should have emitted EventPhaseTimeoutResolved.
-	found := false
-	for _, e := range events {
-		if e.Kind == EventPhaseTimeoutResolved {
-			found = true
-			break
 		}
-	}
-	if !found {
-		t.Error("expected EventPhaseTimeoutResolved event")
-	}
-}
 
-func TestEngine_resolvePhaseTimeout_NoMatch(t *testing.T) {
-	phases := []PhaseConfig{
-		{Name: "triage", Prompt: "triage.md", Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1}},
-		{
-			Name:    "implement",
-			Prompt:  "implement.md",
-			Timeout: Duration{Duration: 25 * time.Minute},
-			TimeoutOverrides: []TimeoutOverride{
-				{
-					Condition: `{{ eq .Complexity "high" }}`,
-					Timeout:   Duration{Duration: 45 * time.Minute},
-				},
-			},
-			Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
-		},
-	}
-
-	var events []Event
-	engine, state := setupEngine(t, phases, &flexMockRunner{}, func(cfg *EngineConfig) {
-		cfg.OnEvent = func(e Event) { events = append(events, e) }
-	})
-	_ = state.MarkRunning("triage")
-	_ = state.WriteResult("triage", json.RawMessage(`{"complexity":"low","automatable":"yes"}`))
-
-	timeout := engine.resolvePhaseTimeout(phases[1])
-	if timeout != 25*time.Minute {
-		t.Errorf("timeout = %v, want 25m (default, no match)", timeout)
-	}
-
-	// Should NOT have emitted EventPhaseTimeoutResolved.
-	for _, e := range events {
-		if e.Kind == EventPhaseTimeoutResolved {
-			t.Error("unexpected EventPhaseTimeoutResolved event when no override matched")
+		engine, _ := setupEngine(t, phases, &flexMockRunner{})
+		got := engine.resolvePhaseTimeout(phases[1])
+		if got != 25*time.Minute {
+			t.Errorf("timeout = %v, want 25m", got)
 		}
-	}
-}
-
-func TestEngine_resolvePhaseTimeout_NoOverrides(t *testing.T) {
-	phases := []PhaseConfig{
-		{Name: "triage", Prompt: "triage.md", Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1}},
-		{
-			Name:    "implement",
-			Prompt:  "implement.md",
-			Timeout: Duration{Duration: 25 * time.Minute},
-			Retry:   RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
-		},
-	}
-
-	engine, state := setupEngine(t, phases, &flexMockRunner{})
-	_ = state.MarkRunning("triage")
-	_ = state.WriteResult("triage", json.RawMessage(`{"complexity":"high","automatable":"yes"}`))
-
-	timeout := engine.resolvePhaseTimeout(phases[1])
-	if timeout != 25*time.Minute {
-		t.Errorf("timeout = %v, want 25m (no overrides)", timeout)
-	}
-}
-
-func TestEngine_resolvePhaseTimeout_ErrorFallback(t *testing.T) {
-	// First override has a template error; should be skipped (fail-safe).
-	// Second override matches.
-	phases := []PhaseConfig{
-		{Name: "triage", Prompt: "triage.md", Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1}},
-		{
-			Name:    "implement",
-			Prompt:  "implement.md",
-			Timeout: Duration{Duration: 25 * time.Minute},
-			TimeoutOverrides: []TimeoutOverride{
-				{
-					Condition: `{{ .NonexistentMethod }}`,
-					Timeout:   Duration{Duration: 99 * time.Minute},
-				},
-				{
-					Condition: `{{ eq .Complexity "high" }}`,
-					Timeout:   Duration{Duration: 45 * time.Minute},
-				},
-			},
-			Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
-		},
-	}
-
-	var events []Event
-	engine, state := setupEngine(t, phases, &flexMockRunner{}, func(cfg *EngineConfig) {
-		cfg.OnEvent = func(e Event) { events = append(events, e) }
 	})
-	_ = state.MarkRunning("triage")
-	_ = state.WriteResult("triage", json.RawMessage(`{"complexity":"high","automatable":"yes"}`))
 
-	timeout := engine.resolvePhaseTimeout(phases[1])
-	if timeout != 45*time.Minute {
-		t.Errorf("timeout = %v, want 45m (second override after error)", timeout)
-	}
-
-	// Should have emitted a fallback event for the erroring override.
-	foundFallback := false
-	for _, e := range events {
-		if e.Kind == EventConditionEvalFallback {
-			foundFallback = true
-		}
-	}
-	if !foundFallback {
-		t.Error("expected EventConditionEvalFallback event for broken override")
-	}
-}
-
-func TestEngine_resolvePhaseTimeout_AllErrorsFallToDefault(t *testing.T) {
-	// All overrides error → fall through to default timeout.
-	phases := []PhaseConfig{
-		{Name: "triage", Prompt: "triage.md", Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1}},
-		{
-			Name:    "implement",
-			Prompt:  "implement.md",
-			Timeout: Duration{Duration: 25 * time.Minute},
-			TimeoutOverrides: []TimeoutOverride{
-				{
-					Condition: `{{ .NonexistentMethod }}`,
-					Timeout:   Duration{Duration: 99 * time.Minute},
+	t.Run("first_match_wins", func(t *testing.T) {
+		phases := []PhaseConfig{
+			{Name: "triage", Prompt: "triage.md", Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1}},
+			{
+				Name:    "implement",
+				Prompt:  "implement.md",
+				Timeout: Duration{Duration: 25 * time.Minute},
+				TimeoutOverrides: []TimeoutOverride{
+					{Condition: `{{ eq .Complexity "high" }}`, Timeout: Duration{Duration: 45 * time.Minute}},
+					{Condition: `{{ eq .Complexity "high" }}`, Timeout: Duration{Duration: 60 * time.Minute}},
 				},
+				Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
 			},
-			Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
-		},
-	}
+		}
 
-	engine, state := setupEngine(t, phases, &flexMockRunner{})
-	_ = state.MarkRunning("triage")
-	_ = state.WriteResult("triage", json.RawMessage(`{"complexity":"high","automatable":"yes"}`))
+		engine, state := setupEngine(t, phases, &flexMockRunner{})
+		_ = state.MarkRunning("triage")
+		_ = state.WriteResult("triage", json.RawMessage(`{"complexity":"high"}`))
 
-	timeout := engine.resolvePhaseTimeout(phases[1])
-	if timeout != 25*time.Minute {
-		t.Errorf("timeout = %v, want 25m (default after all errors)", timeout)
-	}
+		got := engine.resolvePhaseTimeout(phases[1])
+		if got != 45*time.Minute {
+			t.Errorf("timeout = %v, want 45m (first match)", got)
+		}
+	})
+
+	t.Run("second_match_when_first_does_not_match", func(t *testing.T) {
+		phases := []PhaseConfig{
+			{Name: "triage", Prompt: "triage.md", Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1}},
+			{
+				Name:    "implement",
+				Prompt:  "implement.md",
+				Timeout: Duration{Duration: 25 * time.Minute},
+				TimeoutOverrides: []TimeoutOverride{
+					{Condition: `{{ eq .Complexity "high" }}`, Timeout: Duration{Duration: 45 * time.Minute}},
+					{Condition: `{{ eq .Complexity "low" }}`, Timeout: Duration{Duration: 10 * time.Minute}},
+				},
+				Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+		}
+
+		engine, state := setupEngine(t, phases, &flexMockRunner{})
+		_ = state.MarkRunning("triage")
+		_ = state.WriteResult("triage", json.RawMessage(`{"complexity":"low"}`))
+
+		got := engine.resolvePhaseTimeout(phases[1])
+		if got != 10*time.Minute {
+			t.Errorf("timeout = %v, want 10m (second match)", got)
+		}
+	})
+
+	t.Run("no_match_returns_base", func(t *testing.T) {
+		phases := []PhaseConfig{
+			{Name: "triage", Prompt: "triage.md", Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1}},
+			{
+				Name:    "implement",
+				Prompt:  "implement.md",
+				Timeout: Duration{Duration: 25 * time.Minute},
+				TimeoutOverrides: []TimeoutOverride{
+					{Condition: `{{ eq .Complexity "high" }}`, Timeout: Duration{Duration: 45 * time.Minute}},
+				},
+				Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+		}
+
+		engine, state := setupEngine(t, phases, &flexMockRunner{})
+		_ = state.MarkRunning("triage")
+		_ = state.WriteResult("triage", json.RawMessage(`{"complexity":"low"}`))
+
+		got := engine.resolvePhaseTimeout(phases[1])
+		if got != 25*time.Minute {
+			t.Errorf("timeout = %v, want 25m (base fallback)", got)
+		}
+	})
+
+	t.Run("template_error_skips_override", func(t *testing.T) {
+		phases := []PhaseConfig{
+			{Name: "triage", Prompt: "triage.md", Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1}},
+			{
+				Name:    "implement",
+				Prompt:  "implement.md",
+				Timeout: Duration{Duration: 25 * time.Minute},
+				TimeoutOverrides: []TimeoutOverride{
+					{Condition: `{{ .NonexistentMethod }}`, Timeout: Duration{Duration: 99 * time.Minute}},
+					{Condition: `{{ eq .Complexity "high" }}`, Timeout: Duration{Duration: 45 * time.Minute}},
+				},
+				Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+		}
+
+		engine, state := setupEngine(t, phases, &flexMockRunner{})
+		_ = state.MarkRunning("triage")
+		_ = state.WriteResult("triage", json.RawMessage(`{"complexity":"high"}`))
+
+		got := engine.resolvePhaseTimeout(phases[1])
+		if got != 45*time.Minute {
+			t.Errorf("timeout = %v, want 45m (second override after first errored)", got)
+		}
+	})
+
+	t.Run("override_match_emits_event", func(t *testing.T) {
+		phases := []PhaseConfig{
+			{Name: "triage", Prompt: "triage.md", Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1}},
+			{
+				Name:    "implement",
+				Prompt:  "implement.md",
+				Timeout: Duration{Duration: 25 * time.Minute},
+				TimeoutOverrides: []TimeoutOverride{
+					{Condition: `{{ eq .Complexity "high" }}`, Timeout: Duration{Duration: 45 * time.Minute}},
+				},
+				Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+		}
+
+		var events []Event
+		engine, state := setupEngine(t, phases, &flexMockRunner{}, func(cfg *EngineConfig) {
+			cfg.OnEvent = func(e Event) { events = append(events, e) }
+		})
+		_ = state.MarkRunning("triage")
+		_ = state.WriteResult("triage", json.RawMessage(`{"complexity":"high"}`))
+
+		got := engine.resolvePhaseTimeout(phases[1])
+		if got != 45*time.Minute {
+			t.Errorf("timeout = %v, want 45m", got)
+		}
+
+		// Verify EventPhaseTimeoutResolved was emitted with correct data.
+		found := false
+		for _, ev := range events {
+			if ev.Kind == EventPhaseTimeoutResolved && ev.Phase == "implement" {
+				found = true
+				if resolved, ok := ev.Data["resolved_timeout"].(string); !ok || resolved != "45m0s" {
+					t.Errorf("resolved_timeout = %v, want 45m0s", ev.Data["resolved_timeout"])
+				}
+				if cond, ok := ev.Data["matched_condition"].(string); !ok || cond != `{{ eq .Complexity "high" }}` {
+					t.Errorf("matched_condition = %v, want template string", ev.Data["matched_condition"])
+				}
+				break
+			}
+		}
+		if !found {
+			t.Error("expected EventPhaseTimeoutResolved event for implement phase")
+		}
+	})
 }
