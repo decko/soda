@@ -850,7 +850,7 @@ func (e *Engine) respondToComments(ctx context.Context, phase PhaseConfig, class
 		MaxBudgetUSD: remaining,
 		WorkDir:      e.workDir(phase),
 		Model:        e.config.Model,
-		Timeout:      phase.Timeout.Duration,
+		Timeout:      e.resolvePhaseTimeout(phase),
 		ApiKeyHelper: e.config.ApiKeyHelper,
 	}
 
