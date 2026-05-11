@@ -31,24 +31,25 @@ type PhasePipeline struct {
 
 // PhaseConfig holds the configuration for a single phase.
 type PhaseConfig struct {
-	Name            string            `yaml:"name"`
-	Prompt          string            `yaml:"prompt"`
-	Schema          string            `yaml:"schema"`
-	Model           string            `yaml:"model,omitempty"` // per-phase model override; empty uses global EngineConfig.Model
-	Tools           []string          `yaml:"tools"`
-	Timeout         Duration          `yaml:"timeout"`
-	Type            string            `yaml:"type"`
-	Retry           RetryConfig       `yaml:"retry"`
-	DependsOn       []string          `yaml:"depends_on"`
-	Polling         *PollingConfig    `yaml:"polling,omitempty"`
-	Reviewers       []ReviewerConfig  `yaml:"reviewers,omitempty"`
-	ReviewerStagger Duration          `yaml:"reviewer_stagger,omitempty"`
-	MinReviewers    int               `yaml:"min_reviewers,omitempty"` // minimum successful reviewers required; 0 means all must succeed
-	Rework          *ReworkConfig     `yaml:"rework,omitempty"`
-	Corrective      *CorrectiveConfig `yaml:"corrective,omitempty"`
-	FeedbackFrom    []string          `yaml:"feedback_from,omitempty"` // ordered feedback sources injected into prompt
-	ContextBudget   int               `yaml:"prompt_budget,omitempty"` // max prompt tokens for adaptive fitting; 0 uses global default
-	Condition       string            `yaml:"condition,omitempty"`     // Go text/template evaluated at runtime; output "false" skips the phase
+	Name             string            `yaml:"name"`
+	Prompt           string            `yaml:"prompt"`
+	Schema           string            `yaml:"schema"`
+	Model            string            `yaml:"model,omitempty"` // per-phase model override; empty uses global EngineConfig.Model
+	Tools            []string          `yaml:"tools"`
+	Timeout          Duration          `yaml:"timeout"`
+	TimeoutOverrides []TimeoutOverride `yaml:"timeout_overrides,omitempty"` // conditional timeout overrides; first match wins
+	Type             string            `yaml:"type"`
+	Retry            RetryConfig       `yaml:"retry"`
+	DependsOn        []string          `yaml:"depends_on"`
+	Polling          *PollingConfig    `yaml:"polling,omitempty"`
+	Reviewers        []ReviewerConfig  `yaml:"reviewers,omitempty"`
+	ReviewerStagger  Duration          `yaml:"reviewer_stagger,omitempty"`
+	MinReviewers     int               `yaml:"min_reviewers,omitempty"` // minimum successful reviewers required; 0 means all must succeed
+	Rework           *ReworkConfig     `yaml:"rework,omitempty"`
+	Corrective       *CorrectiveConfig `yaml:"corrective,omitempty"`
+	FeedbackFrom     []string          `yaml:"feedback_from,omitempty"` // ordered feedback sources injected into prompt
+	ContextBudget    int               `yaml:"prompt_budget,omitempty"` // max prompt tokens for adaptive fitting; 0 uses global default
+	Condition        string            `yaml:"condition,omitempty"`     // Go text/template evaluated at runtime; output "false" skips the phase
 }
 
 // ReworkConfig configures rework routing for a phase. When a phase with
@@ -74,6 +75,16 @@ type ReviewerConfig struct {
 	Focus     string `yaml:"focus"`
 	Model     string `yaml:"model,omitempty"`
 	Condition string `yaml:"condition,omitempty"` // Go text/template evaluated at runtime; output "false" skips the reviewer
+}
+
+// TimeoutOverride defines a conditional timeout override for a phase.
+// When the Condition template renders to anything other than "false",
+// the override's Timeout replaces the phase default. Overrides are
+// evaluated in order; the first match wins.
+type TimeoutOverride struct {
+	Condition string   `yaml:"condition"`
+	Timeout   Duration `yaml:"timeout"`
+	Label     string   `yaml:"label,omitempty"` // human-readable label for event logging
 }
 
 // RetryConfig holds per-category retry limits.
@@ -171,6 +182,14 @@ func LoadPipeline(path string) (*PhasePipeline, error) {
 		if phase.Condition != "" {
 			if _, err := template.New("condition").Parse(phase.Condition); err != nil {
 				return nil, fmt.Errorf("pipeline: phase %q has invalid condition template: %w", phase.Name, err)
+			}
+		}
+		for i, override := range phase.TimeoutOverrides {
+			if override.Condition == "" {
+				return nil, fmt.Errorf("pipeline: phase %q timeout_overrides[%d] has empty condition", phase.Name, i)
+			}
+			if _, err := template.New("condition").Parse(override.Condition); err != nil {
+				return nil, fmt.Errorf("pipeline: phase %q timeout_overrides[%d] has invalid condition template: %w", phase.Name, i, err)
 			}
 		}
 		if phase.Corrective != nil {
