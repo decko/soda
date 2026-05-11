@@ -360,3 +360,206 @@ func TestEngine_skipPlanFromTriage_FullPipeline(t *testing.T) {
 		t.Errorf("runner phases = %v, want [triage implement]", names)
 	}
 }
+
+// --- Phase condition evaluation tests ---
+
+func TestEvalPhaseCondition_EmptyAlwaysRuns(t *testing.T) {
+	shouldRun, err := evalPhaseCondition("", phaseConditionData{Complexity: "large"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !shouldRun {
+		t.Error("expected empty condition to return true (always run)")
+	}
+}
+
+func TestEvalPhaseCondition_FalseSkips(t *testing.T) {
+	// Condition that evaluates to "false" when Complexity == "small".
+	cond := `{{ eq .Complexity "small" }}`
+	// When Complexity is "small", eq returns "true" → should run.
+	shouldRun, err := evalPhaseCondition(cond, phaseConditionData{Complexity: "small"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !shouldRun {
+		t.Error("expected condition to return true when Complexity=small")
+	}
+
+	// When Complexity is "large", eq returns "false" → should skip.
+	shouldRun, err = evalPhaseCondition(cond, phaseConditionData{Complexity: "large"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if shouldRun {
+		t.Error("expected condition to return false when Complexity=large")
+	}
+}
+
+func TestEvalPhaseCondition_CaseInsensitiveFalse(t *testing.T) {
+	// Template that outputs "FALSE" in uppercase.
+	cond := `{{ if eq .Complexity "low" }}FALSE{{ else }}true{{ end }}`
+	shouldRun, err := evalPhaseCondition(cond, phaseConditionData{Complexity: "low"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if shouldRun {
+		t.Error("expected case-insensitive FALSE to skip")
+	}
+}
+
+func TestEvalPhaseCondition_TemplateErrorFallsBack(t *testing.T) {
+	// Use a template that will fail at execution time (accessing missing method).
+	cond := `{{ .NonexistentMethod }}`
+	shouldRun, err := evalPhaseCondition(cond, phaseConditionData{})
+	if err == nil {
+		t.Fatal("expected error from template execution")
+	}
+	if !shouldRun {
+		t.Error("expected template error to fall back to true (run the phase)")
+	}
+}
+
+func TestEngine_readPhaseConditionData(t *testing.T) {
+	phases := []PhaseConfig{
+		{Name: "triage", Prompt: "triage.md", Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1}},
+	}
+
+	engine, state := setupEngine(t, phases, &flexMockRunner{})
+	_ = state.MarkRunning("triage")
+	_ = state.WriteResult("triage", json.RawMessage(`{"complexity":"large","automatable":true}`))
+	state.Meta().ReworkCycles = 2
+
+	data := engine.readPhaseConditionData()
+	if data.Complexity != "large" {
+		t.Errorf("Complexity = %q, want %q", data.Complexity, "large")
+	}
+	if !data.Automatable {
+		t.Error("Automatable = false, want true")
+	}
+	if data.ReworkCycle != 2 {
+		t.Errorf("ReworkCycle = %d, want 2", data.ReworkCycle)
+	}
+}
+
+func TestEngine_skipPhaseByCondition(t *testing.T) {
+	phases := []PhaseConfig{
+		{Name: "plan", Prompt: "plan.md", Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1}},
+	}
+
+	var events []Event
+	engine, state := setupEngine(t, phases, &flexMockRunner{}, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(e Event) { events = append(events, e) }
+	})
+
+	err := engine.skipPhaseByCondition(phases[0], "condition evaluated to false")
+	if err != nil {
+		t.Fatalf("skipPhaseByCondition() = %v, want nil", err)
+	}
+
+	// Phase should be completed.
+	if !state.IsCompleted("plan") {
+		t.Error("plan phase should be completed after skipPhaseByCondition")
+	}
+
+	// Artifact should exist (empty).
+	artifact, err := state.ReadArtifact("plan")
+	if err != nil {
+		t.Fatalf("ReadArtifact(plan) error: %v", err)
+	}
+	if len(artifact) != 0 {
+		t.Errorf("artifact length = %d, want 0 (empty)", len(artifact))
+	}
+
+	// Should have emitted EventPhaseConditionSkipped.
+	foundSkipped := false
+	foundCompleted := false
+	for _, e := range events {
+		if e.Kind == EventPhaseConditionSkipped {
+			foundSkipped = true
+			if reason, ok := e.Data["reason"].(string); !ok || reason != "condition evaluated to false" {
+				t.Errorf("reason = %v, want %q", e.Data["reason"], "condition evaluated to false")
+			}
+		}
+		if e.Kind == EventPhaseCompleted {
+			foundCompleted = true
+		}
+	}
+	if !foundSkipped {
+		t.Error("expected EventPhaseConditionSkipped event")
+	}
+	if !foundCompleted {
+		t.Error("expected EventPhaseCompleted event")
+	}
+}
+
+func TestEngine_phaseCondition_FullPipeline(t *testing.T) {
+	// Integration-style test: run a pipeline where a phase has a condition
+	// that evaluates to false based on triage complexity.
+	phases := []PhaseConfig{
+		{Name: "triage", Prompt: "triage.md", Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1}},
+		{
+			Name:      "plan",
+			Prompt:    "plan.md",
+			DependsOn: []string{"triage"},
+			Condition: `{{ ne .Complexity "small" }}`,
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{Name: "implement", Prompt: "implement.md", DependsOn: []string{"plan"}, Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1}},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"complexity":"small","automatable":true}`),
+					RawText: "triage result",
+					CostUSD: 0.01,
+				},
+			}},
+			"implement": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true}`),
+					RawText: "implemented",
+					CostUSD: 0.50,
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(e Event) { events = append(events, e) }
+		cfg.SleepFunc = func(time.Duration) {}
+	})
+
+	err := engine.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() = %v, want nil", err)
+	}
+
+	// plan should be completed via condition skip path.
+	if !state.IsCompleted("plan") {
+		t.Error("plan should be completed")
+	}
+
+	// Only triage + implement should have been called (plan was skipped).
+	if len(mock.calls) != 2 {
+		t.Fatalf("expected 2 runner calls (triage + implement), got %d", len(mock.calls))
+	}
+	names := phaseNames(mock.calls)
+	if names[0] != "triage" || names[1] != "implement" {
+		t.Errorf("runner phases = %v, want [triage implement]", names)
+	}
+
+	// Verify condition-skipped event was emitted.
+	foundSkipped := false
+	for _, e := range events {
+		if e.Kind == EventPhaseConditionSkipped && e.Phase == "plan" {
+			foundSkipped = true
+			break
+		}
+	}
+	if !foundSkipped {
+		t.Error("expected EventPhaseConditionSkipped event for plan phase")
+	}
+}
