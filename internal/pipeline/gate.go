@@ -270,6 +270,44 @@ func (e *Engine) resolvePhaseTimeout(phase PhaseConfig) time.Duration {
 	return phase.Timeout.Duration // base fallback
 }
 
+// resolvePhaseModel evaluates a phase's model overrides against the current
+// triage metadata. Overrides are evaluated in declaration order; the first
+// match wins. When no override matches (or ModelOverrides is empty), the
+// function falls back to phase.Model, then e.config.Model (global). Template
+// evaluation errors are fail-safe: the erroring override is skipped and
+// evaluation continues to the next one. An EventPhaseModelResolved event is
+// emitted when an override matches so operators can see which model was applied.
+func (e *Engine) resolvePhaseModel(phase PhaseConfig) string {
+	if len(phase.ModelOverrides) == 0 {
+		if phase.Model != "" {
+			return phase.Model
+		}
+		return e.config.Model
+	}
+	condData := e.readPhaseConditionData()
+	for _, override := range phase.ModelOverrides {
+		matches, err := evalPhaseCondition(override.Condition, condData)
+		if err != nil {
+			e.emit(Event{Phase: phase.Name, Kind: EventConditionEvalFallback,
+				Data: map[string]any{"error": err.Error()}})
+			continue // skip erroring override, try next
+		}
+		if matches {
+			e.emit(Event{Phase: phase.Name, Kind: EventPhaseModelResolved,
+				Data: map[string]any{
+					"resolved_model":    override.Model,
+					"matched_condition": override.Condition,
+				}})
+			return override.Model
+		}
+	}
+	// No override matched — fall back to phase model, then global.
+	if phase.Model != "" {
+		return phase.Model
+	}
+	return e.config.Model
+}
+
 // skipPhaseByCondition marks a phase as completed with an empty artifact
 // so downstream dependency checks and shouldSkip work correctly, then
 // emits condition-skipped and phase-completed events. The empty artifact

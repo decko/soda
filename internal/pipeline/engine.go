@@ -753,11 +753,8 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 			remaining = genRemaining
 		}
 	}
-	// Prefer per-phase model if set, otherwise use the global model.
-	model := e.config.Model
-	if phase.Model != "" {
-		model = phase.Model
-	}
+	// Resolve effective model: evaluate model_overrides (first-match wins) before falling back to phase then global.
+	model := e.resolvePhaseModel(phase)
 
 	// Resolve effective timeout: evaluate timeout_overrides (first-match wins)
 	// before falling back to the phase default.

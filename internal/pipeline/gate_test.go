@@ -610,6 +610,216 @@ func TestEngine_correctivePhase_conditionBypassedDuringRework(t *testing.T) {
 	}
 }
 
+// --- resolvePhaseModel tests ---
+
+func TestEngine_resolvePhaseModel(t *testing.T) {
+	t.Run("no_overrides_returns_phase_model", func(t *testing.T) {
+		phases := []PhaseConfig{
+			{Name: "triage", Prompt: "triage.md", Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1}},
+			{
+				Name:   "implement",
+				Prompt: "implement.md",
+				Model:  "claude-opus-4-6",
+				Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+		}
+
+		engine, _ := setupEngine(t, phases, &flexMockRunner{})
+		got := engine.resolvePhaseModel(phases[1])
+		if got != "claude-opus-4-6" {
+			t.Errorf("model = %q, want %q", got, "claude-opus-4-6")
+		}
+	})
+
+	t.Run("no_overrides_no_phase_model_returns_global", func(t *testing.T) {
+		phases := []PhaseConfig{
+			{Name: "triage", Prompt: "triage.md", Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1}},
+			{
+				Name:   "implement",
+				Prompt: "implement.md",
+				Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+		}
+
+		engine, _ := setupEngine(t, phases, &flexMockRunner{}, func(cfg *EngineConfig) {
+			cfg.Model = "global-model"
+		})
+		got := engine.resolvePhaseModel(phases[1])
+		if got != "global-model" {
+			t.Errorf("model = %q, want %q", got, "global-model")
+		}
+	})
+
+	t.Run("first_match_wins", func(t *testing.T) {
+		phases := []PhaseConfig{
+			{Name: "triage", Prompt: "triage.md", Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1}},
+			{
+				Name:   "implement",
+				Prompt: "implement.md",
+				Model:  "phase-default",
+				ModelOverrides: []ModelOverride{
+					{Condition: `{{ eq .Complexity "high" }}`, Model: "claude-opus-4-6"},
+					{Condition: `{{ eq .Complexity "high" }}`, Model: "claude-sonnet-4-6"},
+				},
+				Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+		}
+
+		engine, state := setupEngine(t, phases, &flexMockRunner{})
+		_ = state.MarkRunning("triage")
+		_ = state.WriteResult("triage", json.RawMessage(`{"complexity":"high"}`))
+
+		got := engine.resolvePhaseModel(phases[1])
+		if got != "claude-opus-4-6" {
+			t.Errorf("model = %q, want %q (first match)", got, "claude-opus-4-6")
+		}
+	})
+
+	t.Run("second_match_when_first_does_not_match", func(t *testing.T) {
+		phases := []PhaseConfig{
+			{Name: "triage", Prompt: "triage.md", Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1}},
+			{
+				Name:   "implement",
+				Prompt: "implement.md",
+				Model:  "phase-default",
+				ModelOverrides: []ModelOverride{
+					{Condition: `{{ eq .Complexity "high" }}`, Model: "claude-opus-4-6"},
+					{Condition: `{{ eq .Complexity "low" }}`, Model: "claude-sonnet-4-6"},
+				},
+				Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+		}
+
+		engine, state := setupEngine(t, phases, &flexMockRunner{})
+		_ = state.MarkRunning("triage")
+		_ = state.WriteResult("triage", json.RawMessage(`{"complexity":"low"}`))
+
+		got := engine.resolvePhaseModel(phases[1])
+		if got != "claude-sonnet-4-6" {
+			t.Errorf("model = %q, want %q (second match)", got, "claude-sonnet-4-6")
+		}
+	})
+
+	t.Run("no_match_falls_back_to_phase_model", func(t *testing.T) {
+		phases := []PhaseConfig{
+			{Name: "triage", Prompt: "triage.md", Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1}},
+			{
+				Name:   "implement",
+				Prompt: "implement.md",
+				Model:  "phase-default",
+				ModelOverrides: []ModelOverride{
+					{Condition: `{{ eq .Complexity "high" }}`, Model: "claude-opus-4-6"},
+				},
+				Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+		}
+
+		engine, state := setupEngine(t, phases, &flexMockRunner{})
+		_ = state.MarkRunning("triage")
+		_ = state.WriteResult("triage", json.RawMessage(`{"complexity":"low"}`))
+
+		got := engine.resolvePhaseModel(phases[1])
+		if got != "phase-default" {
+			t.Errorf("model = %q, want %q (phase fallback)", got, "phase-default")
+		}
+	})
+
+	t.Run("no_match_no_phase_model_falls_back_to_global", func(t *testing.T) {
+		phases := []PhaseConfig{
+			{Name: "triage", Prompt: "triage.md", Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1}},
+			{
+				Name:   "implement",
+				Prompt: "implement.md",
+				ModelOverrides: []ModelOverride{
+					{Condition: `{{ eq .Complexity "high" }}`, Model: "claude-opus-4-6"},
+				},
+				Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+		}
+
+		engine, state := setupEngine(t, phases, &flexMockRunner{}, func(cfg *EngineConfig) {
+			cfg.Model = "global-model"
+		})
+		_ = state.MarkRunning("triage")
+		_ = state.WriteResult("triage", json.RawMessage(`{"complexity":"low"}`))
+
+		got := engine.resolvePhaseModel(phases[1])
+		if got != "global-model" {
+			t.Errorf("model = %q, want %q (global fallback)", got, "global-model")
+		}
+	})
+
+	t.Run("template_error_skips_override", func(t *testing.T) {
+		phases := []PhaseConfig{
+			{Name: "triage", Prompt: "triage.md", Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1}},
+			{
+				Name:   "implement",
+				Prompt: "implement.md",
+				Model:  "phase-default",
+				ModelOverrides: []ModelOverride{
+					{Condition: `{{ .NonexistentMethod }}`, Model: "bad-model"},
+					{Condition: `{{ eq .Complexity "high" }}`, Model: "claude-opus-4-6"},
+				},
+				Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+		}
+
+		engine, state := setupEngine(t, phases, &flexMockRunner{})
+		_ = state.MarkRunning("triage")
+		_ = state.WriteResult("triage", json.RawMessage(`{"complexity":"high"}`))
+
+		got := engine.resolvePhaseModel(phases[1])
+		if got != "claude-opus-4-6" {
+			t.Errorf("model = %q, want %q (second override after first errored)", got, "claude-opus-4-6")
+		}
+	})
+
+	t.Run("override_match_emits_event", func(t *testing.T) {
+		phases := []PhaseConfig{
+			{Name: "triage", Prompt: "triage.md", Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1}},
+			{
+				Name:   "implement",
+				Prompt: "implement.md",
+				Model:  "phase-default",
+				ModelOverrides: []ModelOverride{
+					{Condition: `{{ eq .Complexity "low" }}`, Model: "claude-sonnet-4-6"},
+				},
+				Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+		}
+
+		var events []Event
+		engine, state := setupEngine(t, phases, &flexMockRunner{}, func(cfg *EngineConfig) {
+			cfg.OnEvent = func(e Event) { events = append(events, e) }
+		})
+		_ = state.MarkRunning("triage")
+		_ = state.WriteResult("triage", json.RawMessage(`{"complexity":"low"}`))
+
+		got := engine.resolvePhaseModel(phases[1])
+		if got != "claude-sonnet-4-6" {
+			t.Errorf("model = %q, want %q", got, "claude-sonnet-4-6")
+		}
+
+		// Verify EventPhaseModelResolved was emitted with correct data.
+		found := false
+		for _, ev := range events {
+			if ev.Kind == EventPhaseModelResolved && ev.Phase == "implement" {
+				found = true
+				if resolved, ok := ev.Data["resolved_model"].(string); !ok || resolved != "claude-sonnet-4-6" {
+					t.Errorf("resolved_model = %v, want %q", ev.Data["resolved_model"], "claude-sonnet-4-6")
+				}
+				if cond, ok := ev.Data["matched_condition"].(string); !ok || cond != `{{ eq .Complexity "low" }}` {
+					t.Errorf("matched_condition = %v, want template string", ev.Data["matched_condition"])
+				}
+				break
+			}
+		}
+		if !found {
+			t.Error("expected EventPhaseModelResolved event for implement phase")
+		}
+	})
+}
+
 // --- resolvePhaseTimeout tests ---
 
 func TestEngine_resolvePhaseTimeout(t *testing.T) {

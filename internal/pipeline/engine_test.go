@@ -3433,6 +3433,80 @@ func TestEngine_PerPhaseModel(t *testing.T) {
 		}
 	})
 
+	t.Run("model_override_routing", func(t *testing.T) {
+		// Exercise model_overrides through the full engine.Run() call path.
+		// Triage writes complexity="low", and the implement phase has a
+		// model_override that routes low-complexity to claude-sonnet-4-6.
+		phases := []PhaseConfig{
+			{
+				Name:   "triage",
+				Prompt: "triage.md",
+				Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+			{
+				Name:      "implement",
+				Prompt:    "implement.md",
+				DependsOn: []string{"triage"},
+				Model:     "claude-opus-4-6", // phase default
+				ModelOverrides: []ModelOverride{
+					{
+						Condition: `{{ eq .Complexity "low" }}`,
+						Model:     "claude-sonnet-4-6",
+					},
+				},
+				Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+		}
+
+		mock := &flexMockRunner{
+			responses: map[string][]flexResponse{
+				"triage": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"complexity":"low","automatable":"yes"}`),
+						RawText: "Triage output",
+						CostUSD: 0.10,
+					},
+				}},
+				"implement": {{
+					result: &runner.RunResult{
+						Output:  json.RawMessage(`{"result":"done"}`),
+						RawText: "Implement output",
+						CostUSD: 0.20,
+					},
+				}},
+			},
+		}
+
+		engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+			cfg.Model = "claude-opus-4-6"
+		})
+
+		if err := engine.Run(context.Background()); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+
+		mock.mu.Lock()
+		defer mock.mu.Unlock()
+
+		if len(mock.calls) != 2 {
+			t.Fatalf("runner called %d times, want 2", len(mock.calls))
+		}
+
+		models := map[string]string{}
+		for _, c := range mock.calls {
+			models[c.Phase] = c.Model
+		}
+
+		// triage has no model override — should use global.
+		if models["triage"] != "claude-opus-4-6" {
+			t.Errorf("triage model = %q, want %q (global)", models["triage"], "claude-opus-4-6")
+		}
+		// implement should use the override model because triage reported low complexity.
+		if models["implement"] != "claude-sonnet-4-6" {
+			t.Errorf("implement model = %q, want %q (model_override match)", models["implement"], "claude-sonnet-4-6")
+		}
+	})
+
 	t.Run("empty_phase_model_uses_global", func(t *testing.T) {
 		phases := []PhaseConfig{
 			{

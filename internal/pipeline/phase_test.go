@@ -1013,6 +1013,160 @@ func TestLoadPipeline(t *testing.T) {
 		}
 	})
 
+	t.Run("model_overrides_parsed", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "phases.yaml")
+		content := `phases:
+  - name: implement
+    prompt: prompts/implement.md
+    timeout: 25m
+    model: claude-opus-4-6
+    model_overrides:
+      - condition: '{{ eq .Complexity "low" }}'
+        model: claude-sonnet-4-6
+      - condition: '{{ eq .Complexity "medium" }}'
+        model: claude-opus-4-6
+`
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		pipeline, err := LoadPipeline(path)
+		if err != nil {
+			t.Fatalf("LoadPipeline: %v", err)
+		}
+
+		phase := pipeline.Phases[0]
+		if len(phase.ModelOverrides) != 2 {
+			t.Fatalf("got %d model_overrides, want 2", len(phase.ModelOverrides))
+		}
+
+		// First override
+		if phase.ModelOverrides[0].Condition != `{{ eq .Complexity "low" }}` {
+			t.Errorf("override[0].Condition = %q", phase.ModelOverrides[0].Condition)
+		}
+		if phase.ModelOverrides[0].Model != "claude-sonnet-4-6" {
+			t.Errorf("override[0].Model = %q, want %q", phase.ModelOverrides[0].Model, "claude-sonnet-4-6")
+		}
+
+		// Second override
+		if phase.ModelOverrides[1].Condition != `{{ eq .Complexity "medium" }}` {
+			t.Errorf("override[1].Condition = %q", phase.ModelOverrides[1].Condition)
+		}
+		if phase.ModelOverrides[1].Model != "claude-opus-4-6" {
+			t.Errorf("override[1].Model = %q, want %q", phase.ModelOverrides[1].Model, "claude-opus-4-6")
+		}
+	})
+
+	t.Run("model_overrides_empty_when_absent", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "phases.yaml")
+		content := `phases:
+  - name: implement
+    prompt: prompts/implement.md
+    timeout: 25m
+`
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		pipeline, err := LoadPipeline(path)
+		if err != nil {
+			t.Fatalf("LoadPipeline: %v", err)
+		}
+
+		if len(pipeline.Phases[0].ModelOverrides) != 0 {
+			t.Errorf("got %d model_overrides, want 0", len(pipeline.Phases[0].ModelOverrides))
+		}
+	})
+
+	t.Run("errors_on_empty_model_override_condition", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "phases.yaml")
+		content := `phases:
+  - name: implement
+    prompt: prompts/implement.md
+    timeout: 25m
+    model_overrides:
+      - condition: ''
+        model: claude-sonnet-4-6
+`
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		_, err := LoadPipeline(path)
+		if err == nil {
+			t.Fatal("expected error for model_overrides entry with empty condition")
+		}
+		if !strings.Contains(err.Error(), "model_overrides") {
+			t.Errorf("error = %q, want mention of model_overrides", err)
+		}
+		if !strings.Contains(err.Error(), "empty condition") {
+			t.Errorf("error = %q, want mention of empty condition", err)
+		}
+		if !strings.Contains(err.Error(), "implement") {
+			t.Errorf("error = %q, want mention of phase name", err)
+		}
+	})
+
+	t.Run("errors_on_empty_model_override_model", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "phases.yaml")
+		content := `phases:
+  - name: implement
+    prompt: prompts/implement.md
+    timeout: 25m
+    model_overrides:
+      - condition: '{{ eq .Complexity "low" }}'
+        model: ''
+`
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		_, err := LoadPipeline(path)
+		if err == nil {
+			t.Fatal("expected error for model_overrides entry with empty model")
+		}
+		if !strings.Contains(err.Error(), "model_overrides") {
+			t.Errorf("error = %q, want mention of model_overrides", err)
+		}
+		if !strings.Contains(err.Error(), "empty model") {
+			t.Errorf("error = %q, want mention of empty model", err)
+		}
+		if !strings.Contains(err.Error(), "implement") {
+			t.Errorf("error = %q, want mention of phase name", err)
+		}
+	})
+
+	t.Run("errors_on_invalid_model_override_condition", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "phases.yaml")
+		content := `phases:
+  - name: implement
+    prompt: prompts/implement.md
+    timeout: 25m
+    model_overrides:
+      - condition: '{{ invalid {{ syntax }}'
+        model: claude-sonnet-4-6
+`
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		_, err := LoadPipeline(path)
+		if err == nil {
+			t.Fatal("expected error for invalid model_overrides condition template")
+		}
+		if !strings.Contains(err.Error(), "model_overrides") {
+			t.Errorf("error = %q, want mention of model_overrides", err)
+		}
+		if !strings.Contains(err.Error(), "implement") {
+			t.Errorf("error = %q, want mention of phase name", err)
+		}
+	})
+
 	t.Run("errors_on_invalid_timeout_override_condition", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "phases.yaml")
