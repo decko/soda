@@ -255,11 +255,15 @@ func (e *Engine) resolvePhaseTimeout(phase PhaseConfig) time.Duration {
 			continue // skip erroring override, try next
 		}
 		if matches {
+			data := map[string]any{
+				"resolved_timeout":  override.Timeout.Duration.String(),
+				"matched_condition": override.Condition,
+			}
+			if override.Label != "" {
+				data["label"] = override.Label
+			}
 			e.emit(Event{Phase: phase.Name, Kind: EventPhaseTimeoutResolved,
-				Data: map[string]any{
-					"resolved_timeout":  override.Timeout.Duration.String(),
-					"matched_condition": override.Condition,
-				}})
+				Data: data})
 			return override.Timeout.Duration
 		}
 	}

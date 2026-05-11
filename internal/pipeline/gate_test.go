@@ -774,4 +774,80 @@ func TestEngine_resolvePhaseTimeout(t *testing.T) {
 			t.Error("expected EventPhaseTimeoutResolved event for implement phase")
 		}
 	})
+
+	t.Run("override_match_emits_label_when_set", func(t *testing.T) {
+		phases := []PhaseConfig{
+			{Name: "triage", Prompt: "triage.md", Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1}},
+			{
+				Name:    "implement",
+				Prompt:  "implement.md",
+				Timeout: Duration{Duration: 25 * time.Minute},
+				TimeoutOverrides: []TimeoutOverride{
+					{Condition: `{{ eq .Complexity "high" }}`, Timeout: Duration{Duration: 45 * time.Minute}, Label: "high-complexity"},
+				},
+				Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+		}
+
+		var events []Event
+		engine, state := setupEngine(t, phases, &flexMockRunner{}, func(cfg *EngineConfig) {
+			cfg.OnEvent = func(e Event) { events = append(events, e) }
+		})
+		_ = state.MarkRunning("triage")
+		_ = state.WriteResult("triage", json.RawMessage(`{"complexity":"high"}`))
+
+		got := engine.resolvePhaseTimeout(phases[1])
+		if got != 45*time.Minute {
+			t.Errorf("timeout = %v, want 45m", got)
+		}
+
+		// Verify label is present in the emitted event data.
+		found := false
+		for _, ev := range events {
+			if ev.Kind == EventPhaseTimeoutResolved && ev.Phase == "implement" {
+				found = true
+				if label, ok := ev.Data["label"].(string); !ok || label != "high-complexity" {
+					t.Errorf("label = %v, want %q", ev.Data["label"], "high-complexity")
+				}
+				break
+			}
+		}
+		if !found {
+			t.Error("expected EventPhaseTimeoutResolved event for implement phase")
+		}
+	})
+
+	t.Run("override_match_omits_label_when_empty", func(t *testing.T) {
+		phases := []PhaseConfig{
+			{Name: "triage", Prompt: "triage.md", Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1}},
+			{
+				Name:    "implement",
+				Prompt:  "implement.md",
+				Timeout: Duration{Duration: 25 * time.Minute},
+				TimeoutOverrides: []TimeoutOverride{
+					{Condition: `{{ eq .Complexity "high" }}`, Timeout: Duration{Duration: 45 * time.Minute}},
+				},
+				Retry: RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			},
+		}
+
+		var events []Event
+		engine, state := setupEngine(t, phases, &flexMockRunner{}, func(cfg *EngineConfig) {
+			cfg.OnEvent = func(e Event) { events = append(events, e) }
+		})
+		_ = state.MarkRunning("triage")
+		_ = state.WriteResult("triage", json.RawMessage(`{"complexity":"high"}`))
+
+		_ = engine.resolvePhaseTimeout(phases[1])
+
+		// Verify label key is NOT present when Label is empty.
+		for _, ev := range events {
+			if ev.Kind == EventPhaseTimeoutResolved && ev.Phase == "implement" {
+				if _, exists := ev.Data["label"]; exists {
+					t.Errorf("label key should not be present when Label is empty, got %v", ev.Data["label"])
+				}
+				break
+			}
+		}
+	})
 }
