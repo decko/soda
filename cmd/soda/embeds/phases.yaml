@@ -23,6 +23,10 @@ phases:
 
   - name: plan
     prompt: prompts/plan.md
+    # condition: Go text/template evaluated at runtime; output "false" skips
+    # the phase. Available fields: .Complexity, .Automatable, .ReworkCycle.
+    # Example: skip plan for small tickets:
+    # condition: '{{ ne .Complexity "small" }}'
     schema: |
       {"type":"object","properties":{"ticket_key":{"type":"string"},"approach":{"type":"string"},"tasks":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"description":{"type":"string"},"files":{"type":"array","items":{"type":"string"}},"done_when":{"type":"string"},"depends_on":{"type":"array","items":{"type":"string"}}},"required":["id","description","files","done_when"]}},"verification":{"type":"object","properties":{"commands":{"type":"array","items":{"type":"string"}},"manual_steps":{"type":"array","items":{"type":"string"}}},"required":["commands"]},"deviations":{"type":"array","items":{"type":"string"}}},"required":["ticket_key","approach","tasks","verification"]}
     tools:
