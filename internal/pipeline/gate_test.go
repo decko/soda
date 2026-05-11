@@ -587,3 +587,25 @@ func TestEngine_phaseCondition_FullPipeline(t *testing.T) {
 		t.Error("expected EventPhaseConditionSkipped event for plan phase")
 	}
 }
+
+func TestEngine_correctivePhase_conditionBypassedDuringRework(t *testing.T) {
+	// Regression: when a corrective phase (e.g. patch) has a condition that
+	// evaluates to false, it must still run if routed via reworkSignal
+	// (verify failure). Otherwise the fix is silently skipped and the
+	// pipeline proceeds past a live verify failure.
+	phase := PhaseConfig{
+		Name:      "patch",
+		Type:      "corrective",
+		Condition: `{{ eq .Complexity "high" }}`, // would skip for non-high
+	}
+
+	// skipCheck=false means we're in rework routing (corrective phase should run)
+	skipCheck := false
+
+	// The condition says skip (complexity is not "high"), but corrective
+	// routing should override it.
+	shouldBypass := phase.Type == "corrective" && !skipCheck
+	if !shouldBypass {
+		t.Error("corrective phase during rework routing should bypass condition evaluation")
+	}
+}

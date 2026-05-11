@@ -439,7 +439,10 @@ func (e *Engine) executePhases(ctx context.Context, phases []PhaseConfig, forceF
 			// Phase-level condition check: evaluate the condition template
 			// and skip the phase when it renders to "false". Template errors
 			// fall back to running the phase (fail-safe).
-			if phase.Condition != "" {
+			// Corrective phases routed via reworkSignal (skipCheck=false)
+			// bypass condition evaluation — a verify failure must always
+			// trigger the corrective phase regardless of conditions.
+			if phase.Condition != "" && !(phase.Type == "corrective" && !skipCheck) {
 				condData := e.readPhaseConditionData()
 				shouldRun, condErr := evalPhaseCondition(phase.Condition, condData)
 				if condErr != nil {
