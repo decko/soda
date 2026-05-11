@@ -188,6 +188,9 @@ func LoadPipeline(path string) (*PhasePipeline, error) {
 			if override.Condition == "" {
 				return nil, fmt.Errorf("pipeline: phase %q timeout_overrides[%d] has empty condition", phase.Name, i)
 			}
+			if override.Timeout.Duration <= 0 {
+				return nil, fmt.Errorf("pipeline: phase %q timeout_overrides[%d] has zero or missing timeout", phase.Name, i)
+			}
 			if _, err := template.New("condition").Parse(override.Condition); err != nil {
 				return nil, fmt.Errorf("pipeline: phase %q timeout_overrides[%d] has invalid condition template: %w", phase.Name, i, err)
 			}

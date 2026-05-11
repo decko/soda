@@ -984,6 +984,35 @@ func TestLoadPipeline(t *testing.T) {
 		}
 	})
 
+	t.Run("errors_on_zero_timeout_override_timeout", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "phases.yaml")
+		content := `phases:
+  - name: implement
+    prompt: prompts/implement.md
+    timeout: 25m
+    timeout_overrides:
+      - condition: '{{ eq .Complexity "high" }}'
+`
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		_, err := LoadPipeline(path)
+		if err == nil {
+			t.Fatal("expected error for timeout_overrides entry with missing timeout")
+		}
+		if !strings.Contains(err.Error(), "timeout_overrides") {
+			t.Errorf("error = %q, want mention of timeout_overrides", err)
+		}
+		if !strings.Contains(err.Error(), "zero or missing timeout") {
+			t.Errorf("error = %q, want mention of zero or missing timeout", err)
+		}
+		if !strings.Contains(err.Error(), "implement") {
+			t.Errorf("error = %q, want mention of phase name", err)
+		}
+	})
+
 	t.Run("errors_on_invalid_timeout_override_condition", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "phases.yaml")
