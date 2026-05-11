@@ -271,6 +271,20 @@ func (s *State) WriteLog(phase, suffix string, content []byte) error {
 	return nil
 }
 
+// WriteTranscript writes a phase transcript file (logs/<phase>_transcript.json).
+// The content is a JSON array of TranscriptEntry objects.
+func (s *State) WriteTranscript(phase string, data []byte) error {
+	logsDir := filepath.Join(s.dir, "logs")
+	if err := os.MkdirAll(logsDir, 0755); err != nil {
+		return fmt.Errorf("pipeline: create logs dir: %w", err)
+	}
+	path := filepath.Join(logsDir, phase+"_transcript.json")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return fmt.Errorf("pipeline: write transcript %s: %w", path, err)
+	}
+	return nil
+}
+
 // LogEvent appends a structured event to events.jsonl.
 func (s *State) LogEvent(event Event) error {
 	return logEvent(s.dir, event)
