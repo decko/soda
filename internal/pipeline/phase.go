@@ -38,6 +38,7 @@ type PhaseConfig struct {
 	Tools            []string          `yaml:"tools"`
 	Timeout          Duration          `yaml:"timeout"`
 	TimeoutOverrides []TimeoutOverride `yaml:"timeout_overrides,omitempty"` // conditional timeout overrides; first match wins
+	ModelOverrides   []ModelOverride   `yaml:"model_overrides,omitempty"`   // conditional model overrides; first match wins
 	Type             string            `yaml:"type"`
 	Retry            RetryConfig       `yaml:"retry"`
 	DependsOn        []string          `yaml:"depends_on"`
@@ -85,6 +86,15 @@ type TimeoutOverride struct {
 	Condition string   `yaml:"condition"`
 	Timeout   Duration `yaml:"timeout"`
 	Label     string   `yaml:"label,omitempty"` // human-readable label for event logging
+}
+
+// ModelOverride defines a conditional model override for a phase.
+// When the Condition template renders to anything other than "false",
+// the override's Model replaces the phase/global default. Overrides are
+// evaluated in order; the first match wins.
+type ModelOverride struct {
+	Condition string `yaml:"condition"`
+	Model     string `yaml:"model"`
 }
 
 // RetryConfig holds per-category retry limits.
@@ -193,6 +203,17 @@ func LoadPipeline(path string) (*PhasePipeline, error) {
 			}
 			if _, err := template.New("condition").Parse(override.Condition); err != nil {
 				return nil, fmt.Errorf("pipeline: phase %q timeout_overrides[%d] has invalid condition template: %w", phase.Name, i, err)
+			}
+		}
+		for i, override := range phase.ModelOverrides {
+			if override.Condition == "" {
+				return nil, fmt.Errorf("pipeline: phase %q model_overrides[%d] has empty condition", phase.Name, i)
+			}
+			if override.Model == "" {
+				return nil, fmt.Errorf("pipeline: phase %q model_overrides[%d] has empty model", phase.Name, i)
+			}
+			if _, err := template.New("condition").Parse(override.Condition); err != nil {
+				return nil, fmt.Errorf("pipeline: phase %q model_overrides[%d] has invalid condition template: %w", phase.Name, i, err)
 			}
 		}
 		if phase.Corrective != nil {
