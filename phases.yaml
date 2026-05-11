@@ -61,6 +61,14 @@ phases:
     #     timeout: 10m
     #   - condition: '{{ eq .Complexity "medium" }}'
     #     timeout: 20m
+    # model_overrides: evaluate conditions in order; first match overrides the phase/global model.
+    # Conditions use Go text/template syntax. Available fields: .Complexity, .Automatable, .ReworkCycle.
+    # NOTE: use .Complexity (not .Artifacts.Triage.Complexity) — phaseConditionData flattens triage fields.
+    # model_overrides:
+    #   - condition: '{{ eq .Complexity "low" }}'
+    #     model: claude-sonnet-4-6
+    #   - condition: '{{ eq .Complexity "high" }}'
+    #     model: claude-opus-4-6
     retry:
       transient: 2
       parse: 1
