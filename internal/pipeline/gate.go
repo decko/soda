@@ -236,30 +236,34 @@ func evalPhaseCondition(condition string, data phaseConditionData) (bool, error)
 }
 
 // resolvePhaseTimeout evaluates a phase's timeout overrides against the
-// given condition data and returns the effective timeout. Overrides are
-// evaluated in declaration order; the first match wins. When no override
-// matches, the phase's default Timeout is returned. Template evaluation
-// errors are fail-safe: the override is skipped and evaluation continues
-// to the next override (or falls through to the default).
-//
-// Returns (effective timeout, matched label, true) when an override matched,
-// or (default timeout, "", false) when no override matched.
-func resolvePhaseTimeout(phase PhaseConfig, data phaseConditionData) (time.Duration, string, bool) {
+// current triage metadata. Overrides are evaluated in declaration order;
+// the first match wins. When no override matches (or TimeoutOverrides is
+// empty), the phase's base Timeout is returned. Template evaluation errors
+// are fail-safe: the erroring override is skipped and evaluation continues
+// to the next one. An EventPhaseTimeoutResolved event is emitted when an
+// override matches so operators can see which timeout was applied.
+func (e *Engine) resolvePhaseTimeout(phase PhaseConfig) time.Duration {
+	if len(phase.TimeoutOverrides) == 0 {
+		return phase.Timeout.Duration
+	}
+	condData := e.readPhaseConditionData()
 	for _, override := range phase.TimeoutOverrides {
-		shouldApply, err := evalPhaseCondition(override.Condition, data)
+		matches, err := evalPhaseCondition(override.Condition, condData)
 		if err != nil {
-			// Fail-safe: skip this override on template error.
-			continue
+			e.emit(Event{Phase: phase.Name, Kind: EventConditionEvalFallback,
+				Data: map[string]any{"error": err.Error()}})
+			continue // skip erroring override, try next
 		}
-		if shouldApply {
-			label := override.Label
-			if label == "" {
-				label = override.Condition
-			}
-			return override.Timeout.Duration, label, true
+		if matches {
+			e.emit(Event{Phase: phase.Name, Kind: EventPhaseTimeoutResolved,
+				Data: map[string]any{
+					"resolved_timeout":  override.Timeout.Duration.String(),
+					"matched_condition": override.Condition,
+				}})
+			return override.Timeout.Duration
 		}
 	}
-	return phase.Timeout.Duration, "", false
+	return phase.Timeout.Duration // base fallback
 }
 
 // skipPhaseByCondition marks a phase as completed with an empty artifact

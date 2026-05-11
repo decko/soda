@@ -758,6 +758,23 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 	if phase.Model != "" {
 		model = phase.Model
 	}
+
+	// Resolve effective timeout: evaluate timeout_overrides (first-match wins)
+	// before falling back to the phase default.
+	condData := e.readPhaseConditionData()
+	effectiveTimeout, timeoutLabel, timeoutOverridden := resolvePhaseTimeout(phase, condData)
+	if timeoutOverridden {
+		e.emit(Event{
+			Phase: phase.Name,
+			Kind:  EventPhaseTimeoutResolved,
+			Data: map[string]any{
+				"default_timeout":   phase.Timeout.Duration.String(),
+				"effective_timeout": effectiveTimeout.String(),
+				"matched_label":     timeoutLabel,
+			},
+		})
+	}
+
 	opts := runner.RunOpts{
 		Phase:        phase.Name,
 		SystemPrompt: rendered,
@@ -767,7 +784,7 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 		MaxBudgetUSD: remaining,
 		WorkDir:      e.workDir(phase),
 		Model:        model,
-		Timeout:      phase.Timeout.Duration,
+		Timeout:      effectiveTimeout,
 		OnChunk:      e.makeOnChunk(ctx, phase.Name),
 		ApiKeyHelper: e.config.ApiKeyHelper,
 	}
