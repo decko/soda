@@ -101,6 +101,7 @@ const (
 	EventConditionEvalFallback    = "condition_eval_fallback"
 	EventPhaseConditionSkipped    = "phase_condition_skipped"
 	EventPhaseTimeoutResolved     = "phase_timeout_resolved"
+	EventPhaseModelResolved       = "phase_model_resolved"
 )
 
 // FormatEvent formats an event as a compact, human-readable line:
