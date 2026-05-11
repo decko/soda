@@ -436,6 +436,45 @@ func (e *Engine) executePhases(ctx context.Context, phases []PhaseConfig, forceF
 				continue
 			}
 
+			// Phase-level condition check: evaluate the condition template
+			// and skip the phase when it renders to "false". Template errors
+			// fall back to running the phase (fail-safe).
+			if phase.Condition != "" {
+				condData := e.readPhaseConditionData()
+				shouldRun, condErr := evalPhaseCondition(phase.Condition, condData)
+				if condErr != nil {
+					e.emit(Event{
+						Phase: phase.Name,
+						Kind:  EventConditionEvalFallback,
+						Data:  map[string]any{"error": condErr.Error()},
+					})
+				} else if !shouldRun {
+					if err := e.skipPhaseByCondition(phase, "condition evaluated to false"); err != nil {
+						return err
+					}
+					e.reranPhases[phase.Name] = true
+
+					if e.config.Mode == Checkpoint {
+						e.emit(Event{Phase: phase.Name, Kind: EventCheckpointPause})
+						e.pauseMu.Lock()
+						e.inCheckpoint = true
+						e.pauseMu.Unlock()
+						select {
+						case <-e.confirmCh:
+						case <-ctx.Done():
+							e.pauseMu.Lock()
+							e.inCheckpoint = false
+							e.pauseMu.Unlock()
+							return fmt.Errorf("engine: context cancelled during checkpoint: %w", ctx.Err())
+						}
+						e.pauseMu.Lock()
+						e.inCheckpoint = false
+						e.pauseMu.Unlock()
+					}
+					continue
+				}
+			}
+
 			// Skip-plan routing: when triage set skip_plan=true and the
 			// ticket carries an ExistingPlan, write the plan artifact from
 			// ticket data and mark the phase completed — no LLM call needed.
