@@ -55,6 +55,14 @@ phases:
       - Grep
       - Bash
     timeout: 15m
+    # timeout_overrides: evaluate conditions in order; first match overrides the base timeout.
+    # Conditions use Go text/template syntax. Available fields: .Complexity, .Automatable, .ReworkCycle.
+    # NOTE: use {{ eq .Complexity "small" }}, NOT {{ .Complexity == "small" }} (invalid Go template).
+    # timeout_overrides:
+    #   - condition: '{{ eq .Complexity "small" }}'
+    #     timeout: 10m
+    #   - condition: '{{ eq .Complexity "medium" }}'
+    #     timeout: 20m
     retry:
       transient: 2
       parse: 1
