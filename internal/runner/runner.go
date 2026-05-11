@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"time"
+
+	"github.com/decko/soda/internal/claude"
 )
 
 // Runner executes a single pipeline phase in an isolated session.
@@ -14,17 +16,18 @@ type Runner interface {
 
 // RunOpts holds everything needed to execute one phase.
 type RunOpts struct {
-	Phase        string        // phase name (e.g., "triage", "plan")
-	SystemPrompt string        // rendered system prompt content
-	UserPrompt   string        // rendered user prompt (ticket + artifacts)
-	OutputSchema string        // JSON schema for structured output
-	AllowedTools []string      // tool scoping per phase
-	MaxBudgetUSD float64       // cost cap for this phase
-	WorkDir      string        // working directory for the agent
-	Model        string        // model to use
-	Timeout      time.Duration // phase timeout
-	OnChunk      func(string)  // called for each streamed output line; may be nil
-	ApiKeyHelper string        // path to a script that prints an API key to stdout
+	Phase           string                 // phase name (e.g., "triage", "plan")
+	SystemPrompt    string                 // rendered system prompt content
+	UserPrompt      string                 // rendered user prompt (ticket + artifacts)
+	OutputSchema    string                 // JSON schema for structured output
+	AllowedTools    []string               // tool scoping per phase
+	MaxBudgetUSD    float64                // cost cap for this phase
+	WorkDir         string                 // working directory for the agent
+	Model           string                 // model to use
+	Timeout         time.Duration          // phase timeout
+	OnChunk         func(string)           // called for each streamed output line; may be nil
+	ApiKeyHelper    string                 // path to a script that prints an API key to stdout
+	TranscriptLevel claude.TranscriptLevel // transcript capture level; empty/"off" disables
 }
 
 // RunResult holds the parsed response from a phase execution.
@@ -37,4 +40,5 @@ type RunResult struct {
 	CacheTokensIn int64 // tokens served from prompt cache (0 if unsupported)
 	DurationMs    int64
 	Turns         int
+	Transcript    []claude.TranscriptEntry // filtered transcript entries; nil when capture is disabled
 }

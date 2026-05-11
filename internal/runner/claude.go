@@ -28,11 +28,12 @@ func NewClaudeRunner(binary, model, workDir string) (*ClaudeRunner, error) {
 // Run maps runner.RunOpts to claude.RunOpts, invokes the CLI, and maps the result back.
 func (r *ClaudeRunner) Run(ctx context.Context, opts RunOpts) (*RunResult, error) {
 	claudeOpts := claude.RunOpts{
-		OutputSchema: opts.OutputSchema,
-		AllowedTools: opts.AllowedTools,
-		Prompt:       opts.UserPrompt,
-		Model:        opts.Model,
-		Timeout:      opts.Timeout,
+		OutputSchema:    opts.OutputSchema,
+		AllowedTools:    opts.AllowedTools,
+		Prompt:          opts.UserPrompt,
+		Model:           opts.Model,
+		Timeout:         opts.Timeout,
+		TranscriptLevel: opts.TranscriptLevel,
 	}
 
 	if opts.MaxBudgetUSD > 0 {
@@ -77,6 +78,7 @@ func (r *ClaudeRunner) Run(ctx context.Context, opts RunOpts) (*RunResult, error
 		CacheTokensIn: result.Tokens.CacheCreationInputTokens + result.Tokens.CacheReadInputTokens,
 		DurationMs:    result.Duration.Milliseconds(),
 		Turns:         result.Turns,
+		Transcript:    result.Transcript,
 	}, nil
 }
 
