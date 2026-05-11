@@ -749,6 +749,12 @@ func (e *Engine) pollInterval(polling *PollingConfig, elapsed time.Duration) tim
 func (e *Engine) respondToComments(ctx context.Context, phase PhaseConfig, classified []ClassifiedComment, monState *MonitorState) (*schemas.MonitorOutput, error) {
 	actionableCount := countActionable(classified)
 	replyOnly := isReplyOnly(classified)
+
+	// Resolve timeout once for all rounds in this response cycle.
+	// Avoids re-evaluating condition templates and emitting duplicate
+	// EventPhaseTimeoutResolved events on every round.
+	resolvedTimeout := e.resolvePhaseTimeout(phase)
+
 	e.emit(Event{
 		Phase: phase.Name,
 		Kind:  EventMonitorResponseStarted,
@@ -850,7 +856,7 @@ func (e *Engine) respondToComments(ctx context.Context, phase PhaseConfig, class
 		MaxBudgetUSD: remaining,
 		WorkDir:      e.workDir(phase),
 		Model:        e.config.Model,
-		Timeout:      phase.Timeout.Duration,
+		Timeout:      resolvedTimeout,
 		ApiKeyHelper: e.config.ApiKeyHelper,
 	}
 

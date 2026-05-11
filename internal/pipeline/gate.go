@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"text/template"
+	"time"
 
 	"github.com/decko/soda/schemas"
 )
@@ -232,6 +233,41 @@ func evalPhaseCondition(condition string, data phaseConditionData) (bool, error)
 		return false, nil
 	}
 	return true, nil
+}
+
+// resolvePhaseTimeout evaluates a phase's timeout overrides against the
+// current triage metadata. Overrides are evaluated in declaration order;
+// the first match wins. When no override matches (or TimeoutOverrides is
+// empty), the phase's base Timeout is returned. Template evaluation errors
+// are fail-safe: the erroring override is skipped and evaluation continues
+// to the next one. An EventPhaseTimeoutResolved event is emitted when an
+// override matches so operators can see which timeout was applied.
+func (e *Engine) resolvePhaseTimeout(phase PhaseConfig) time.Duration {
+	if len(phase.TimeoutOverrides) == 0 {
+		return phase.Timeout.Duration
+	}
+	condData := e.readPhaseConditionData()
+	for _, override := range phase.TimeoutOverrides {
+		matches, err := evalPhaseCondition(override.Condition, condData)
+		if err != nil {
+			e.emit(Event{Phase: phase.Name, Kind: EventConditionEvalFallback,
+				Data: map[string]any{"error": err.Error()}})
+			continue // skip erroring override, try next
+		}
+		if matches {
+			data := map[string]any{
+				"resolved_timeout":  override.Timeout.Duration.String(),
+				"matched_condition": override.Condition,
+			}
+			if override.Label != "" {
+				data["label"] = override.Label
+			}
+			e.emit(Event{Phase: phase.Name, Kind: EventPhaseTimeoutResolved,
+				Data: data})
+			return override.Timeout.Duration
+		}
+	}
+	return phase.Timeout.Duration // base fallback
 }
 
 // skipPhaseByCondition marks a phase as completed with an empty artifact

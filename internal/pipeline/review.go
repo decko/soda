@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"text/template"
+	"time"
 
 	"github.com/decko/soda/internal/progress"
 	"github.com/decko/soda/internal/runner"
@@ -215,6 +216,9 @@ func (e *Engine) runParallelReview(ctx context.Context, phase PhaseConfig) error
 		return fmt.Errorf("engine: build prompt data for %s: %w", phase.Name, err)
 	}
 
+	// Resolve timeout before launching goroutines — avoid concurrent Meta() reads.
+	resolvedTimeout := e.resolvePhaseTimeout(phase)
+
 	// Snapshot budget before launching goroutines — avoid concurrent Meta() reads.
 	budgetRemaining := 0.0
 	if e.config.MaxCostUSD > 0 {
@@ -308,7 +312,7 @@ func (e *Engine) runParallelReview(ctx context.Context, phase PhaseConfig) error
 		wg.Add(1)
 		go func(idx int, reviewer ReviewerConfig) {
 			defer wg.Done()
-			e.runReviewer(ctx, phase, reviewer, promptData, budgetRemaining, idx, msgCh)
+			e.runReviewer(ctx, phase, reviewer, promptData, budgetRemaining, resolvedTimeout, idx, msgCh)
 		}(idx, reviewer)
 	}
 
@@ -479,9 +483,9 @@ func (e *Engine) runParallelReview(ctx context.Context, phase PhaseConfig) error
 }
 
 // runReviewer executes a single specialist reviewer, sending events and results
-// through msgCh to avoid concurrent State access. budgetRemaining is a snapshot
-// taken before goroutines launch.
-func (e *Engine) runReviewer(ctx context.Context, phase PhaseConfig, reviewer ReviewerConfig, promptData PromptData, budgetRemaining float64, idx int, msgCh chan<- reviewerMsg) {
+// through msgCh to avoid concurrent State access. budgetRemaining and timeout
+// are snapshots taken before goroutines launch.
+func (e *Engine) runReviewer(ctx context.Context, phase PhaseConfig, reviewer ReviewerConfig, promptData PromptData, budgetRemaining float64, timeout time.Duration, idx int, msgCh chan<- reviewerMsg) {
 	sendEvent := func(evt Event) {
 		msgCh <- reviewerMsg{Event: &evt, Index: idx}
 	}
@@ -584,7 +588,7 @@ func (e *Engine) runReviewer(ctx context.Context, phase PhaseConfig, reviewer Re
 		MaxBudgetUSD: budgetRemaining,
 		WorkDir:      e.workDir(phase),
 		Model:        model,
-		Timeout:      phase.Timeout.Duration,
+		Timeout:      timeout,
 		OnChunk:      onChunk,
 		ApiKeyHelper: e.config.ApiKeyHelper,
 	}
