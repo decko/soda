@@ -919,6 +919,138 @@ func TestLoadPipeline(t *testing.T) {
 	})
 }
 
+func TestLoadPipeline_TimeoutOverrides(t *testing.T) {
+	t.Run("parses_valid_timeout_overrides", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "phases.yaml")
+		content := `phases:
+  - name: implement
+    prompt: prompts/implement.md
+    timeout: 25m
+    timeout_overrides:
+      - condition: '{{ eq .Complexity "high" }}'
+        timeout: 45m
+        label: high-complexity
+      - condition: '{{ eq .Complexity "low" }}'
+        timeout: 10m
+`
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		pipeline, err := LoadPipeline(path)
+		if err != nil {
+			t.Fatalf("LoadPipeline: %v", err)
+		}
+
+		phase := pipeline.Phases[0]
+		if len(phase.TimeoutOverrides) != 2 {
+			t.Fatalf("got %d timeout_overrides, want 2", len(phase.TimeoutOverrides))
+		}
+
+		// First override
+		if phase.TimeoutOverrides[0].Condition != `{{ eq .Complexity "high" }}` {
+			t.Errorf("override[0].Condition = %q", phase.TimeoutOverrides[0].Condition)
+		}
+		if phase.TimeoutOverrides[0].Timeout.Duration != 45*time.Minute {
+			t.Errorf("override[0].Timeout = %v, want 45m", phase.TimeoutOverrides[0].Timeout.Duration)
+		}
+		if phase.TimeoutOverrides[0].Label != "high-complexity" {
+			t.Errorf("override[0].Label = %q, want %q", phase.TimeoutOverrides[0].Label, "high-complexity")
+		}
+
+		// Second override (no label)
+		if phase.TimeoutOverrides[1].Condition != `{{ eq .Complexity "low" }}` {
+			t.Errorf("override[1].Condition = %q", phase.TimeoutOverrides[1].Condition)
+		}
+		if phase.TimeoutOverrides[1].Timeout.Duration != 10*time.Minute {
+			t.Errorf("override[1].Timeout = %v, want 10m", phase.TimeoutOverrides[1].Timeout.Duration)
+		}
+		if phase.TimeoutOverrides[1].Label != "" {
+			t.Errorf("override[1].Label = %q, want empty", phase.TimeoutOverrides[1].Label)
+		}
+	})
+
+	t.Run("no_timeout_overrides_defaults_to_empty", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "phases.yaml")
+		content := `phases:
+  - name: implement
+    prompt: prompts/implement.md
+    timeout: 25m
+`
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		pipeline, err := LoadPipeline(path)
+		if err != nil {
+			t.Fatalf("LoadPipeline: %v", err)
+		}
+
+		if len(pipeline.Phases[0].TimeoutOverrides) != 0 {
+			t.Errorf("got %d timeout_overrides, want 0", len(pipeline.Phases[0].TimeoutOverrides))
+		}
+	})
+
+	t.Run("errors_on_invalid_condition_template", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "phases.yaml")
+		content := `phases:
+  - name: implement
+    prompt: prompts/implement.md
+    timeout: 25m
+    timeout_overrides:
+      - condition: '{{ invalid {{ syntax }}'
+        timeout: 45m
+`
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		_, err := LoadPipeline(path)
+		if err == nil {
+			t.Fatal("expected error for invalid timeout_overrides condition template")
+		}
+		if !strings.Contains(err.Error(), "timeout_overrides[0]") {
+			t.Errorf("error = %q, want mention of timeout_overrides[0]", err)
+		}
+		if !strings.Contains(err.Error(), "invalid condition template") {
+			t.Errorf("error = %q, want mention of invalid condition template", err)
+		}
+		if !strings.Contains(err.Error(), "implement") {
+			t.Errorf("error = %q, want mention of phase name", err)
+		}
+	})
+
+	t.Run("errors_on_empty_condition", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "phases.yaml")
+		content := `phases:
+  - name: implement
+    prompt: prompts/implement.md
+    timeout: 25m
+    timeout_overrides:
+      - condition: ''
+        timeout: 45m
+`
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		_, err := LoadPipeline(path)
+		if err == nil {
+			t.Fatal("expected error for empty timeout_overrides condition")
+		}
+		if !strings.Contains(err.Error(), "empty condition") {
+			t.Errorf("error = %q, want mention of empty condition", err)
+		}
+		if !strings.Contains(err.Error(), "timeout_overrides[0]") {
+			t.Errorf("error = %q, want mention of timeout_overrides[0]", err)
+		}
+	})
+}
+
 func TestIsFilePath(t *testing.T) {
 	tests := []struct {
 		input string
