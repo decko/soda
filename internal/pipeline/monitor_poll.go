@@ -750,10 +750,11 @@ func (e *Engine) respondToComments(ctx context.Context, phase PhaseConfig, class
 	actionableCount := countActionable(classified)
 	replyOnly := isReplyOnly(classified)
 
-	// Resolve timeout once for all rounds in this response cycle.
+	// Resolve timeout and model once for all rounds in this response cycle.
 	// Avoids re-evaluating condition templates and emitting duplicate
-	// EventPhaseTimeoutResolved events on every round.
+	// EventPhaseTimeoutResolved / EventPhaseModelResolved events on every round.
 	resolvedTimeout := e.resolvePhaseTimeout(phase)
+	resolvedModel := e.resolvePhaseModel(phase)
 
 	e.emit(Event{
 		Phase: phase.Name,
@@ -855,7 +856,7 @@ func (e *Engine) respondToComments(ctx context.Context, phase PhaseConfig, class
 		AllowedTools: tools,
 		MaxBudgetUSD: remaining,
 		WorkDir:      e.workDir(phase),
-		Model:        e.config.Model,
+		Model:        resolvedModel,
 		Timeout:      resolvedTimeout,
 		ApiKeyHelper: e.config.ApiKeyHelper,
 	}
