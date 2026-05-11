@@ -235,6 +235,32 @@ func evalPhaseCondition(condition string, data phaseConditionData) (bool, error)
 	return true, nil
 }
 
+// resolvePhaseTimeout evaluates a phase's timeout overrides against the
+// given condition data and returns the effective timeout. Overrides are
+// evaluated in declaration order; the first match wins. When no override
+// matches, the phase's default Timeout is returned. Template evaluation
+// errors are fail-safe: the override is skipped and evaluation continues
+// to the next override (or falls through to the default).
+//
+// Returns (effective timeout, matched label, true) when an override matched,
+// or (default timeout, "", false) when no override matched.
+func resolvePhaseTimeout(phase PhaseConfig, data phaseConditionData) (time.Duration, string, bool) {
+	for _, override := range phase.TimeoutOverrides {
+		shouldApply, err := evalPhaseCondition(override.Condition, data)
+		if err != nil {
+			// Fail-safe: skip this override on template error.
+			continue
+		}
+		if shouldApply {
+			label := override.Label
+			if label == "" {
+				label = override.Condition
+			}
+			return override.Timeout.Duration, label, true
+		}
+	}
+	return phase.Timeout.Duration, "", false
+}
 
 // skipPhaseByCondition marks a phase as completed with an empty artifact
 // so downstream dependency checks and shouldSkip work correctly, then
