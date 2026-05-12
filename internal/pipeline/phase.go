@@ -23,10 +23,17 @@ func isFilePath(s string) bool {
 	return strings.ContainsAny(s, "/\\") || strings.HasSuffix(s, ".json")
 }
 
+// ModelRoutingConfig holds configuration for automatic model escalation
+// when parse failures exceed a threshold during retry loops.
+type ModelRoutingConfig struct {
+	FallbackThreshold int `yaml:"fallback_threshold"` // number of parse failures before escalating to global model; 0 disables
+}
+
 // PhasePipeline holds the ordered list of phases loaded from phases.yaml.
 type PhasePipeline struct {
-	Name   string        `yaml:"-"` // pipeline name; set after loading (e.g. "default", "fast")
-	Phases []PhaseConfig `yaml:"phases"`
+	Name         string             `yaml:"-"` // pipeline name; set after loading (e.g. "default", "fast")
+	Phases       []PhaseConfig      `yaml:"phases"`
+	ModelRouting ModelRoutingConfig `yaml:"model_routing"` // optional model routing quality gate
 }
 
 // PhaseConfig holds the configuration for a single phase.

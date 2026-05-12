@@ -469,6 +469,105 @@ func TestAccumulateTokens(t *testing.T) {
 	})
 }
 
+func TestMarkRunning_ZeroesParseTrackingFields(t *testing.T) {
+	dir := t.TempDir()
+	state, _ := LoadOrCreate(dir, "T-PARSE-ZERO")
+
+	state.MarkRunning("triage")
+	state.RecordModelUsed("triage", "claude-sonnet-4-6")
+	state.AccumulateParseAttempt("triage")
+	state.RecordParseFirstSuccess("triage")
+	state.MarkCompleted("triage")
+
+	// Verify fields are set before re-run.
+	ps := state.meta.Phases["triage"]
+	if ps.ModelUsed != "claude-sonnet-4-6" {
+		t.Errorf("ModelUsed before rerun = %q, want %q", ps.ModelUsed, "claude-sonnet-4-6")
+	}
+	if ps.ParseAttempts != 1 {
+		t.Errorf("ParseAttempts before rerun = %d, want 1", ps.ParseAttempts)
+	}
+	if !ps.ParseSuccessOnFirst {
+		t.Error("ParseSuccessOnFirst before rerun = false, want true")
+	}
+
+	// Re-run should clear all three fields.
+	state.MarkRunning("triage")
+
+	ps = state.meta.Phases["triage"]
+	if ps.ModelUsed != "" {
+		t.Errorf("ModelUsed after rerun = %q, want empty", ps.ModelUsed)
+	}
+	if ps.ParseAttempts != 0 {
+		t.Errorf("ParseAttempts after rerun = %d, want 0", ps.ParseAttempts)
+	}
+	if ps.ParseSuccessOnFirst {
+		t.Error("ParseSuccessOnFirst after rerun = true, want false")
+	}
+}
+
+func TestRecordModelUsed(t *testing.T) {
+	dir := t.TempDir()
+	state, _ := LoadOrCreate(dir, "T-MODEL")
+
+	state.MarkRunning("plan")
+	if err := state.RecordModelUsed("plan", "claude-opus-4-6"); err != nil {
+		t.Fatalf("RecordModelUsed: %v", err)
+	}
+
+	ps := state.meta.Phases["plan"]
+	if ps.ModelUsed != "claude-opus-4-6" {
+		t.Errorf("ModelUsed = %q, want %q", ps.ModelUsed, "claude-opus-4-6")
+	}
+
+	// Error on unstarted phase.
+	err := state.RecordModelUsed("nonexistent", "model")
+	if err == nil {
+		t.Fatal("expected error for unstarted phase")
+	}
+}
+
+func TestAccumulateParseAttempt(t *testing.T) {
+	dir := t.TempDir()
+	state, _ := LoadOrCreate(dir, "T-PARSEATTEMPT")
+
+	state.MarkRunning("implement")
+	state.AccumulateParseAttempt("implement")
+	state.AccumulateParseAttempt("implement")
+
+	ps := state.meta.Phases["implement"]
+	if ps.ParseAttempts != 2 {
+		t.Errorf("ParseAttempts = %d, want 2", ps.ParseAttempts)
+	}
+
+	// Error on unstarted phase.
+	err := state.AccumulateParseAttempt("nonexistent")
+	if err == nil {
+		t.Fatal("expected error for unstarted phase")
+	}
+}
+
+func TestRecordParseFirstSuccess(t *testing.T) {
+	dir := t.TempDir()
+	state, _ := LoadOrCreate(dir, "T-PARSEFIRST")
+
+	state.MarkRunning("verify")
+	if err := state.RecordParseFirstSuccess("verify"); err != nil {
+		t.Fatalf("RecordParseFirstSuccess: %v", err)
+	}
+
+	ps := state.meta.Phases["verify"]
+	if !ps.ParseSuccessOnFirst {
+		t.Error("ParseSuccessOnFirst = false, want true")
+	}
+
+	// Error on unstarted phase.
+	err := state.RecordParseFirstSuccess("nonexistent")
+	if err == nil {
+		t.Fatal("expected error for unstarted phase")
+	}
+}
+
 func TestWriteReadArtifact(t *testing.T) {
 	dir := t.TempDir()
 	state, _ := LoadOrCreate(dir, "T-1")

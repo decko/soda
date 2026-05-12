@@ -18,6 +18,7 @@ func (e *Engine) runWithRetry(ctx context.Context, phase PhaseConfig, opts runne
 		"semantic":  phase.Retry.Semantic,
 	}
 
+	parseFailures := 0
 	attempt := 0
 	for {
 		if err := e.apiSem.Acquire(ctx); err != nil {
@@ -27,6 +28,10 @@ func (e *Engine) runWithRetry(ctx context.Context, phase PhaseConfig, opts runne
 		e.apiSem.Release()
 
 		if err == nil {
+			// Record first-attempt parse success when attempt is 0.
+			if attempt == 0 {
+				_ = e.state.RecordParseFirstSuccess(phase.Name)
+			}
 			return result, nil
 		}
 
@@ -58,6 +63,28 @@ func (e *Engine) runWithRetry(ctx context.Context, phase PhaseConfig, opts runne
 			})
 
 		case "parse":
+			_ = e.state.AccumulateParseAttempt(phase.Name)
+			parseFailures++
+
+			// Model escalation: when parse failures exceed the threshold
+			// and the phase is using a per-phase model (not already the
+			// global model), switch to the global model mid-retry.
+			threshold := e.config.Pipeline.ModelRouting.FallbackThreshold
+			if threshold > 0 && parseFailures >= threshold && opts.Model != e.config.Model {
+				previousModel := opts.Model
+				opts.Model = e.config.Model
+				_ = e.state.RecordModelUsed(phase.Name, opts.Model)
+				e.emit(Event{
+					Phase: phase.Name,
+					Kind:  EventModelFallback,
+					Data: map[string]any{
+						"from":           previousModel,
+						"to":             e.config.Model,
+						"parse_failures": parseFailures,
+					},
+				})
+			}
+
 			var pe *runner.ParseError
 			if errors.As(err, &pe) {
 				opts.UserPrompt = opts.UserPrompt + "\n\n[RETRY] Previous attempt failed with parse error: " + pe.Error() + "\nPlease fix the output format."

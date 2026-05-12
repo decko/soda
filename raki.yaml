@@ -1,2 +1,17 @@
 sessions:
   path: .soda
+
+# metrics: per-model parse quality tracking for model routing decisions.
+# These metrics are derived from PhaseState fields (ModelUsed,
+# ParseAttempts, ParseSuccessOnFirst) persisted in meta.json.
+metrics:
+  - name: model_parse_success_rate
+    description: "Fraction of phases where the output parsed on the first attempt, grouped by model"
+    type: gauge
+    labels:
+      - model_used
+  - name: model_parse_failure_count
+    description: "Total parse retry attempts across all phases, grouped by model"
+    type: counter
+    labels:
+      - model_used
