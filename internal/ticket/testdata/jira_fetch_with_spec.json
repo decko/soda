@@ -1,0 +1,19 @@
+{
+  "issues": [
+    {
+      "key": "PROJ-50",
+      "id": "10050",
+      "fields": {
+        "summary": "Epic with custom spec and plan fields",
+        "description": "Overview of the epic.\n\n<!-- spec:start -->\nSpec from description markers.\n<!-- spec:end -->\n\nMore text.\n\n<!-- plan:start -->\nPlan from description markers.\n<!-- plan:end -->",
+        "issuetype": {"name": "Epic", "id": "10000"},
+        "priority": {"name": "Medium", "id": "3"},
+        "status": {"name": "Open", "id": "1"},
+        "labels": ["epic", "planning"],
+        "customfield_10050": "Spec from custom field.",
+        "customfield_10051": "Plan from custom field."
+      }
+    }
+  ],
+  "count": 1
+}

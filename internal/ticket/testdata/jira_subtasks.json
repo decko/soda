@@ -1,0 +1,40 @@
+{
+  "issues": [
+    {
+      "key": "EPIC-20",
+      "id": "10020",
+      "fields": {
+        "summary": "Epic with subtasks",
+        "description": "Parent epic for authentication work.",
+        "issuetype": {"name": "Epic", "id": "10000"},
+        "priority": {"name": "High", "id": "2"},
+        "status": {"name": "In Progress", "id": "3"},
+        "labels": ["epic"],
+        "subtasks": [
+          {
+            "key": "PROJ-21",
+            "fields": {
+              "summary": "Design authentication flow",
+              "status": {"name": "Done"}
+            }
+          },
+          {
+            "key": "PROJ-22",
+            "fields": {
+              "summary": "Implement login endpoint",
+              "status": {"name": "In Progress"}
+            }
+          },
+          {
+            "key": "PROJ-23",
+            "fields": {
+              "summary": "Add session expiry logic",
+              "status": {"name": "To Do"}
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "count": 1
+}
