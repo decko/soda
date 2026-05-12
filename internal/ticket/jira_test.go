@@ -3,6 +3,7 @@ package ticket
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -381,6 +382,84 @@ func TestJiraSource_Fetch_ADFDescription(t *testing.T) {
 		if !strings.Contains(ticket.Description, want) {
 			t.Errorf("Description missing %q: got %q", want, ticket.Description)
 		}
+	}
+}
+
+func TestJiraSource_Fetch_InvalidJSON(t *testing.T) {
+	t.Setenv("MOCK_MCP_FIXTURE", "jira_invalid.json")
+
+	source, err := NewJiraSource(JiraConfig{Command: mockBinary(t)})
+	if err != nil {
+		t.Fatalf("NewJiraSource: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	_, err = source.Fetch(ctx, "PROJ-BAD")
+	if err == nil {
+		t.Fatal("Fetch should fail for invalid JSON response")
+	}
+	if !strings.Contains(err.Error(), "parse") {
+		t.Errorf("error = %q, want it to contain %q", err.Error(), "parse")
+	}
+}
+
+func TestJiraSource_Fetch_NullFields(t *testing.T) {
+	t.Setenv("MOCK_MCP_FIXTURE", "jira_fetch_null_fields.json")
+
+	source, err := NewJiraSource(JiraConfig{Command: mockBinary(t)})
+	if err != nil {
+		t.Fatalf("NewJiraSource: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	ticket, err := source.Fetch(ctx, "PROJ-99")
+	if err != nil {
+		t.Fatalf("Fetch should not fail for null fields: %v", err)
+	}
+
+	if ticket.Key != "PROJ-99" {
+		t.Errorf("Key = %q, want %q", ticket.Key, "PROJ-99")
+	}
+	if ticket.Summary != "" {
+		t.Errorf("Summary = %q, want empty", ticket.Summary)
+	}
+	if ticket.RawFields != nil {
+		t.Errorf("RawFields = %v, want nil", ticket.RawFields)
+	}
+}
+
+func TestJiraSource_Integration(t *testing.T) {
+	jiraURL := os.Getenv("JIRA_TEST_URL")
+	if jiraURL == "" {
+		t.Skip("JIRA_TEST_URL not set; skipping integration test")
+	}
+
+	if _, lookErr := exec.LookPath("wtmcp"); lookErr != nil {
+		t.Skip("wtmcp binary not found; skipping integration test")
+	}
+
+	source, err := NewJiraSource(JiraConfig{Command: "wtmcp"})
+	if err != nil {
+		t.Fatalf("NewJiraSource: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	ticket, err := source.Fetch(ctx, jiraURL)
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+
+	if ticket.Key == "" {
+		t.Error("Key is empty")
+	}
+	if ticket.Summary == "" {
+		t.Error("Summary is empty")
 	}
 }
 
