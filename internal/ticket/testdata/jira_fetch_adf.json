@@ -1,0 +1,41 @@
+{
+  "issues": [
+    {
+      "key": "PROJ-55",
+      "id": "10055",
+      "fields": {
+        "summary": "Ticket with ADF description",
+        "description": {
+          "version": 1,
+          "type": "doc",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [
+                {"type": "text", "text": "First paragraph text."}
+              ]
+            },
+            {
+              "type": "heading",
+              "attrs": {"level": 2},
+              "content": [
+                {"type": "text", "text": "Section Heading"}
+              ]
+            },
+            {
+              "type": "paragraph",
+              "content": [
+                {"type": "text", "text": "Second paragraph text."}
+              ]
+            }
+          ]
+        },
+        "issuetype": {"name": "Task", "id": "10002"},
+        "priority": {"name": "Low", "id": "4"},
+        "status": {"name": "Open", "id": "1"},
+        "labels": ["cloud"]
+      }
+    }
+  ],
+  "count": 1
+}
