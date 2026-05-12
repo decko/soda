@@ -89,7 +89,7 @@ func extractDisplayText(line []byte) string {
 // tool_result events pass. At TranscriptFull, all assistant and user events
 // pass. System and result events are always excluded.
 func shouldPersist(line []byte, level TranscriptLevel) bool {
-	if level == TranscriptOff {
+	if level == TranscriptOff || level == "" {
 		return false
 	}
 
@@ -215,7 +215,7 @@ func extractToolResultContent(raw json.RawMessage) string {
 // transcript entries filtered by the given level. This is used by the sandbox
 // runner which buffers stdout and processes it after the subprocess exits.
 func FilterTranscript(output []byte, level TranscriptLevel) []TranscriptEntry {
-	if level == TranscriptOff {
+	if level == TranscriptOff || level == "" {
 		return nil
 	}
 

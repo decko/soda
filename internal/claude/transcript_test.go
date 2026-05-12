@@ -94,6 +94,10 @@ func TestShouldPersist(t *testing.T) {
 		{"full_system", systemEvent, TranscriptFull, false},
 		{"full_result", resultEvent, TranscriptFull, false},
 
+		// Empty level (zero value) treated as off
+		{"empty_level_assistant", assistantText, "", false},
+		{"empty_level_tool", assistantTool, "", false},
+
 		// Invalid JSON
 		{"invalid_json", "not json", TranscriptFull, false},
 	}
@@ -268,6 +272,13 @@ func TestFilterTranscript(t *testing.T) {
 		entries := FilterTranscript([]byte{}, TranscriptFull)
 		if len(entries) != 0 {
 			t.Errorf("expected 0 entries for empty input, got %d", len(entries))
+		}
+	})
+
+	t.Run("empty_level_returns_nil", func(t *testing.T) {
+		entries := FilterTranscript(data, "")
+		if entries != nil {
+			t.Errorf("empty level should return nil, got %d entries", len(entries))
 		}
 	})
 }
