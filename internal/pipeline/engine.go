@@ -189,6 +189,32 @@ func (e *Engine) checkBinaryVersion() {
 	}
 }
 
+// populateTriageComplexity reads the triage result and sets meta.Complexity
+// from the triage output's complexity field. It is called at end-of-run so
+// that the cost ledger entry always includes the correct band, regardless
+// of success or failure. Returns the final complexity value.
+func (e *Engine) populateTriageComplexity() string {
+	if e.state.Meta().Complexity != "" {
+		return e.state.Meta().Complexity
+	}
+	raw, err := e.state.ReadResult("triage")
+	if err != nil {
+		return ""
+	}
+	var parsed struct {
+		Complexity string `json:"complexity"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return ""
+	}
+	if parsed.Complexity == "" {
+		return ""
+	}
+	e.state.Meta().Complexity = parsed.Complexity
+	_ = e.state.flushMeta() // non-fatal; best-effort persistence
+	return parsed.Complexity
+}
+
 // ensureWorktree creates a worktree if one hasn't been created yet and
 // WorktreeBase is configured. Called at the start of Run and Resume so
 // every phase executes inside the worktree.
@@ -277,6 +303,7 @@ func (e *Engine) Run(ctx context.Context) error {
 	}
 
 	if err := e.executePhases(ctx, e.config.Pipeline.Phases, false); err != nil {
+		e.populateTriageComplexity()
 		wrapped := e.wrapTimeoutError(ctx, err)
 		var pte *PipelineTimeoutError
 		if !errors.As(wrapped, &pte) {
@@ -286,7 +313,16 @@ func (e *Engine) Run(ctx context.Context) error {
 		return wrapped
 	}
 
-	e.emit(Event{Kind: EventEngineCompleted})
+	complexity := e.populateTriageComplexity()
+	completedData := map[string]any{}
+	if complexity != "" {
+		completedData["complexity"] = complexity
+	}
+	if len(completedData) > 0 {
+		e.emit(Event{Kind: EventEngineCompleted, Data: completedData})
+	} else {
+		e.emit(Event{Kind: EventEngineCompleted})
+	}
 	e.sendNotification(nil)
 	return nil
 }
@@ -355,6 +391,7 @@ func (e *Engine) Resume(ctx context.Context, fromPhase string) error {
 	// The fromPhase (first in slice) is always re-run, even if completed.
 	// Mark it with forceFirst=true so executePhases skips the shouldSkip check.
 	if err := e.executePhases(ctx, e.config.Pipeline.Phases[startIdx:], true); err != nil {
+		e.populateTriageComplexity()
 		wrapped := e.wrapTimeoutError(ctx, err)
 		var pte *PipelineTimeoutError
 		if !errors.As(wrapped, &pte) {
@@ -364,7 +401,16 @@ func (e *Engine) Resume(ctx context.Context, fromPhase string) error {
 		return wrapped
 	}
 
-	e.emit(Event{Kind: EventEngineCompleted})
+	complexity := e.populateTriageComplexity()
+	completedData := map[string]any{}
+	if complexity != "" {
+		completedData["complexity"] = complexity
+	}
+	if len(completedData) > 0 {
+		e.emit(Event{Kind: EventEngineCompleted, Data: completedData})
+	} else {
+		e.emit(Event{Kind: EventEngineCompleted})
+	}
 	e.sendNotification(nil)
 	return nil
 }
