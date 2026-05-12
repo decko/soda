@@ -192,6 +192,24 @@ func transientSuggestion(err error) string {
 	return transientSuggestionCatalog[te.Reason]
 }
 
+// SchemaVersionMismatchError is returned when a stored phase artifact has a
+// _schema_version that differs from the current schema version, indicating
+// the artifact was produced with an older (or newer) schema definition.
+type SchemaVersionMismatchError struct {
+	Phase          string
+	StoredVersion  string // empty when old artifact lacks _schema_version
+	CurrentVersion string
+}
+
+func (e *SchemaVersionMismatchError) Error() string {
+	if e.StoredVersion == "" {
+		return fmt.Sprintf("engine: phase %s artifact has no schema version (current: %s)",
+			e.Phase, e.CurrentVersion)
+	}
+	return fmt.Sprintf("engine: phase %s schema version mismatch: stored %s, current %s",
+		e.Phase, e.StoredVersion, e.CurrentVersion)
+}
+
 // reworkFinding is a minimal finding type used by reworkSignal for error
 // message context. It carries only the fields needed to describe rework
 // issues (severity + issue text), decoupled from schemas.ReviewFinding
