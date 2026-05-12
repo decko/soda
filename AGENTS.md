@@ -23,7 +23,7 @@ soda (Go CLI/TUI)
        ├── Network namespace (Unix sockets only)
        ├── cgroup resource limits (memory, CPU, PIDs)
        ├── seccomp syscall filter
-       └── claude --print --bare --output-format json --json-schema ...
+       └── claude --print --bare --output-format stream-json --json-schema ...
 ```
 
 ## Pipeline phases
@@ -283,7 +283,7 @@ soda/
 Every phase invokes Claude Code with these flags:
 
 ```
-claude --print --bare --output-format json --json-schema <schema> \
+claude --print --bare --output-format stream-json --json-schema <schema> \
        --system-prompt-file <prompt> --model <model> \
        [--max-budget-usd <budget>] --permission-mode bypassPermissions
 ```
@@ -292,7 +292,7 @@ claude --print --bare --output-format json --json-schema <schema> \
 |------|-----|
 | `--print` | Non-interactive, exit after response |
 | `--bare` | No auto-discovery of CLAUDE.md, plugins, hooks, MCP. SODA controls the full context window. |
-| `--output-format json` | Structured response with `structured_output`, `total_cost_usd`, `usage`, `duration_ms` |
+| `--output-format stream-json` | JSONL per event (enables transcript capture); last line is the result envelope with `structured_output`, `total_cost_usd`, `usage`, `duration_ms` |
 | `--json-schema` | Enforce structured output. CLI validates against schema. No regex parsing needed. |
 | `--system-prompt-file` | Phase role + context as system prompt from file |
 | `--max-budget-usd` | Hard cost cap per phase (omitted when no budget configured) |
