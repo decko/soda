@@ -25,7 +25,7 @@ sandbox:
 # Budget
 limits:
   max_cost_per_ticket: 25.00
-  max_cost_per_phase: 8.00
+  max_cost_per_phase: 12.00
 
 # Worktrees
 worktree_dir: .worktrees
@@ -59,3 +59,12 @@ repos:
       - ai-assisted
     trailers:
       - "Assisted-by: SODA"
+
+# Convention checklist — injected into implement prompts (#475)
+convention_checklist: |
+  - Errors: wrap with fmt.Errorf("context: %w", err), never discard
+  - Interfaces: define at consumer, not producer; keep minimal
+  - Variables: no single-char names; use descriptive names in loops
+  - Tests: functional over mocks, table-driven, TDD (write tests first)
+  - Formatting: gofmt only (no extra flags)
+  - Commits: one logical change per commit, reference ticket key

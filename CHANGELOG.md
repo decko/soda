@@ -7,18 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] — "Adaptive Pipeline" - 2026-05-12
+
+### Added
+
+#### Adaptive pipeline execution
+- **Conditional phase execution** (#357) — `Condition` field on `PhaseConfig` using Go
+  templates evaluated against triage data. Phases skip when condition is false. Corrective
+  phases bypass condition evaluation during rework routing to prevent silently skipping
+  verify failure fixes.
+- **Adaptive phase timeouts** (#358) — `TimeoutOverrides` on `PhaseConfig` with
+  condition-based timeout selection. First matching override wins; unmatched falls back to
+  base timeout. `EventPhaseTimeoutResolved` event emitted when an override matches.
+- **Model routing by triage complexity** (#378) — `ModelOverrides` on `PhaseConfig` with
+  condition-based model selection. Enables cost-aware routing: Sonnet for trivial tickets,
+  Opus for complex.
+
+#### Context injection improvements
+- **Severity-prioritized rework snippets** (#474) — review findings sorted by severity
+  (critical first) before budget allocation. Per-finding caps (10KB critical, 5KB major)
+  and severity-based fallback context windows (±15/±10/±5 lines). Line-centered snippet
+  extraction with `capToLine` helper for UTF-8 rune-safe truncation.
+- **Convention checklist** (#475) — `convention_checklist` config field in `soda.yaml`,
+  wired into `PromptData.Context.RepoConventions`. Split `fitToBudget` context step so
+  conventions are shed last (after ProjectContext/Gotchas). `soda validate` checks size
+  limit (2000 bytes). `soda render-prompt` now populates ContextData for accurate previews.
+- **Package exemplar injection** (#476) — detect new files via `git show` against base
+  branch, find existing Go files in the same package, extract function signatures, and
+  inject as `PackageExemplars` in implement prompts. Symlink-safe path traversal, budget-
+  capped accumulation, generated file exclusion.
+
+#### Review cost optimization
+- **Conditional reviewer execution** (#468) — `Condition` field on `ReviewerConfig`.
+  Default config skips ai-harness reviewer for low-complexity tickets. Carry forward prior
+  findings for condition-skipped reviewers to preserve verdict accuracy.
+- **VerifyClean prompt gating** (#468) — `VerifyClean` field on `PromptData` set when
+  verify passes on first attempt. Review prompts gate test-gap and schema-alignment
+  sections on this flag, reducing review scope for clean implementations.
+
 ### Changed
 
-- **go-arapuca upgraded v0.1.1 → v0.2.0** — switches from vendored static library
-  (git-lfs, permanently broken in Go module proxy) to `pkg-config` build. The sandbox
-  binary is now built from source via the `arapuca` Rust crate. End-user binaries remain
-  fully self-contained (static linking).
-- **CI: replaced LFS fetch workaround** with `make install` from arapuca source in all
-  workflows (release, nightly, CI). Sandbox builds now succeed reliably.
-- **Release workflow**: uploads assets to existing releases (supports manual creation
-  with milestone titles), adds linux-amd64 non-sandbox binary to matrix.
+- **engine.go decomposition round 2** (#473) — engine.go reduced from ~2,800 to ~922
+  lines. Review orchestration, feedback construction, and gating logic extracted to
+  `review.go`, `feedback.go`, `gate.go`.
+- **Config renamed** to `soda.yaml` (#465). Sonnet as default model, Opus for implement
+  and review only.
+- **Per-phase budget limit** bumped from $8.00 to $12.00 — $8.00 was too tight for
+  medium-complexity tickets with rework cycles.
 
-## [0.3.0] — "Right-Sized" - 2026-04-28
+### Fixed
+
+- **Vertex global region** (#471) — `CLOUD_ML_REGION=global` doesn't host model endpoints.
+  Proxy upstream and `claudeEnv` now fall back to `us-east5`. Added `~/.config/gcloud/` and
+  `~/.claude/` to sandbox read paths for ADC and settings.
+- **Schema enum constraints** (#472) — `TriageOutput.Complexity` and routing fields now
+  have proper enum validation in generated JSON schemas.
+
+## [0.3.3] — "Right-Sized" - 2026-04-28
 
 ### Added
 
