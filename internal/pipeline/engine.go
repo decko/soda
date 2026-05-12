@@ -805,6 +805,12 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 	// Resolve effective model: evaluate model_overrides (first-match wins) before falling back to phase then global.
 	model := e.resolvePhaseModel(phase)
 
+	// Record the resolved model in phase state for quality tracking.
+	// Non-fatal: quality tracking must not block pipeline execution.
+	if err := e.state.RecordModelUsed(phase.Name, model); err != nil {
+		fmt.Fprintf(e.config.Stderr, "engine: warning: failed to record model used for %s: %v\n", phase.Name, err)
+	}
+
 	// Resolve effective timeout: evaluate timeout_overrides (first-match wins)
 	// before falling back to the phase default.
 	resolvedTimeout := e.resolvePhaseTimeout(phase)

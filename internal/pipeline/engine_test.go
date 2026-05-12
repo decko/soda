@@ -7043,3 +7043,121 @@ func TestEngine_ComplexityPreservedOnResume(t *testing.T) {
 		t.Error("engine_completed event missing complexity on resume")
 	}
 }
+
+func TestEngine_ModelUsedRecordedInMeta(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Model:  "claude-sonnet-4-6",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "plan",
+			Prompt:    "plan.md",
+			DependsOn: []string{"triage"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			// no per-phase model — should record global model
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
+					RawText: "Triage output",
+					CostUSD: 0.10,
+				},
+			}},
+			"plan": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tasks":["task1"]}`),
+					RawText: "Plan output",
+					CostUSD: 0.20,
+				},
+			}},
+		},
+	}
+
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.Model = "claude-opus-4-6"
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// triage has per-phase model — ModelUsed should record it.
+	triagePS := state.Meta().Phases["triage"]
+	if triagePS == nil {
+		t.Fatal("triage phase missing from meta")
+	}
+	if triagePS.ModelUsed != "claude-sonnet-4-6" {
+		t.Errorf("triage ModelUsed = %q, want %q", triagePS.ModelUsed, "claude-sonnet-4-6")
+	}
+
+	// plan has no per-phase model — ModelUsed should record global model.
+	planPS := state.Meta().Phases["plan"]
+	if planPS == nil {
+		t.Fatal("plan phase missing from meta")
+	}
+	if planPS.ModelUsed != "claude-opus-4-6" {
+		t.Errorf("plan ModelUsed = %q, want %q", planPS.ModelUsed, "claude-opus-4-6")
+	}
+}
+
+func TestEngine_ModelUsedClearedOnRerun(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Model:  "claude-sonnet-4-6",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
+					RawText: "Triage output",
+					CostUSD: 0.10,
+				}},
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
+					RawText: "Triage output 2",
+					CostUSD: 0.10,
+				}},
+			},
+		},
+	}
+
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.Model = "claude-opus-4-6"
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	ps := state.Meta().Phases["triage"]
+	if ps.ModelUsed != "claude-sonnet-4-6" {
+		t.Errorf("ModelUsed after first run = %q, want %q", ps.ModelUsed, "claude-sonnet-4-6")
+	}
+
+	// Resume (re-run) triage — MarkRunning should clear ModelUsed,
+	// then runPhase should re-record it.
+	if err := engine.Resume(context.Background(), "triage"); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+
+	ps = state.Meta().Phases["triage"]
+	if ps.ModelUsed != "claude-sonnet-4-6" {
+		t.Errorf("ModelUsed after resume = %q, want %q", ps.ModelUsed, "claude-sonnet-4-6")
+	}
+	if ps.Generation != 2 {
+		t.Errorf("Generation after resume = %d, want 2", ps.Generation)
+	}
+}
