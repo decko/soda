@@ -361,6 +361,11 @@ func (e *Engine) Resume(ctx context.Context, fromPhase string) error {
 	// Check binary version for staleness detection on resume.
 	e.checkBinaryVersion()
 
+	// Validate schema versions of completed upstream phases.
+	if err := e.checkSchemaVersions(fromPhase); err != nil {
+		return err
+	}
+
 	// Cache ticket summary in meta for soda sessions/history display.
 	if e.state.Meta().Summary == "" && e.config.Ticket.Summary != "" {
 		e.state.Meta().Summary = e.config.Ticket.Summary
