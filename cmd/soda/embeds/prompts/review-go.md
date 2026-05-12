@@ -36,6 +36,26 @@ Summary: {{.Ticket.Summary}}
 
 Worktree: {{.WorktreePath}}
 Branch: {{.Branch}}
+{{- if .Diff}}
+
+## Changed Files
+
+The following diff shows all changes introduced in this branch. Focus your review on lines that were added or modified. Do not report issues in unchanged code.
+
+```diff
+{{.Diff}}
+```
+{{- end}}
+{{- if .PriorFindings}}
+
+## Previously Addressed Findings
+
+The following issues were raised in a previous review and have been addressed. Do NOT re-report these or variations of the same issues.
+
+{{- range .PriorFindings}}
+- [{{.Severity}}] {{.File}}{{if .Line}}:{{.Line}}{{end}} — {{.Issue}}
+{{- end}}
+{{- end}}
 
 ## Your Task
 
@@ -71,7 +91,17 @@ Review the implementation as a Go specialist. Focus on:
 - Are boundary conditions handled?
 - Is input validation adequate?
 
+{{- if .Diff}}
+Focus your review on the changed files shown in the diff above. Only report findings in lines that were added or modified. Read the actual code in the worktree for full context.
+{{- else}}
 Read the actual code in the worktree. Do not rely solely on the implementation report.
+{{- end}}
+
+## Severity definitions
+
+- **critical**: Will cause runtime failures, data corruption, or security vulnerabilities in production
+- **major**: Functional bug that affects correctness under realistic usage, or a missing test for core acceptance criteria
+- **minor**: Style, naming, documentation, performance nits, or improvements that don't affect correctness
 
 For each issue found, provide:
 - severity: "critical", "major", or "minor"
