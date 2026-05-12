@@ -3,6 +3,12 @@
 # Each phase defines: prompt template, output schema, tool scope,
 # timeout, retry policy, and dependencies on previous phase artifacts.
 
+# model_routing: optional quality gate for automatic model escalation.
+# When a per-phase model produces repeated parse failures exceeding
+# fallback_threshold, the engine switches to the global model mid-retry.
+# model_routing:
+#   fallback_threshold: 2  # escalate after 2 consecutive parse failures
+
 phases:
   - name: triage
     prompt: prompts/triage.md
