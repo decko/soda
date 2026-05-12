@@ -74,6 +74,7 @@ type EngineConfig struct {
 	MergeLabels             []string          // required PR labels before auto-merge proceeds
 	AutoMergeTimeout        time.Duration     // max wait after approval before giving up; defaults to 30m
 	TranscriptLevel         transcript.Level  // transcript capture level; empty/"off" disables
+	Force                   bool              // when true, schema version mismatches warn instead of blocking resume
 }
 
 // TokenBudgetConfig configures the prompt-size estimation check.
