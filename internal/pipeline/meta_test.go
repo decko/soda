@@ -572,6 +572,147 @@ func TestMetaComplexityOmitEmpty(t *testing.T) {
 	}
 }
 
+func TestMetaModelUsedRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "meta.json")
+
+	original := &PipelineMeta{
+		Ticket:    "PROJ-385",
+		StartedAt: time.Now().Truncate(time.Second),
+		Phases: map[string]*PhaseState{
+			"triage": {
+				Status:     PhaseCompleted,
+				Cost:       0.10,
+				DurationMs: 5000,
+				Generation: 1,
+				ModelUsed:  "claude-sonnet-4-6",
+			},
+		},
+	}
+
+	if err := WriteMeta(path, original); err != nil {
+		t.Fatalf("writeMeta: %v", err)
+	}
+
+	loaded, err := ReadMeta(path)
+	if err != nil {
+		t.Fatalf("ReadMeta: %v", err)
+	}
+
+	ps := loaded.Phases["triage"]
+	if ps == nil {
+		t.Fatal("triage phase missing")
+	}
+	if ps.ModelUsed != "claude-sonnet-4-6" {
+		t.Errorf("ModelUsed = %q, want %q", ps.ModelUsed, "claude-sonnet-4-6")
+	}
+}
+
+func TestMetaModelUsedOmitEmpty(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "meta.json")
+
+	original := &PipelineMeta{
+		Ticket:    "PROJ-385",
+		StartedAt: time.Now().Truncate(time.Second),
+		Phases: map[string]*PhaseState{
+			"triage": {
+				Status:     PhaseCompleted,
+				Cost:       0.10,
+				DurationMs: 5000,
+				Generation: 1,
+			},
+		},
+	}
+
+	if err := WriteMeta(path, original); err != nil {
+		t.Fatalf("writeMeta: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+
+	if strings.Contains(string(data), "model_used") {
+		t.Errorf("meta.json should omit model_used when empty, got:\n%s", data)
+	}
+}
+
+func TestMetaParseAttemptsRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "meta.json")
+
+	original := &PipelineMeta{
+		Ticket:    "PROJ-385",
+		StartedAt: time.Now().Truncate(time.Second),
+		Phases: map[string]*PhaseState{
+			"implement": {
+				Status:              PhaseCompleted,
+				Cost:                0.50,
+				DurationMs:          12000,
+				Generation:          1,
+				ParseAttempts:       3,
+				ParseSuccessOnFirst: true,
+			},
+		},
+	}
+
+	if err := WriteMeta(path, original); err != nil {
+		t.Fatalf("writeMeta: %v", err)
+	}
+
+	loaded, err := ReadMeta(path)
+	if err != nil {
+		t.Fatalf("ReadMeta: %v", err)
+	}
+
+	ps := loaded.Phases["implement"]
+	if ps == nil {
+		t.Fatal("implement phase missing")
+	}
+	if ps.ParseAttempts != 3 {
+		t.Errorf("ParseAttempts = %d, want 3", ps.ParseAttempts)
+	}
+	if !ps.ParseSuccessOnFirst {
+		t.Error("ParseSuccessOnFirst = false, want true")
+	}
+}
+
+func TestMetaParseFieldsOmitEmpty(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "meta.json")
+
+	original := &PipelineMeta{
+		Ticket:    "PROJ-385",
+		StartedAt: time.Now().Truncate(time.Second),
+		Phases: map[string]*PhaseState{
+			"triage": {
+				Status:     PhaseCompleted,
+				Cost:       0.10,
+				DurationMs: 5000,
+				Generation: 1,
+			},
+		},
+	}
+
+	if err := WriteMeta(path, original); err != nil {
+		t.Fatalf("writeMeta: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+
+	if strings.Contains(string(data), "parse_attempts") {
+		t.Errorf("meta.json should omit parse_attempts when zero, got:\n%s", data)
+	}
+	if strings.Contains(string(data), "parse_success_on_first") {
+		t.Errorf("meta.json should omit parse_success_on_first when false, got:\n%s", data)
+	}
+}
+
 func TestPhaseStatusConstants(t *testing.T) {
 	// Verify JSON serialization matches expected strings
 	tests := []struct {

@@ -35,6 +35,9 @@ type PhaseState struct {
 	PlanHash              string      `json:"plan_hash,omitempty"`
 	PromptHash            string      `json:"prompt_hash,omitempty"`             // SHA-256 hex digest of the rendered prompt sent to the LLM
 	EstimatedPromptTokens int64       `json:"estimated_prompt_tokens,omitempty"` // pre-invocation estimate: len(rendered) / 3.3
+	ModelUsed             string      `json:"model_used,omitempty"`              // resolved model name used for this phase execution
+	ParseAttempts         int         `json:"parse_attempts,omitempty"`          // number of parse retry attempts during this execution
+	ParseSuccessOnFirst   bool        `json:"parse_success_on_first,omitempty"`  // true if output parsed successfully on the first attempt
 	startedAt             time.Time
 }
 
