@@ -357,6 +357,7 @@ Additional engine-level errors:
 Atomic writes: always write to `.tmp` then rename. Archive on re-run (`verify.json` → `verify.json.1`).
 
 `meta.json` key fields:
+- `complexity` — triage complexity band ("low", "medium", "high"); empty for sessions without triage
 - `rework_cycles` — review rework counter
 - `patch_cycles` — corrective patch counter
 - `escalated_from_patch` — one-shot escalation flag
@@ -451,6 +452,7 @@ Atomic writes: always write to `.tmp` then rename. Archive on re-run (`verify.js
 | `knowledge_retrieval_miss_rate` | Fraction of rework findings caused by missing context | 1.0 |
 | `phase_execution_time` | Mean wall-clock seconds per session | 847s (p50=801, p95=1309) |
 | `token_efficiency` | Mean tokens per phase | available (persisted in meta.json) |
+| `cost_by_complexity` | Mean/median/total USD per triage complexity band | n/a (new) |
 
 ### Interpretation
 
@@ -666,6 +668,7 @@ If yes, include a "Docs to update" section in the issue body listing the files t
 | `soda log <ticket> -f` | Tail events in real-time (poll-based follow) |
 | `soda validate` | Check config, phases, and prompts for errors without running |
 | `soda cost` | Show cumulative cost breakdown across all sessions |
+| `soda cost --by-complexity` | Show cost breakdown grouped by triage complexity band |
 | `soda plugin install [--global] [--force]` | Install the SODA Claude Code plugin |
 | `soda plugin uninstall [--global]` | Remove the SODA Claude Code plugin |
 | `soda spec <description>` | Generate a ticket specification from a short description |
