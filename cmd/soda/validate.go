@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/decko/soda/internal/config"
+	"github.com/decko/soda/internal/git"
 	"github.com/decko/soda/internal/pipeline"
 	"github.com/decko/soda/schemas"
 	"github.com/spf13/cobra"
@@ -339,8 +341,15 @@ func runValidateSession(w io.Writer, cfg *config.Config, ticketKey string, pipel
 		return fmt.Errorf("validate session: %w", err)
 	}
 
-	// Resolve state directory.
+	// Resolve state directory relative to repo root, matching runPipeline.
 	stateDir := cfg.StateDir
+	if !filepath.IsAbs(stateDir) {
+		repoRoot, rootErr := git.RepoRoot(context.Background(), ".")
+		if rootErr != nil {
+			return fmt.Errorf("validate session: resolve repo root: %w", rootErr)
+		}
+		stateDir = filepath.Join(repoRoot, stateDir)
+	}
 	sessionDir := filepath.Join(stateDir, ticketKey)
 	if _, err := os.Stat(sessionDir); err != nil {
 		return fmt.Errorf("validate session: state directory not found for %q: %w", ticketKey, err)
