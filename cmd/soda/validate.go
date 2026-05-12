@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -9,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/decko/soda/internal/config"
+	"github.com/decko/soda/internal/git"
 	"github.com/decko/soda/internal/pipeline"
 	"github.com/decko/soda/schemas"
 	"github.com/spf13/cobra"
@@ -20,19 +23,27 @@ func newValidateCmd() *cobra.Command {
 		Short: "Check config and phases without running",
 		Long: `Validate configuration, phases, prompts, schemas, and context files
 without executing the pipeline. Exits 0 if everything is valid
-(warnings are OK), exits 1 if any validation error is found.`,
+(warnings are OK), exits 1 if any validation error is found.
+
+Use --session <ticket> to check schema version compatibility of stored
+phase artifacts for a specific session.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig(cmd)
 			if err != nil {
 				return err
 			}
+			session, _ := cmd.Flags().GetString("session")
 			pipelineName, _ := cmd.Flags().GetString("pipeline")
+			if session != "" {
+				return runValidateSession(cmd.OutOrStdout(), cfg, session, pipelineName)
+			}
 			return runValidate(cmd.OutOrStdout(), cmd.ErrOrStderr(), cfg, pipelineName)
 		},
 	}
 
 	cmd.Flags().String("pipeline", "", "pipeline name (default: phases.yaml)")
+	cmd.Flags().String("session", "", "ticket key to check schema version compatibility")
 
 	return cmd
 }
@@ -311,6 +322,122 @@ func validateNotifyScript(result *validationResult, prefix string, sc *config.Sc
 	if _, err := exec.LookPath(binary); err != nil {
 		result.addWarning("%s: script binary %q not found in PATH: %v", prefix, binary, err)
 	}
+}
+
+// runValidateSession checks schema version compatibility for a stored session.
+// It loads the pipeline, reads each completed phase's artifact, extracts the
+// _schema_version field, and compares it against the current schema hash.
+func runValidateSession(w io.Writer, cfg *config.Config, ticketKey string, pipelineName string) error {
+	// Load pipeline.
+	phasesPath, cleanup, err := resolvePhasesPath(pipelineName, cfg.PhasesPath)
+	if err != nil {
+		return fmt.Errorf("validate session: %w", err)
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+	pl, err := pipeline.LoadPipeline(phasesPath)
+	if err != nil {
+		return fmt.Errorf("validate session: %w", err)
+	}
+
+	// Resolve state directory relative to repo root, matching runPipeline.
+	stateDir := cfg.StateDir
+	if !filepath.IsAbs(stateDir) {
+		repoRoot, rootErr := git.RepoRoot(context.Background(), ".")
+		if rootErr != nil {
+			return fmt.Errorf("validate session: resolve repo root: %w", rootErr)
+		}
+		stateDir = filepath.Join(repoRoot, stateDir)
+	}
+	sessionDir := filepath.Join(stateDir, ticketKey)
+	if _, err := os.Stat(sessionDir); err != nil {
+		return fmt.Errorf("validate session: state directory not found for %q: %w", ticketKey, err)
+	}
+
+	state, err := pipeline.LoadOrCreate(stateDir, ticketKey)
+	if err != nil {
+		return fmt.Errorf("validate session: %w", err)
+	}
+
+	fmt.Fprintf(w, "Session: %s\n\n", ticketKey)
+
+	hasIssues := false
+	for _, phase := range pl.Phases {
+		currentVersion := schemas.SchemaVersionFor(phase.Name)
+
+		if !state.IsCompleted(phase.Name) {
+			fmt.Fprintf(w, "  %-15s  ⏭  not completed\n", phase.Name)
+			continue
+		}
+
+		if currentVersion == "" {
+			fmt.Fprintf(w, "  %-15s  ⏭  no schema defined\n", phase.Name)
+			continue
+		}
+
+		storedVersion, err := extractSessionSchemaVersion(state, phase.Name)
+		if err != nil {
+			fmt.Fprintf(w, "  %-15s  ⚠  cannot read artifact: %v\n", phase.Name, err)
+			hasIssues = true
+			continue
+		}
+
+		if storedVersion == "" {
+			fmt.Fprintf(w, "  %-15s  ⚠  no _schema_version (old artifact)\n", phase.Name)
+			hasIssues = true
+			continue
+		}
+
+		if storedVersion == currentVersion {
+			fmt.Fprintf(w, "  %-15s  ✓  current (%s)\n", phase.Name, truncateVersion(storedVersion, 8))
+		} else {
+			fmt.Fprintf(w, "  %-15s  ✗  outdated (stored: %s, current: %s)\n", phase.Name, truncateVersion(storedVersion, 8), truncateVersion(currentVersion, 8))
+			hasIssues = true
+		}
+	}
+
+	fmt.Fprintln(w)
+	if hasIssues {
+		fmt.Fprintln(w, "Some phases have schema compatibility issues. Use --force on resume to override.")
+		return fmt.Errorf("session %s has schema compatibility issues", ticketKey)
+	}
+	fmt.Fprintln(w, "All phase schemas are current.")
+	return nil
+}
+
+// extractSessionSchemaVersion reads the _schema_version from a phase result file.
+func extractSessionSchemaVersion(state *pipeline.State, phase string) (string, error) {
+	data, err := state.ReadResult(phase)
+	if err != nil {
+		return "", err
+	}
+
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return "", fmt.Errorf("unmarshal: %w", err)
+	}
+
+	versionRaw, ok := obj["_schema_version"]
+	if !ok {
+		return "", nil
+	}
+
+	var version string
+	if err := json.Unmarshal(versionRaw, &version); err != nil {
+		return "", fmt.Errorf("unmarshal _schema_version: %w", err)
+	}
+	return version, nil
+}
+
+// truncateVersion returns the first n characters of version, or the full
+// string when it is shorter than n. This guards against panics on corrupted
+// or manually edited _schema_version values.
+func truncateVersion(version string, maxLen int) string {
+	if len(version) <= maxLen {
+		return version
+	}
+	return version[:maxLen]
 }
 
 // validateTranscript checks that the transcript level is a recognized value.

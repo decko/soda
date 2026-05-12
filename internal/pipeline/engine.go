@@ -74,6 +74,7 @@ type EngineConfig struct {
 	MergeLabels             []string          // required PR labels before auto-merge proceeds
 	AutoMergeTimeout        time.Duration     // max wait after approval before giving up; defaults to 30m
 	TranscriptLevel         transcript.Level  // transcript capture level; empty/"off" disables
+	Force                   bool              // when true, schema version mismatches warn instead of blocking resume
 }
 
 // TokenBudgetConfig configures the prompt-size estimation check.
@@ -359,6 +360,11 @@ func (e *Engine) Resume(ctx context.Context, fromPhase string) error {
 
 	// Check binary version for staleness detection on resume.
 	e.checkBinaryVersion()
+
+	// Validate schema versions of completed upstream phases.
+	if err := e.checkSchemaVersions(fromPhase); err != nil {
+		return err
+	}
 
 	// Cache ticket summary in meta for soda sessions/history display.
 	if e.state.Meta().Summary == "" && e.config.Ticket.Summary != "" {

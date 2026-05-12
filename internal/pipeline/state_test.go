@@ -170,8 +170,13 @@ func TestMarkRunning(t *testing.T) {
 		if err != nil {
 			t.Fatalf("archived .json: %v", err)
 		}
-		if string(archived) != `{"verdict":"pass"}` {
-			t.Errorf("archived content = %q", archived)
+		// Archived content includes injected _schema_version; verify original field.
+		var archivedObj map[string]interface{}
+		if err := json.Unmarshal(archived, &archivedObj); err != nil {
+			t.Fatalf("unmarshal archived: %v", err)
+		}
+		if archivedObj["verdict"] != "pass" {
+			t.Errorf("archived verdict = %v, want pass", archivedObj["verdict"])
 		}
 
 		archivedMd, err := os.ReadFile(filepath.Join(stateDir, "verify.md.1"))
@@ -609,8 +614,99 @@ func TestWriteReadResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadResult: %v", err)
 	}
-	if string(got) != string(result) {
-		t.Errorf("result = %q, want %q", got, result)
+
+	// Verify result is valid JSON and contains original fields.
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(got, &parsed); err != nil {
+		t.Fatalf("result is not valid JSON: %v", err)
+	}
+	if parsed["verdict"] != "pass" {
+		t.Errorf("verdict = %v, want pass", parsed["verdict"])
+	}
+}
+
+func TestWriteResult_InjectsSchemaVersion(t *testing.T) {
+	dir := t.TempDir()
+	state, _ := LoadOrCreate(dir, "T-SV-1")
+
+	// "triage" is a known phase with a schema.
+	result := json.RawMessage(`{"ticket_key":"TEST-1","complexity":"low"}`)
+	if err := state.WriteResult("triage", result); err != nil {
+		t.Fatalf("WriteResult: %v", err)
+	}
+
+	got, err := state.ReadResult("triage")
+	if err != nil {
+		t.Fatalf("ReadResult: %v", err)
+	}
+
+	var parsed map[string]json.RawMessage
+	if err := json.Unmarshal(got, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	versionRaw, ok := parsed["_schema_version"]
+	if !ok {
+		t.Fatal("_schema_version not found in result")
+	}
+
+	var version string
+	if err := json.Unmarshal(versionRaw, &version); err != nil {
+		t.Fatalf("unmarshal _schema_version: %v", err)
+	}
+	if len(version) != 16 {
+		t.Errorf("_schema_version length = %d, want 16", len(version))
+	}
+
+	// Original fields should still be present.
+	if _, ok := parsed["ticket_key"]; !ok {
+		t.Error("ticket_key field missing after injection")
+	}
+	if _, ok := parsed["complexity"]; !ok {
+		t.Error("complexity field missing after injection")
+	}
+}
+
+func TestWriteResult_NonObjectPassesThrough(t *testing.T) {
+	dir := t.TempDir()
+	state, _ := LoadOrCreate(dir, "T-SV-2")
+
+	// Array payload should pass through unmodified.
+	result := json.RawMessage(`[1,2,3]`)
+	if err := state.WriteResult("triage", result); err != nil {
+		t.Fatalf("WriteResult: %v", err)
+	}
+
+	got, err := state.ReadResult("triage")
+	if err != nil {
+		t.Fatalf("ReadResult: %v", err)
+	}
+	if string(got) != `[1,2,3]` {
+		t.Errorf("result = %q, want [1,2,3]", got)
+	}
+}
+
+func TestWriteResult_UnknownPhasePassesThrough(t *testing.T) {
+	dir := t.TempDir()
+	state, _ := LoadOrCreate(dir, "T-SV-3")
+
+	// "unknown_phase" has no schema, so _schema_version should not be injected.
+	result := json.RawMessage(`{"key":"value"}`)
+	if err := state.WriteResult("unknown_phase", result); err != nil {
+		t.Fatalf("WriteResult: %v", err)
+	}
+
+	got, err := state.ReadResult("unknown_phase")
+	if err != nil {
+		t.Fatalf("ReadResult: %v", err)
+	}
+
+	var parsed map[string]json.RawMessage
+	if err := json.Unmarshal(got, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, ok := parsed["_schema_version"]; ok {
+		t.Error("_schema_version should not be present for unknown phase")
 	}
 }
 
@@ -876,8 +972,13 @@ func TestFullLifecycle(t *testing.T) {
 		t.Errorf("triage artifact = %q", triageArtifact)
 	}
 	triageResult, _ := state2.ReadResult("triage")
-	if string(triageResult) != `{"complexity":"medium"}` {
-		t.Errorf("triage result = %q", triageResult)
+	// Result includes injected _schema_version; verify original field is present.
+	var triageObj map[string]interface{}
+	if err := json.Unmarshal(triageResult, &triageObj); err != nil {
+		t.Fatalf("unmarshal triage result: %v", err)
+	}
+	if triageObj["complexity"] != "medium" {
+		t.Errorf("triage result complexity = %v, want medium", triageObj["complexity"])
 	}
 
 	// Re-run implement (generation 2)

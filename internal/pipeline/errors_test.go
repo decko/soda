@@ -455,6 +455,61 @@ func TestTransientSuggestionCatalog(t *testing.T) {
 	}
 }
 
+func TestSchemaVersionMismatchError(t *testing.T) {
+	tests := []struct {
+		name        string
+		err         *SchemaVersionMismatchError
+		wantContain []string
+	}{
+		{
+			name: "missing_version",
+			err: &SchemaVersionMismatchError{
+				Phase:          "triage",
+				StoredVersion:  "",
+				CurrentVersion: "abc123def4567890",
+			},
+			wantContain: []string{"triage", "no schema version", "abc123def4567890"},
+		},
+		{
+			name: "hash_mismatch",
+			err: &SchemaVersionMismatchError{
+				Phase:          "plan",
+				StoredVersion:  "aaaa1111bbbb2222",
+				CurrentVersion: "cccc3333dddd4444",
+			},
+			wantContain: []string{"plan", "mismatch", "aaaa1111bbbb2222", "cccc3333dddd4444"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := tt.err.Error()
+			if msg == "" {
+				t.Fatal("Error() should return non-empty string")
+			}
+			for _, want := range tt.wantContain {
+				if !strings.Contains(msg, want) {
+					t.Errorf("Error() = %q, should contain %q", msg, want)
+				}
+			}
+
+			var target *SchemaVersionMismatchError
+			if !errors.As(tt.err, &target) {
+				t.Error("errors.As should match SchemaVersionMismatchError")
+			}
+			if target.Phase != tt.err.Phase {
+				t.Errorf("Phase = %q, want %q", target.Phase, tt.err.Phase)
+			}
+			if target.StoredVersion != tt.err.StoredVersion {
+				t.Errorf("StoredVersion = %q, want %q", target.StoredVersion, tt.err.StoredVersion)
+			}
+			if target.CurrentVersion != tt.err.CurrentVersion {
+				t.Errorf("CurrentVersion = %q, want %q", target.CurrentVersion, tt.err.CurrentVersion)
+			}
+		})
+	}
+}
+
 func TestEmitPhaseFailedEnrichment(t *testing.T) {
 	t.Run("retries_exhausted_with_suggestion", func(t *testing.T) {
 		var captured []Event

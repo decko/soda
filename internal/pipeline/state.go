@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/decko/soda/schemas"
 )
 
 // State manages the disk state for a single ticket's pipeline run.
@@ -265,12 +268,48 @@ func (s *State) ReadArtifact(phase string) ([]byte, error) {
 }
 
 // WriteResult writes structured output (<phase>.json) atomically.
+// If the phase has a known schema, a _schema_version field is injected
+// into JSON-object payloads for later compatibility checks on resume.
 func (s *State) WriteResult(phase string, result json.RawMessage) error {
+	result = injectSchemaVersion(phase, result)
 	path := filepath.Join(s.dir, phase+".json")
 	if err := atomicWrite(path, result); err != nil {
 		return fmt.Errorf("pipeline: write result %s: %w", path, err)
 	}
 	return nil
+}
+
+// injectSchemaVersion adds a _schema_version field to a JSON-object payload
+// if the phase has a known schema. Non-object payloads and unknown phases
+// are returned unmodified.
+func injectSchemaVersion(phase string, data json.RawMessage) json.RawMessage {
+	version := schemas.SchemaVersionFor(phase)
+	if version == "" {
+		return data
+	}
+
+	// Only inject into JSON objects.
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return data
+	}
+
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return data
+	}
+
+	versionJSON, err := json.Marshal(version)
+	if err != nil {
+		return data
+	}
+	obj["_schema_version"] = versionJSON
+
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return data
+	}
+	return out
 }
 
 // ReadResult reads structured output (<phase>.json).

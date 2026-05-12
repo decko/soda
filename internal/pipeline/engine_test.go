@@ -1039,6 +1039,109 @@ func TestEngine_ResumeInvalidPhase(t *testing.T) {
 	}
 }
 
+func TestEngine_ResumeBlocksOnStaleSchemaVersion(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "plan",
+			Prompt:    "plan.md",
+			DependsOn: []string{"triage"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"plan": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tasks":["t1"]}`),
+					RawText: "Plan done",
+					CostUSD: 0.10,
+				},
+			}},
+		},
+	}
+
+	engine, state := setupEngine(t, phases, mock)
+
+	// Pre-complete triage with a stale schema version.
+	if err := state.MarkRunning("triage"); err != nil {
+		t.Fatal(err)
+	}
+	writeResultRaw(state, "triage", json.RawMessage(`{"ticket_key":"TEST-1","_schema_version":"deadbeef12345678"}`))
+	if err := state.MarkCompleted("triage"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Resume from plan — should be blocked by schema mismatch.
+	err := engine.Resume(context.Background(), "plan")
+	if err == nil {
+		t.Fatal("expected Resume to fail due to schema version mismatch")
+	}
+
+	var svErr *SchemaVersionMismatchError
+	if !errors.As(err, &svErr) {
+		t.Fatalf("expected SchemaVersionMismatchError, got: %T: %v", err, err)
+	}
+	if svErr.Phase != "triage" {
+		t.Errorf("Phase = %q, want %q", svErr.Phase, "triage")
+	}
+}
+
+func TestEngine_ResumeForceOverridesStaleSchemaVersion(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "plan",
+			Prompt:    "plan.md",
+			DependsOn: []string{"triage"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"plan": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tasks":["t1"]}`),
+					RawText: "Plan done",
+					CostUSD: 0.10,
+				},
+			}},
+		},
+	}
+
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.Force = true
+	})
+
+	// Pre-complete triage with a stale schema version.
+	if err := state.MarkRunning("triage"); err != nil {
+		t.Fatal(err)
+	}
+	writeResultRaw(state, "triage", json.RawMessage(`{"ticket_key":"TEST-1","_schema_version":"deadbeef12345678"}`))
+	if err := state.MarkCompleted("triage"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Resume from plan with Force — should proceed.
+	if err := engine.Resume(context.Background(), "plan"); err != nil {
+		t.Fatalf("Resume with Force should succeed: %v", err)
+	}
+
+	if !state.IsCompleted("plan") {
+		t.Error("plan should be completed")
+	}
+}
+
 func TestEngine_SkipPlanRouting_SkipsPlanPhaseWhenTriageSetSkipPlan(t *testing.T) {
 	// When triage sets skip_plan=true and the ticket has an ExistingPlan,
 	// the engine should skip the plan LLM call, write the ExistingPlan as
