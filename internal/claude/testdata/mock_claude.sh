@@ -44,6 +44,14 @@ case "${MOCK_CLAUDE_MODE}" in
     signal_term)
         kill -TERM $$
         ;;
+    tool_events)
+        echo '{"type":"system","subtype":"init","session_id":"test123","tools":["Read","Bash"],"mcp_servers":[]}'
+        echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu_1","name":"Read","input":{"file_path":"main.go"}}]}}'
+        echo '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_1","content":"file content"}]}}'
+        echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu_2","name":"Bash","input":{"command":"ls"}}]}}'
+        echo '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_2","content":"main.go"}]}}'
+        echo '{"type":"result","subtype":"success","result":"Done.","structured_output":{},"total_cost_usd":0.02,"usage":{"input_tokens":50,"output_tokens":20},"num_turns":2,"duration_ms":1000}'
+        ;;
     *)
         echo "unknown mode: ${MOCK_CLAUDE_MODE}" >&2
         exit 1

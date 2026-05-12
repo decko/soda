@@ -372,6 +372,74 @@ func TestStream_OnChunkPanic(t *testing.T) {
 	}
 }
 
+func TestStream_TranscriptCapture(t *testing.T) {
+	runner, err := NewRunner(mockBinaryPath(t), "test-model", t.TempDir())
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	t.Run("tools_level_captures_tool_events", func(t *testing.T) {
+		t.Setenv("MOCK_CLAUDE_MODE", "tool_events")
+
+		result, err := runner.Stream(context.Background(), RunOpts{
+			Timeout:         10 * time.Second,
+			TranscriptLevel: TranscriptTools,
+		}, nil)
+		if err != nil {
+			t.Fatalf("Stream: %v", err)
+		}
+
+		if len(result.Transcript) == 0 {
+			t.Fatal("expected transcript entries at tools level, got none")
+		}
+
+		toolNames := make(map[string]bool)
+		for _, entry := range result.Transcript {
+			if entry.Tool != "" {
+				toolNames[entry.Tool] = true
+			}
+		}
+		if !toolNames["Read"] {
+			t.Error("expected Read tool_use in transcript")
+		}
+		if !toolNames["Bash"] {
+			t.Error("expected Bash tool_use in transcript")
+		}
+	})
+
+	t.Run("off_level_captures_nothing", func(t *testing.T) {
+		t.Setenv("MOCK_CLAUDE_MODE", "tool_events")
+
+		result, err := runner.Stream(context.Background(), RunOpts{
+			Timeout:         10 * time.Second,
+			TranscriptLevel: TranscriptOff,
+		}, nil)
+		if err != nil {
+			t.Fatalf("Stream: %v", err)
+		}
+
+		if len(result.Transcript) != 0 {
+			t.Errorf("expected no transcript at off level, got %d entries", len(result.Transcript))
+		}
+	})
+
+	t.Run("empty_level_captures_nothing", func(t *testing.T) {
+		t.Setenv("MOCK_CLAUDE_MODE", "tool_events")
+
+		result, err := runner.Stream(context.Background(), RunOpts{
+			Timeout: 10 * time.Second,
+			// TranscriptLevel is empty (zero value)
+		}, nil)
+		if err != nil {
+			t.Fatalf("Stream: %v", err)
+		}
+
+		if len(result.Transcript) != 0 {
+			t.Errorf("expected no transcript at empty level, got %d entries", len(result.Transcript))
+		}
+	})
+}
+
 func TestStream_RejectsOversizedSchema(t *testing.T) {
 	runner, err := NewRunner(mockBinaryPath(t), "test-model", t.TempDir())
 	if err != nil {
