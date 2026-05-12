@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"sort"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -11,7 +13,9 @@ import (
 )
 
 func newCostCmd() *cobra.Command {
-	return &cobra.Command{
+	var byComplexity bool
+
+	cmd := &cobra.Command{
 		Use:   "cost",
 		Short: "Show cost breakdown from the persistent cost ledger",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -19,16 +23,22 @@ func newCostCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return runCost(cfg.StateDir)
+			entries, err := pipeline.ReadCostLedger(cfg.StateDir)
+			if err != nil {
+				return fmt.Errorf("cost: read ledger: %w", err)
+			}
+			if byComplexity {
+				return runCostByComplexity(entries)
+			}
+			return runCost(entries)
 		},
 	}
+
+	cmd.Flags().BoolVar(&byComplexity, "by-complexity", false, "Show cost breakdown grouped by triage complexity band")
+	return cmd
 }
 
-func runCost(stateDir string) error {
-	entries, err := pipeline.ReadCostLedger(stateDir)
-	if err != nil {
-		return fmt.Errorf("cost: read ledger: %w", err)
-	}
+func runCost(entries []pipeline.CostEntry) error {
 	if len(entries) == 0 {
 		fmt.Println("No cost entries found.")
 		return nil
@@ -57,5 +67,128 @@ func runCost(stateDir string) error {
 	}
 
 	fmt.Printf("\nTotal: $%.4f across %d run(s)\n", total, len(entries))
+	return nil
+}
+
+// complexityBandOrder defines the canonical sort order for complexity bands.
+// Bands not in this list are sorted alphabetically after the known ones.
+var complexityBandOrder = map[string]int{
+	"low":    0,
+	"medium": 1,
+	"high":   2,
+}
+
+// runCostByComplexity renders a cost breakdown grouped by triage complexity band.
+// Uses manual column-width computation (not tabwriter) to support future ANSI coloring.
+func runCostByComplexity(entries []pipeline.CostEntry) error {
+	if len(entries) == 0 {
+		fmt.Println("No cost entries found.")
+		return nil
+	}
+
+	byBand := pipeline.CostByComplexity(entries)
+
+	// Sort bands: low → medium → high → alphabetical rest (unknown last among unknowns).
+	bands := make([]string, 0, len(byBand))
+	for band := range byBand {
+		bands = append(bands, band)
+	}
+	sort.Slice(bands, func(i, j int) bool {
+		oi, oki := complexityBandOrder[bands[i]]
+		oj, okj := complexityBandOrder[bands[j]]
+		if oki && okj {
+			return oi < oj
+		}
+		if oki {
+			return true
+		}
+		if okj {
+			return false
+		}
+		return bands[i] < bands[j]
+	})
+
+	// Build rows for column-width computation.
+	type row struct {
+		complexity string
+		sessions   string
+		mean       string
+		median     string
+		total      string
+	}
+
+	header := row{"COMPLEXITY", "SESSIONS", "MEAN", "MEDIAN", "TOTAL"}
+	rows := make([]row, len(bands))
+	var totalSessions int
+	var totalCost float64
+	for idx, band := range bands {
+		stats := byBand[band]
+		rows[idx] = row{
+			complexity: strings.ToUpper(band),
+			sessions:   fmt.Sprintf("%d", stats.Sessions),
+			mean:       fmt.Sprintf("$%.2f", stats.Mean),
+			median:     fmt.Sprintf("$%.2f", stats.Median),
+			total:      fmt.Sprintf("$%.2f", stats.Total),
+		}
+		totalSessions += stats.Sessions
+		totalCost += stats.Total
+	}
+
+	// Compute column widths from all rows including header.
+	colW := [5]int{
+		len(header.complexity),
+		len(header.sessions),
+		len(header.mean),
+		len(header.median),
+		len(header.total),
+	}
+	for _, r := range rows {
+		if len(r.complexity) > colW[0] {
+			colW[0] = len(r.complexity)
+		}
+		if len(r.sessions) > colW[1] {
+			colW[1] = len(r.sessions)
+		}
+		if len(r.mean) > colW[2] {
+			colW[2] = len(r.mean)
+		}
+		if len(r.median) > colW[3] {
+			colW[3] = len(r.median)
+		}
+		if len(r.total) > colW[4] {
+			colW[4] = len(r.total)
+		}
+	}
+
+	// Also consider footer widths.
+	footerSessions := fmt.Sprintf("%d", totalSessions)
+	footerTotal := fmt.Sprintf("$%.2f", totalCost)
+	if len("TOTAL") > colW[0] {
+		colW[0] = len("TOTAL")
+	}
+	if len(footerSessions) > colW[1] {
+		colW[1] = len(footerSessions)
+	}
+	if len(footerTotal) > colW[4] {
+		colW[4] = len(footerTotal)
+	}
+
+	gap := 2
+	fmtRow := func(r row) string {
+		return fmt.Sprintf("%-*s%s%-*s%s%-*s%s%-*s%s%-*s",
+			colW[0], r.complexity, strings.Repeat(" ", gap),
+			colW[1], r.sessions, strings.Repeat(" ", gap),
+			colW[2], r.mean, strings.Repeat(" ", gap),
+			colW[3], r.median, strings.Repeat(" ", gap),
+			colW[4], r.total,
+		)
+	}
+
+	fmt.Println(fmtRow(header))
+	for _, r := range rows {
+		fmt.Println(fmtRow(r))
+	}
+
+	fmt.Printf("\nTotal: $%.2f across %d session(s)\n", totalCost, totalSessions)
 	return nil
 }

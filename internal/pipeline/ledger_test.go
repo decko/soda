@@ -3,6 +3,7 @@ package pipeline
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -332,5 +333,153 @@ func TestCumulativeCost_NoDoubleCountingSlugifiedDir(t *testing.T) {
 	// The session should NOT be double-counted; only the ledger entry counts.
 	if cost != 3.00 {
 		t.Errorf("CumulativeCost = %f, want 3.00 (no double-count for slugified dir)", cost)
+	}
+}
+
+func TestCostByComplexity_Empty(t *testing.T) {
+	result := CostByComplexity(nil)
+	if len(result) != 0 {
+		t.Errorf("expected empty map, got %v", result)
+	}
+}
+
+func TestCostByComplexity_BandGrouping(t *testing.T) {
+	entries := []CostEntry{
+		{Ticket: "T-1", Cost: 2.00, Complexity: "low"},
+		{Ticket: "T-2", Cost: 4.00, Complexity: "low"},
+		{Ticket: "T-3", Cost: 10.00, Complexity: "high"},
+	}
+	result := CostByComplexity(entries)
+
+	low, ok := result["low"]
+	if !ok {
+		t.Fatal("missing 'low' band")
+	}
+	if low.Sessions != 2 {
+		t.Errorf("low.Sessions = %d, want 2", low.Sessions)
+	}
+	if low.Mean != 3.00 {
+		t.Errorf("low.Mean = %f, want 3.00", low.Mean)
+	}
+	if low.Median != 3.00 {
+		t.Errorf("low.Median = %f, want 3.00", low.Median)
+	}
+	if low.Total != 6.00 {
+		t.Errorf("low.Total = %f, want 6.00", low.Total)
+	}
+
+	high, ok := result["high"]
+	if !ok {
+		t.Fatal("missing 'high' band")
+	}
+	if high.Sessions != 1 {
+		t.Errorf("high.Sessions = %d, want 1", high.Sessions)
+	}
+	if high.Mean != 10.00 {
+		t.Errorf("high.Mean = %f, want 10.00", high.Mean)
+	}
+	if high.Median != 10.00 {
+		t.Errorf("high.Median = %f, want 10.00", high.Median)
+	}
+	if high.Total != 10.00 {
+		t.Errorf("high.Total = %f, want 10.00", high.Total)
+	}
+}
+
+func TestCostByComplexity_UnknownBand(t *testing.T) {
+	entries := []CostEntry{
+		{Ticket: "T-1", Cost: 5.00},
+		{Ticket: "T-2", Cost: 3.00, Complexity: ""},
+	}
+	result := CostByComplexity(entries)
+
+	unknown, ok := result["unknown"]
+	if !ok {
+		t.Fatal("missing 'unknown' band")
+	}
+	if unknown.Sessions != 2 {
+		t.Errorf("unknown.Sessions = %d, want 2", unknown.Sessions)
+	}
+	if unknown.Total != 8.00 {
+		t.Errorf("unknown.Total = %f, want 8.00", unknown.Total)
+	}
+}
+
+func TestCostByComplexity_EvenMedian(t *testing.T) {
+	entries := []CostEntry{
+		{Ticket: "T-1", Cost: 1.00, Complexity: "medium"},
+		{Ticket: "T-2", Cost: 3.00, Complexity: "medium"},
+		{Ticket: "T-3", Cost: 5.00, Complexity: "medium"},
+		{Ticket: "T-4", Cost: 7.00, Complexity: "medium"},
+	}
+	result := CostByComplexity(entries)
+
+	medium := result["medium"]
+	// Sorted: 1,3,5,7 → median = (3+5)/2 = 4
+	if medium.Median != 4.00 {
+		t.Errorf("medium.Median = %f, want 4.00", medium.Median)
+	}
+}
+
+func TestCostByComplexity_OddMedian(t *testing.T) {
+	entries := []CostEntry{
+		{Ticket: "T-1", Cost: 1.00, Complexity: "low"},
+		{Ticket: "T-2", Cost: 5.00, Complexity: "low"},
+		{Ticket: "T-3", Cost: 3.00, Complexity: "low"},
+	}
+	result := CostByComplexity(entries)
+
+	low := result["low"]
+	// Sorted: 1,3,5 → median = 3
+	if low.Median != 3.00 {
+		t.Errorf("low.Median = %f, want 3.00", low.Median)
+	}
+}
+
+func TestCostEntryComplexityRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+
+	entry := CostEntry{
+		Ticket:     "T-1",
+		Timestamp:  time.Now().Truncate(time.Second),
+		Cost:       5.00,
+		Success:    true,
+		Complexity: "high",
+	}
+	if err := AppendCostEntry(dir, entry); err != nil {
+		t.Fatalf("AppendCostEntry: %v", err)
+	}
+
+	entries, err := ReadCostLedger(dir)
+	if err != nil {
+		t.Fatalf("ReadCostLedger: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("len(entries) = %d, want 1", len(entries))
+	}
+	if entries[0].Complexity != "high" {
+		t.Errorf("Complexity = %q, want %q", entries[0].Complexity, "high")
+	}
+}
+
+func TestCostEntryComplexityOmitEmpty(t *testing.T) {
+	dir := t.TempDir()
+
+	entry := CostEntry{
+		Ticket:    "T-1",
+		Timestamp: time.Now().Truncate(time.Second),
+		Cost:      5.00,
+		Success:   true,
+	}
+	if err := AppendCostEntry(dir, entry); err != nil {
+		t.Fatalf("AppendCostEntry: %v", err)
+	}
+
+	data, err := os.ReadFile(CostLedgerPath(dir))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if strings.Contains(string(data), "complexity") {
+		t.Errorf("cost.json should omit complexity when empty, got:\n%s", data)
 	}
 }

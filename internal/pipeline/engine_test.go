@@ -6849,3 +6849,197 @@ func newTestWebhookServer(t *testing.T, onBody func([]byte)) *httpTestServer {
 type httpTestServer struct {
 	*httptest.Server
 }
+
+func TestEngine_ComplexityFromTriagePersistsInMeta(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "plan",
+			Prompt:    "plan.md",
+			DependsOn: []string{"triage"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":"yes","complexity":"high"}`),
+					RawText: "Triage result",
+					CostUSD: 0.10,
+				},
+			}},
+			"plan": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tasks":["t1"]}`),
+					RawText: "Plan result",
+					CostUSD: 0.20,
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(ev Event) {
+			events = append(events, ev)
+		}
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Complexity should be persisted in meta.
+	if state.Meta().Complexity != "high" {
+		t.Errorf("Meta.Complexity = %q, want %q", state.Meta().Complexity, "high")
+	}
+
+	// engine_completed event should carry complexity.
+	var foundComplexity bool
+	for _, ev := range events {
+		if ev.Kind == EventEngineCompleted {
+			if val, ok := ev.Data["complexity"]; ok {
+				if val != "high" {
+					t.Errorf("engine_completed complexity = %v, want %q", val, "high")
+				}
+				foundComplexity = true
+			}
+		}
+	}
+	if !foundComplexity {
+		t.Error("engine_completed event missing complexity data")
+	}
+}
+
+func TestEngine_ComplexityMissingWhenNoTriage(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "plan",
+			Prompt: "plan.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"plan": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tasks":["t1"]}`),
+					RawText: "Plan result",
+					CostUSD: 0.10,
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(ev Event) {
+			events = append(events, ev)
+		}
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Complexity should remain empty when there's no triage phase.
+	if state.Meta().Complexity != "" {
+		t.Errorf("Meta.Complexity = %q, want empty", state.Meta().Complexity)
+	}
+
+	// engine_completed event should NOT carry complexity.
+	for _, ev := range events {
+		if ev.Kind == EventEngineCompleted {
+			if _, ok := ev.Data["complexity"]; ok {
+				t.Error("engine_completed should not carry complexity when triage is absent")
+			}
+		}
+	}
+}
+
+func TestEngine_ComplexityPreservedOnResume(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "plan",
+			Prompt:    "plan.md",
+			DependsOn: []string{"triage"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":"yes","complexity":"medium"}`),
+					RawText: "Triage result",
+					CostUSD: 0.10,
+				},
+			}},
+			"plan": {
+				// First call fails
+				{err: fmt.Errorf("simulated failure")},
+				// Second call succeeds (for resume)
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tasks":["t1"]}`),
+					RawText: "Plan result",
+					CostUSD: 0.20,
+				}},
+			},
+		},
+	}
+
+	var events []Event
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.OnEvent = func(ev Event) {
+			events = append(events, ev)
+		}
+	})
+
+	// First run: triage succeeds, plan fails.
+	_ = engine.Run(context.Background())
+
+	// Complexity should be set from triage result even after failure.
+	if state.Meta().Complexity != "medium" {
+		t.Errorf("after failed Run: Meta.Complexity = %q, want %q", state.Meta().Complexity, "medium")
+	}
+
+	// Resume from plan.
+	events = nil
+	if err := engine.Resume(context.Background(), "plan"); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+
+	// Complexity should still be present.
+	if state.Meta().Complexity != "medium" {
+		t.Errorf("after Resume: Meta.Complexity = %q, want %q", state.Meta().Complexity, "medium")
+	}
+
+	// engine_completed event should carry complexity on resume too.
+	var foundComplexity bool
+	for _, ev := range events {
+		if ev.Kind == EventEngineCompleted {
+			if val, ok := ev.Data["complexity"]; ok {
+				if val != "medium" {
+					t.Errorf("engine_completed complexity = %v, want %q", val, "medium")
+				}
+				foundComplexity = true
+			}
+		}
+	}
+	if !foundComplexity {
+		t.Error("engine_completed event missing complexity on resume")
+	}
+}

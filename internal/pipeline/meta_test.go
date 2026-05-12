@@ -523,6 +523,55 @@ func TestMetaPromptHashOmitEmpty(t *testing.T) {
 	}
 }
 
+func TestMetaComplexityRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "meta.json")
+
+	original := &PipelineMeta{
+		Ticket:     "PROJ-490",
+		Complexity: "high",
+		StartedAt:  time.Now().Truncate(time.Second),
+		Phases:     map[string]*PhaseState{},
+	}
+
+	if err := WriteMeta(path, original); err != nil {
+		t.Fatalf("writeMeta: %v", err)
+	}
+
+	loaded, err := ReadMeta(path)
+	if err != nil {
+		t.Fatalf("ReadMeta: %v", err)
+	}
+
+	if loaded.Complexity != "high" {
+		t.Errorf("Complexity = %q, want %q", loaded.Complexity, "high")
+	}
+}
+
+func TestMetaComplexityOmitEmpty(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "meta.json")
+
+	original := &PipelineMeta{
+		Ticket:    "PROJ-490",
+		StartedAt: time.Now().Truncate(time.Second),
+		Phases:    map[string]*PhaseState{},
+	}
+
+	if err := WriteMeta(path, original); err != nil {
+		t.Fatalf("writeMeta: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+
+	if strings.Contains(string(data), "complexity") {
+		t.Errorf("meta.json should omit complexity when empty, got:\n%s", data)
+	}
+}
+
 func TestPhaseStatusConstants(t *testing.T) {
 	// Verify JSON serialization matches expected strings
 	tests := []struct {

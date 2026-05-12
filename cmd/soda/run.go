@@ -481,10 +481,11 @@ func runPipeline(cfg *config.Config, opts pipelineOpts) error {
 	// Errors are non-fatal — a ledger write failure must not mask the pipeline result,
 	// but we emit a warning to stderr so users can diagnose issues (e.g. permission denied).
 	if ledgerErr := pipeline.AppendCostEntry(stateDir, pipeline.CostEntry{
-		Ticket:    ticketKey,
-		Timestamp: time.Now(),
-		Cost:      state.Meta().TotalCost - costBefore,
-		Success:   runErr == nil,
+		Ticket:     ticketKey,
+		Timestamp:  time.Now(),
+		Cost:       state.Meta().TotalCost - costBefore,
+		Success:    runErr == nil,
+		Complexity: state.Meta().Complexity,
 	}); ledgerErr != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to record cost entry: %v\n", ledgerErr)
 	}
