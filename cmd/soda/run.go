@@ -24,6 +24,7 @@ import (
 	"github.com/decko/soda/internal/runner"
 	"github.com/decko/soda/internal/sandbox"
 	"github.com/decko/soda/internal/ticket"
+	"github.com/decko/soda/internal/transcript"
 	"github.com/decko/soda/internal/tui"
 	"github.com/decko/soda/schemas"
 	"github.com/mattn/go-isatty"
@@ -377,16 +378,16 @@ func runPipeline(cfg *config.Config, opts pipelineOpts) error {
 	}
 
 	// Resolve transcript level: CLI flag overrides config.
-	transcriptLevel := claude.TranscriptLevel(cfg.Transcript.Level)
+	transcriptLevel := transcript.Level(cfg.Transcript.Level)
 	if opts.transcriptChanged {
-		transcriptLevel = claude.TranscriptLevel(opts.transcript)
+		transcriptLevel = transcript.Level(opts.transcript)
 	}
 	// Validate the resolved level; default to off for unknown values.
 	switch transcriptLevel {
-	case claude.TranscriptTools, claude.TranscriptFull, claude.TranscriptOff:
+	case transcript.Tools, transcript.Full, transcript.Off:
 		// valid
 	case "":
-		transcriptLevel = claude.TranscriptOff
+		transcriptLevel = transcript.Off
 	default:
 		return fmt.Errorf("run: unknown transcript level %q (expected 'tools', 'full', or 'off')", transcriptLevel)
 	}

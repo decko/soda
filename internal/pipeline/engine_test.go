@@ -17,8 +17,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/decko/soda/internal/claude"
 	"github.com/decko/soda/internal/runner"
+	"github.com/decko/soda/internal/transcript"
 )
 
 func TestEngine_HappyPathAllPhasesComplete(t *testing.T) {
@@ -6744,7 +6744,7 @@ func TestEngine_WriteTranscript(t *testing.T) {
 		},
 	}
 
-	transcriptEntries := []claude.TranscriptEntry{
+	transcriptEntries := []transcript.Entry{
 		{Role: "tool_use", Content: `{"file_path":"main.go"}`, Tool: "Read", ToolID: "tu_1"},
 		{Role: "tool_result", Content: "file content here", ToolID: "tu_1"},
 	}
@@ -6763,7 +6763,7 @@ func TestEngine_WriteTranscript(t *testing.T) {
 	}
 
 	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
-		cfg.TranscriptLevel = claude.TranscriptTools
+		cfg.TranscriptLevel = transcript.Tools
 	})
 
 	if err := engine.Run(context.Background()); err != nil {
@@ -6776,7 +6776,7 @@ func TestEngine_WriteTranscript(t *testing.T) {
 		t.Fatalf("read transcript file: %v", err)
 	}
 
-	var got []claude.TranscriptEntry
+	var got []transcript.Entry
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("unmarshal transcript: %v", err)
 	}
@@ -6821,7 +6821,7 @@ func TestEngine_WriteTranscript_SkippedWhenEmpty(t *testing.T) {
 	}
 
 	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
-		cfg.TranscriptLevel = claude.TranscriptOff
+		cfg.TranscriptLevel = transcript.Off
 	})
 
 	if err := engine.Run(context.Background()); err != nil {

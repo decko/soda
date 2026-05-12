@@ -12,10 +12,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/decko/soda/internal/claude"
 	"github.com/decko/soda/internal/git"
 	"github.com/decko/soda/internal/progress"
 	"github.com/decko/soda/internal/runner"
+	"github.com/decko/soda/internal/transcript"
 )
 
 // Mode controls whether the engine pauses between phases.
@@ -59,21 +59,21 @@ type EngineConfig struct {
 	PauseSignal             <-chan bool // receives true=pause, false=resume from TUI; nil disables
 	SleepFunc               func(time.Duration)
 	JitterFunc              func(max time.Duration) time.Duration
-	PRPoller                PRPoller               // for monitor phase polling; nil disables monitor
-	NowFunc                 func() time.Time       // for testability; defaults to time.Now
-	AuthorityResolver       AuthorityResolver      // for comment authority checks; nil → all authoritative
-	MonitorProfile          *MonitorProfile        // behavioral profile; nil → use polling config as-is
-	SelfUser                string                 // PR author username for self-comment filtering
-	BotUsers                []string               // known bot usernames to filter
-	Stderr                  io.Writer              // destination for warning messages; defaults to os.Stderr
-	TokenBudget             TokenBudgetConfig      // prompt token budget estimation; zero value disables checks
-	ContextBudget           int                    // global default context budget in tokens; 0 disables adaptive fitting
-	Notify                  NotifyConfig           // notification hooks fired on pipeline completion; zero value disables
-	ApiKeyHelper            string                 // path to script that prints an API key; wired into runner.RunOpts
-	MergeMethod             string                 // merge method: "merge", "squash", "rebase"; defaults to "squash"
-	MergeLabels             []string               // required PR labels before auto-merge proceeds
-	AutoMergeTimeout        time.Duration          // max wait after approval before giving up; defaults to 30m
-	TranscriptLevel         claude.TranscriptLevel // transcript capture level; empty/"off" disables
+	PRPoller                PRPoller          // for monitor phase polling; nil disables monitor
+	NowFunc                 func() time.Time  // for testability; defaults to time.Now
+	AuthorityResolver       AuthorityResolver // for comment authority checks; nil → all authoritative
+	MonitorProfile          *MonitorProfile   // behavioral profile; nil → use polling config as-is
+	SelfUser                string            // PR author username for self-comment filtering
+	BotUsers                []string          // known bot usernames to filter
+	Stderr                  io.Writer         // destination for warning messages; defaults to os.Stderr
+	TokenBudget             TokenBudgetConfig // prompt token budget estimation; zero value disables checks
+	ContextBudget           int               // global default context budget in tokens; 0 disables adaptive fitting
+	Notify                  NotifyConfig      // notification hooks fired on pipeline completion; zero value disables
+	ApiKeyHelper            string            // path to script that prints an API key; wired into runner.RunOpts
+	MergeMethod             string            // merge method: "merge", "squash", "rebase"; defaults to "squash"
+	MergeLabels             []string          // required PR labels before auto-merge proceeds
+	AutoMergeTimeout        time.Duration     // max wait after approval before giving up; defaults to 30m
+	TranscriptLevel         transcript.Level  // transcript capture level; empty/"off" disables
 }
 
 // TokenBudgetConfig configures the prompt-size estimation check.

@@ -5,27 +5,20 @@ import (
 	"bytes"
 	"encoding/json"
 	"strings"
+
+	"github.com/decko/soda/internal/transcript"
 )
 
-// TranscriptLevel controls which events are persisted in the transcript.
-type TranscriptLevel string
+// Re-export transcript types for backward compatibility within this package.
+// New code outside internal/claude should import internal/transcript directly.
+type TranscriptLevel = transcript.Level
+type TranscriptEntry = transcript.Entry
 
 const (
-	// TranscriptOff disables transcript capture entirely.
-	TranscriptOff TranscriptLevel = "off"
-	// TranscriptTools captures tool_use and tool_result events only.
-	TranscriptTools TranscriptLevel = "tools"
-	// TranscriptFull captures all assistant/user events including text blocks.
-	TranscriptFull TranscriptLevel = "full"
+	TranscriptOff   = transcript.Off
+	TranscriptTools = transcript.Tools
+	TranscriptFull  = transcript.Full
 )
-
-// TranscriptEntry is a single human-readable entry in a phase transcript.
-type TranscriptEntry struct {
-	Role    string `json:"role"`              // "assistant", "tool_use", "tool_result"
-	Content string `json:"content"`           // display text
-	Tool    string `json:"tool,omitempty"`    // tool name (tool_use/tool_result only)
-	ToolID  string `json:"tool_id,omitempty"` // correlating tool_use_id
-}
 
 // streamEvent is the minimal structure needed to classify a stream-json line.
 type streamEvent struct {

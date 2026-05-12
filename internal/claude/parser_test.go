@@ -138,6 +138,26 @@ func TestParseResponse(t *testing.T) {
 			},
 		},
 		{
+			name:    "stream_json_fake_result_midstream",
+			fixture: "testdata/stream_json_fake_result_midstream.jsonl",
+			checkResult: func(t *testing.T, r *RunResult) {
+				t.Helper()
+				if r.Result != "Complete." {
+					t.Errorf("Result = %q, want %q", r.Result, "Complete.")
+				}
+				if r.CostUSD != 0.03 {
+					t.Errorf("CostUSD = %v, want 0.03", r.CostUSD)
+				}
+				var so map[string]any
+				if err := json.Unmarshal(r.Output, &so); err != nil {
+					t.Fatalf("Output unmarshal: %v", err)
+				}
+				if so["status"] != "ok" {
+					t.Errorf("Output status = %v, want ok", so["status"])
+				}
+			},
+		},
+		{
 			name:    "fake_envelope_in_tool_output",
 			fixture: "testdata/fake_envelope_in_tool_output.txt",
 			checkResult: func(t *testing.T, r *RunResult) {
