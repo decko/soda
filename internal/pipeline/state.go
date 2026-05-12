@@ -140,6 +140,9 @@ func (s *State) MarkRunning(phase string) error {
 	ps.Error = ""
 	ps.PlanHash = ""
 	ps.PromptHash = ""
+	ps.ModelUsed = ""
+	ps.ParseAttempts = 0
+	ps.ParseSuccessOnFirst = false
 	ps.startedAt = time.Now()
 
 	return s.flushMeta()
@@ -211,6 +214,39 @@ func (s *State) AccumulateTokens(phase string, tokensIn, tokensOut, cacheTokensI
 	ps.TokensIn += tokensIn
 	ps.TokensOut += tokensOut
 	ps.CacheTokensIn += cacheTokensIn
+	return s.flushMeta()
+}
+
+// RecordModelUsed sets the resolved model name on the phase.
+// Phase must exist (via MarkRunning).
+func (s *State) RecordModelUsed(phase string, model string) error {
+	ps := s.meta.Phases[phase]
+	if ps == nil {
+		return fmt.Errorf("pipeline: record model used: phase %q not started", phase)
+	}
+	ps.ModelUsed = model
+	return s.flushMeta()
+}
+
+// AccumulateParseAttempt increments the parse attempt counter for the phase.
+// Phase must exist (via MarkRunning).
+func (s *State) AccumulateParseAttempt(phase string) error {
+	ps := s.meta.Phases[phase]
+	if ps == nil {
+		return fmt.Errorf("pipeline: accumulate parse attempt: phase %q not started", phase)
+	}
+	ps.ParseAttempts++
+	return s.flushMeta()
+}
+
+// RecordParseFirstSuccess marks that the phase output parsed successfully
+// on the first attempt. Phase must exist (via MarkRunning).
+func (s *State) RecordParseFirstSuccess(phase string) error {
+	ps := s.meta.Phases[phase]
+	if ps == nil {
+		return fmt.Errorf("pipeline: record parse first success: phase %q not started", phase)
+	}
+	ps.ParseSuccessOnFirst = true
 	return s.flushMeta()
 }
 
