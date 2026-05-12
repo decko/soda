@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/decko/soda/internal/claude"
 	"github.com/decko/soda/internal/runner"
 )
 
@@ -6731,6 +6732,105 @@ func TestEngine_NotificationPartialStatus(t *testing.T) {
 	}
 	if result.Status != "partial" {
 		t.Errorf("Status = %q, want %q", result.Status, "partial")
+	}
+}
+
+func TestEngine_WriteTranscript(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 0, Parse: 0, Semantic: 0},
+		},
+	}
+
+	transcriptEntries := []claude.TranscriptEntry{
+		{Role: "tool_use", Content: `{"file_path":"main.go"}`, Tool: "Read", ToolID: "tu_1"},
+		{Role: "tool_result", Content: "file content here", ToolID: "tu_1"},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:     json.RawMessage(`{"automatable":"yes"}`),
+					RawText:    "Triage complete",
+					CostUSD:    0.05,
+					Transcript: transcriptEntries,
+				},
+			}},
+		},
+	}
+
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.TranscriptLevel = claude.TranscriptTools
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	transcriptPath := filepath.Join(state.Dir(), "logs", "triage_transcript.json")
+	data, err := os.ReadFile(transcriptPath)
+	if err != nil {
+		t.Fatalf("read transcript file: %v", err)
+	}
+
+	var got []claude.TranscriptEntry
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal transcript: %v", err)
+	}
+
+	if len(got) != len(transcriptEntries) {
+		t.Fatalf("transcript entry count = %d, want %d", len(got), len(transcriptEntries))
+	}
+	if got[0].Tool != "Read" {
+		t.Errorf("entries[0].Tool = %q, want %q", got[0].Tool, "Read")
+	}
+	if got[0].ToolID != "tu_1" {
+		t.Errorf("entries[0].ToolID = %q, want %q", got[0].ToolID, "tu_1")
+	}
+	if got[1].Role != "tool_result" {
+		t.Errorf("entries[1].Role = %q, want %q", got[1].Role, "tool_result")
+	}
+	if got[1].Content != "file content here" {
+		t.Errorf("entries[1].Content = %q, want %q", got[1].Content, "file content here")
+	}
+}
+
+func TestEngine_WriteTranscript_SkippedWhenEmpty(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "triage.md",
+			Retry:  RetryConfig{Transient: 0, Parse: 0, Semantic: 0},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
+					RawText: "Triage complete",
+					CostUSD: 0.05,
+					// Transcript is nil — transcript capture disabled
+				},
+			}},
+		},
+	}
+
+	engine, state := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.TranscriptLevel = claude.TranscriptOff
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	transcriptPath := filepath.Join(state.Dir(), "logs", "triage_transcript.json")
+	if _, err := os.Stat(transcriptPath); !os.IsNotExist(err) {
+		t.Errorf("transcript file should not exist when capture is disabled, but got: %v", err)
 	}
 }
 
