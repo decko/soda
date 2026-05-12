@@ -73,6 +73,7 @@ func (e *Engine) runWithRetry(ctx context.Context, phase PhaseConfig, opts runne
 			if threshold > 0 && parseFailures >= threshold && opts.Model != e.config.Model {
 				previousModel := opts.Model
 				opts.Model = e.config.Model
+				_ = e.state.RecordModelUsed(phase.Name, opts.Model)
 				e.emit(Event{
 					Phase: phase.Name,
 					Kind:  EventModelFallback,

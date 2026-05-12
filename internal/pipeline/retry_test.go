@@ -163,6 +163,12 @@ func TestRetry_ModelFallbackOnParseThreshold(t *testing.T) {
 		t.Errorf("call 2 model = %q, want %q", capturedModels[2], "global-model")
 	}
 
+	// Verify ModelUsed reflects the global model after fallback.
+	ps := state.Meta().Phases["impl"]
+	if ps.ModelUsed != "global-model" {
+		t.Errorf("ModelUsed = %q, want %q after fallback", ps.ModelUsed, "global-model")
+	}
+
 	// Verify EventModelFallback was emitted.
 	found := false
 	for _, ev := range events {
@@ -224,5 +230,51 @@ func TestRetry_NoFallbackWhenAlreadyGlobalModel(t *testing.T) {
 		if ev.Kind == EventModelFallback {
 			t.Error("EventModelFallback should not be emitted when already using global model")
 		}
+	}
+}
+
+func TestRetry_ModelUsedUpdatedAfterFallbackFailure(t *testing.T) {
+	// Verify that when a parse failure occurs *after* fallback,
+	// ModelUsed reflects the global model (not the original per-phase model).
+	pipeline := &PhasePipeline{
+		Phases: []PhaseConfig{
+			{Name: "impl", Prompt: "prompts/impl.md", Model: "phase-model", Retry: RetryConfig{Parse: 4}},
+		},
+		ModelRouting: ModelRoutingConfig{FallbackThreshold: 1},
+	}
+
+	callCount := 0
+	mock := &funcRunner{
+		fn: func(ctx context.Context, opts runner.RunOpts) (*runner.RunResult, error) {
+			callCount++
+			if callCount <= 3 {
+				return nil, &runner.ParseError{Err: fmt.Errorf("bad output %d", callCount)}
+			}
+			return &runner.RunResult{Output: json.RawMessage(`{}`)}, nil
+		},
+	}
+
+	engine, state := setupEngine(t, pipeline.Phases, mock, func(cfg *EngineConfig) {
+		cfg.Pipeline = pipeline
+		cfg.Model = "global-model"
+	})
+
+	if err := state.MarkRunning("impl"); err != nil {
+		t.Fatalf("MarkRunning: %v", err)
+	}
+
+	opts := runner.RunOpts{Phase: "impl", Model: "phase-model", UserPrompt: "test"}
+	_, err := engine.runWithRetry(t.Context(), pipeline.Phases[0], opts)
+	if err != nil {
+		t.Fatalf("runWithRetry: %v", err)
+	}
+
+	ps := state.Meta().Phases["impl"]
+	if ps.ModelUsed != "global-model" {
+		t.Errorf("ModelUsed = %q, want %q — failures after fallback should be attributed to global model", ps.ModelUsed, "global-model")
+	}
+	// 3 parse failures total (1 before fallback + 2 after).
+	if ps.ParseAttempts != 3 {
+		t.Errorf("ParseAttempts = %d, want 3", ps.ParseAttempts)
 	}
 }
