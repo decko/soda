@@ -5,16 +5,18 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"syscall"
 	"time"
 )
 
 // CostEntry records the cost of a single pipeline run in the persistent ledger.
 type CostEntry struct {
-	Ticket    string    `json:"ticket"`
-	Timestamp time.Time `json:"timestamp"`
-	Cost      float64   `json:"cost"`
-	Success   bool      `json:"success"`
+	Ticket     string    `json:"ticket"`
+	Timestamp  time.Time `json:"timestamp"`
+	Cost       float64   `json:"cost"`
+	Success    bool      `json:"success"`
+	Complexity string    `json:"complexity,omitempty"`
 }
 
 // costLedgerFile is the filename of the cost ledger within the state directory.
@@ -133,4 +135,55 @@ func AppendCostEntry(stateDir string, entry CostEntry) error {
 	}
 	data = append(data, '\n')
 	return atomicWrite(CostLedgerPath(stateDir), data)
+}
+
+// ComplexityStats holds aggregated cost statistics for a single complexity band.
+type ComplexityStats struct {
+	Sessions int
+	Mean     float64
+	Median   float64
+	Total    float64
+}
+
+// CostByComplexity groups cost entries by their complexity band and returns
+// aggregated statistics per band. Entries with an empty complexity value are
+// grouped under the key "unknown".
+func CostByComplexity(entries []CostEntry) map[string]ComplexityStats {
+	grouped := make(map[string][]float64)
+	for _, entry := range entries {
+		band := entry.Complexity
+		if band == "" {
+			band = "unknown"
+		}
+		grouped[band] = append(grouped[band], entry.Cost)
+	}
+
+	result := make(map[string]ComplexityStats, len(grouped))
+	for band, costs := range grouped {
+		var total float64
+		for _, cost := range costs {
+			total += cost
+		}
+		mean := total / float64(len(costs))
+
+		sorted := make([]float64, len(costs))
+		copy(sorted, costs)
+		sort.Float64s(sorted)
+
+		var median float64
+		n := len(sorted)
+		if n%2 == 0 {
+			median = (sorted[n/2-1] + sorted[n/2]) / 2.0
+		} else {
+			median = sorted[n/2]
+		}
+
+		result[band] = ComplexityStats{
+			Sessions: len(costs),
+			Mean:     mean,
+			Median:   median,
+			Total:    total,
+		}
+	}
+	return result
 }
