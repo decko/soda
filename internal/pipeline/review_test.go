@@ -3596,3 +3596,133 @@ func TestEngine_ParallelReview_ConditionSkipCarriesFindings(t *testing.T) {
 		t.Error("expected reviewer_skipped event with condition reason for ai-harness in rework cycle")
 	}
 }
+
+func TestParallelReview_PriorFindingsInjectedOnRework(t *testing.T) {
+	// When a reviewer produced critical/major findings in cycle 1, on cycle 2
+	// that reviewer should receive PriorFindings in its prompt data containing
+	// the findings from cycle 1.
+	phases := []PhaseConfig{
+		{
+			Name:         "implement",
+			Prompt:       "implement.md",
+			Retry:        RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			FeedbackFrom: []string{"review"},
+		},
+		{
+			Name:      "review",
+			Type:      "parallel-review",
+			DependsOn: []string{"implement"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+			Rework:    &ReworkConfig{Target: "implement"},
+			Reviewers: []ReviewerConfig{
+				{Name: "go-specialist", Prompt: "prompts/review-go.md", Focus: "Go idioms"},
+			},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true,"commits":1}`),
+					RawText: "Impl v1",
+					CostUSD: 0.50,
+				}},
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"tests_passed":true,"commits":2}`),
+					RawText: "Impl v2",
+					CostUSD: 0.50,
+				}},
+			},
+			// go-specialist: critical finding in cycle 1, clean in cycle 2.
+			"review/go-specialist": {
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[{"severity":"critical","file":"handler.go","line":42,"issue":"nil pointer dereference on ctx","suggestion":"add nil check"}]}`),
+					RawText: "Critical issue",
+					CostUSD: 0.15,
+				}},
+				{result: &runner.RunResult{
+					Output:  json.RawMessage(`{"findings":[]}`),
+					RawText: "All clear",
+					CostUSD: 0.10,
+				}},
+			},
+		},
+	}
+
+	stateDir := t.TempDir()
+	promptDir := t.TempDir()
+	workDir := t.TempDir()
+
+	// Write reviewer template that renders PriorFindings when present.
+	reviewerTmpl := `Reviewer: go-specialist
+Ticket: {{.Ticket.Key}}
+{{- if .PriorFindings}}
+PRIOR:{{range .PriorFindings}} {{.Issue}}{{end}}
+{{- end}}
+`
+	implTmpl := "Phase: implement\nTicket: {{.Ticket.Key}}\n"
+
+	for _, entry := range []struct {
+		name    string
+		content string
+	}{
+		{"implement.md", implTmpl},
+		{"prompts/review-go.md", reviewerTmpl},
+	} {
+		tmplPath := filepath.Join(promptDir, entry.name)
+		if err := os.MkdirAll(filepath.Dir(tmplPath), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(tmplPath, []byte(entry.content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	state, err := LoadOrCreate(stateDir, "PRIOR-1")
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+
+	cfg := EngineConfig{
+		Pipeline:   &PhasePipeline{Phases: phases},
+		Loader:     NewPromptLoader(promptDir),
+		Ticket:     TicketData{Key: "PRIOR-1", Summary: "Prior findings test"},
+		Model:      "test-model",
+		WorkDir:    workDir,
+		MaxCostUSD: 0,
+		Mode:       Autonomous,
+		SleepFunc:  func(time.Duration) {},
+		JitterFunc: func(time.Duration) time.Duration { return 0 },
+	}
+
+	engine := NewEngine(mock, state, cfg)
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Find the second review/go-specialist call (the rework cycle).
+	reviewCalls := 0
+	var reworkPrompt string
+	for _, call := range mock.calls {
+		if call.Phase == "review/go-specialist" {
+			reviewCalls++
+			if reviewCalls == 2 {
+				reworkPrompt = call.SystemPrompt
+			}
+		}
+	}
+
+	if reviewCalls != 2 {
+		t.Fatalf("review/go-specialist called %d times, want 2", reviewCalls)
+	}
+
+	// The rework prompt should contain the prior findings.
+	if !strings.Contains(reworkPrompt, "PRIOR:") {
+		t.Errorf("rework prompt should contain PRIOR: marker;\ngot: %s", reworkPrompt)
+	}
+	if !strings.Contains(reworkPrompt, "nil pointer dereference on ctx") {
+		t.Errorf("rework prompt should contain prior finding issue text;\ngot: %s", reworkPrompt)
+	}
+}

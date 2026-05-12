@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/decko/soda/internal/runner"
+	"github.com/decko/soda/schemas"
 )
 
 func TestBuildPromptData_VerifyClean(t *testing.T) {
@@ -185,6 +186,141 @@ func TestVerifyCleanTemplateGating(t *testing.T) {
 			}
 			if strings.Contains(rendered, tc.gatedPhrase) {
 				t.Errorf("VerifyClean=true: expected %q section to be absent", tc.gatedPhrase)
+			}
+		})
+	}
+}
+
+// reviewTemplateNames lists the three review templates for table-driven tests.
+var reviewTemplateNames = []string{"review.md", "review-go.md", "review-harness.md"}
+
+// loadReviewTemplate reads a review template from the embedded prompts directory.
+func loadReviewTemplate(t *testing.T, name string) string {
+	t.Helper()
+	_, thisFile, _, _ := runtime.Caller(0)
+	repoRoot := filepath.Join(filepath.Dir(thisFile), "..", "..")
+	embedDir := filepath.Join(repoRoot, "cmd", "soda", "embeds", "prompts")
+	raw, err := os.ReadFile(filepath.Join(embedDir, name))
+	if err != nil {
+		t.Fatalf("read template %s: %v", name, err)
+	}
+	return string(raw)
+}
+
+// baseReviewData returns a PromptData with enough fields populated to render
+// review templates without errors.
+func baseReviewData() PromptData {
+	return PromptData{
+		Ticket: TicketData{Key: "TEST-1", Summary: "Test"},
+		Artifacts: ArtifactData{
+			Plan:      "plan content",
+			Implement: "impl content",
+			Verify:    "verify content",
+		},
+		WorktreePath: "/tmp/test",
+		Branch:       "test-branch",
+	}
+}
+
+func TestReviewTemplates_DiffSection(t *testing.T) {
+	for _, name := range reviewTemplateNames {
+		name := name
+		t.Run(name+"_present", func(t *testing.T) {
+			tmpl := loadReviewTemplate(t, name)
+			data := baseReviewData()
+			data.Diff = "--- a/foo.go\n+++ b/foo.go\n@@ -1 +1 @@\n-old\n+new"
+
+			rendered, err := RenderPrompt(tmpl, data)
+			if err != nil {
+				t.Fatalf("RenderPrompt: %v", err)
+			}
+			if !strings.Contains(rendered, "## Changed Files") {
+				t.Error("expected '## Changed Files' section when Diff is non-empty")
+			}
+			if !strings.Contains(rendered, "+new") {
+				t.Error("expected diff content to appear in rendered output")
+			}
+			if !strings.Contains(rendered, "Focus your review on the changed files") {
+				t.Error("expected diff-scoped instruction when Diff is set")
+			}
+		})
+		t.Run(name+"_absent", func(t *testing.T) {
+			tmpl := loadReviewTemplate(t, name)
+			data := baseReviewData()
+			data.Diff = ""
+
+			rendered, err := RenderPrompt(tmpl, data)
+			if err != nil {
+				t.Fatalf("RenderPrompt: %v", err)
+			}
+			if strings.Contains(rendered, "## Changed Files") {
+				t.Error("'## Changed Files' section should be absent when Diff is empty")
+			}
+			if !strings.Contains(rendered, "Read the actual code in the worktree") {
+				t.Error("expected fallback instruction when Diff is empty")
+			}
+		})
+	}
+}
+
+func TestReviewTemplates_PriorFindingsSection(t *testing.T) {
+	for _, name := range reviewTemplateNames {
+		name := name
+		t.Run(name+"_present", func(t *testing.T) {
+			tmpl := loadReviewTemplate(t, name)
+			data := baseReviewData()
+			data.PriorFindings = []schemas.ReviewFinding{
+				{Severity: "major", File: "handler.go", Line: 42, Issue: "nil pointer dereference"},
+			}
+
+			rendered, err := RenderPrompt(tmpl, data)
+			if err != nil {
+				t.Fatalf("RenderPrompt: %v", err)
+			}
+			if !strings.Contains(rendered, "## Previously Addressed Findings") {
+				t.Error("expected '## Previously Addressed Findings' section")
+			}
+			if !strings.Contains(rendered, "nil pointer dereference") {
+				t.Error("expected finding issue text in rendered output")
+			}
+			if !strings.Contains(rendered, "handler.go:42") {
+				t.Error("expected file:line in rendered output")
+			}
+		})
+		t.Run(name+"_absent", func(t *testing.T) {
+			tmpl := loadReviewTemplate(t, name)
+			data := baseReviewData()
+			data.PriorFindings = nil
+
+			rendered, err := RenderPrompt(tmpl, data)
+			if err != nil {
+				t.Fatalf("RenderPrompt: %v", err)
+			}
+			if strings.Contains(rendered, "## Previously Addressed Findings") {
+				t.Error("'## Previously Addressed Findings' should be absent when PriorFindings is nil")
+			}
+		})
+	}
+}
+
+func TestReviewTemplates_SeverityDefinitions(t *testing.T) {
+	for _, name := range reviewTemplateNames {
+		name := name
+		t.Run(name, func(t *testing.T) {
+			tmpl := loadReviewTemplate(t, name)
+			data := baseReviewData()
+
+			rendered, err := RenderPrompt(tmpl, data)
+			if err != nil {
+				t.Fatalf("RenderPrompt: %v", err)
+			}
+			if !strings.Contains(rendered, "## Severity definitions") {
+				t.Error("expected '## Severity definitions' section")
+			}
+			for _, word := range []string{"critical", "major", "minor"} {
+				if !strings.Contains(rendered, word) {
+					t.Errorf("expected severity word %q in rendered output", word)
+				}
 			}
 		})
 	}
