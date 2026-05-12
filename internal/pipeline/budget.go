@@ -44,7 +44,7 @@ type reductionStep struct {
 //
 // The order is phase-specific:
 //   - implement: siblings → exemplars → projectContext → extras → review comments → diff → (rework) → (artifacts) → conventions
-//   - review:    siblings → exemplars → extras → diff → projectContext → (rework) → (artifacts) → conventions
+//   - review:    siblings → exemplars → extras → Diff → projectContext → (rework) → (artifacts) → conventions
 //   - verify:    siblings → exemplars → extras → projectContext → diff → (rework) → (artifacts)  (no conventions — verify.md never renders RepoConventions)
 //   - patch:     diff → siblings → exemplars → extras → projectContext → (rework) → (artifacts) → conventions
 //
@@ -178,6 +178,15 @@ func phaseReductionOrder(phase string) []reductionStep {
 	// Rework reduction group used when ReworkFeedback is present.
 	reworkSteps := []reductionStep{reworkSnippetsStep, reworkDiffStep, reworkCommandOutputStep, reworkPriorCyclesStep}
 
+	// reviewDiffStep reduces the review-phase Diff field (distinct from
+	// DiffContext which is used for corrective/monitor phases and is never
+	// set during review).
+	reviewDiffStep := reductionStep{
+		label:   "Diff",
+		reduce:  func(d *PromptData) { d.Diff = "" },
+		applies: func(d *PromptData) bool { return d.Diff != "" },
+	}
+
 	switch phase {
 	case "implement":
 		// Conventions are shed last — they are compact and high-value for implement.
@@ -187,7 +196,7 @@ func phaseReductionOrder(phase string) []reductionStep {
 		steps = append(steps, conventionsStep)
 		return steps
 	case "review":
-		steps := []reductionStep{siblingStep, exemplarStep, extrasStep, diffStep, projectContextStep}
+		steps := []reductionStep{siblingStep, exemplarStep, extrasStep, reviewDiffStep, projectContextStep}
 		steps = append(steps, reworkSteps...)
 		steps = append(steps, artifactSteps...)
 		steps = append(steps, conventionsStep)
