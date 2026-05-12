@@ -5,6 +5,45 @@ import (
 	"testing"
 )
 
+func TestSchemaVersionFor_KnownPhase(t *testing.T) {
+	version := SchemaVersionFor("triage")
+	if version == "" {
+		t.Fatal("SchemaVersionFor(triage) returned empty string")
+	}
+	if len(version) != 16 {
+		t.Errorf("SchemaVersionFor(triage) length = %d, want 16", len(version))
+	}
+	// Must be valid hex characters.
+	for _, ch := range version {
+		if !((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f')) {
+			t.Errorf("SchemaVersionFor(triage) contains non-hex char %q", ch)
+		}
+	}
+}
+
+func TestSchemaVersionFor_StableAcrossCalls(t *testing.T) {
+	first := SchemaVersionFor("plan")
+	second := SchemaVersionFor("plan")
+	if first != second {
+		t.Errorf("SchemaVersionFor not stable: %q != %q", first, second)
+	}
+}
+
+func TestSchemaVersionFor_DifferentPhasesDiffer(t *testing.T) {
+	triageVersion := SchemaVersionFor("triage")
+	planVersion := SchemaVersionFor("plan")
+	if triageVersion == planVersion {
+		t.Errorf("triage and plan should have different schema versions, both = %q", triageVersion)
+	}
+}
+
+func TestSchemaVersionFor_UnknownPhase(t *testing.T) {
+	version := SchemaVersionFor("nonexistent")
+	if version != "" {
+		t.Errorf("SchemaVersionFor(nonexistent) = %q, want empty", version)
+	}
+}
+
 func TestSchemaFor_KnownPhases(t *testing.T) {
 	phases := []struct {
 		name    string
