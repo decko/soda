@@ -46,6 +46,7 @@ type pipelineOpts struct {
 	useTUI            bool
 	transcript        string // CLI override: "tools", "full", or "off"
 	transcriptChanged bool   // true when --transcript was explicitly passed
+	force             bool   // override schema version mismatch checks
 }
 
 // pipelineOptsFromCmd extracts pipelineOpts from Cobra flags registered on the
@@ -59,6 +60,7 @@ func pipelineOptsFromCmd(cmd *cobra.Command, ticketKey string) pipelineOpts {
 	useMock, _ := cmd.Flags().GetBool("mock")
 	useTUI, _ := cmd.Flags().GetBool("tui")
 	transcript, _ := cmd.Flags().GetString("transcript")
+	force, _ := cmd.Flags().GetBool("force")
 
 	return pipelineOpts{
 		ticketKey:         ticketKey,
@@ -73,6 +75,7 @@ func pipelineOptsFromCmd(cmd *cobra.Command, ticketKey string) pipelineOpts {
 		useTUI:            useTUI,
 		transcript:        transcript,
 		transcriptChanged: cmd.Flags().Changed("transcript"),
+		force:             force,
 	}
 }
 
@@ -102,6 +105,7 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().Bool("tui", false, "use interactive TUI display")
 	cmd.Flags().String("query", "", "search filter for listing tickets (picker mode)")
 	cmd.Flags().String("transcript", "", "transcript capture level: tools, full, or off (overrides config)")
+	cmd.Flags().Bool("force", false, "override schema version mismatch checks on resume")
 
 	return cmd
 }
@@ -426,6 +430,7 @@ func runPipeline(cfg *config.Config, opts pipelineOpts) error {
 		MonitorProfile:    monitorProfile,
 		AuthorityResolver: authorityResolver,
 		TranscriptLevel:   transcriptLevel,
+		Force:             opts.force,
 		OnEvent: func(event pipeline.Event) {
 			if event.Kind == pipeline.EventPhaseSkipped || event.Kind == pipeline.EventMonitorSkipped {
 				skippedPhases[event.Phase] = true
@@ -881,6 +886,22 @@ func handleEvent(ctx context.Context, cancel context.CancelFunc, engine *pipelin
 			current = c
 		}
 		prog.Message(fmt.Sprintf("Warning: binary version changed since pipeline started (was %s, now %s)", stored, current))
+
+	case pipeline.EventSchemaVersionMismatch:
+		phase := event.Phase
+		var storedVer string
+		if s, ok := event.Data["stored_version"].(string); ok {
+			storedVer = s
+		}
+		var currentVer string
+		if c, ok := event.Data["current_version"].(string); ok {
+			currentVer = c
+		}
+		if storedVer == "" {
+			prog.Message(fmt.Sprintf("Warning: phase %s artifact has no schema version (current: %s)", phase, currentVer))
+		} else {
+			prog.Message(fmt.Sprintf("Warning: phase %s schema version mismatch (stored: %s, current: %s)", phase, storedVer, currentVer))
+		}
 
 	case pipeline.EventNotifySuccess:
 		prog.Message("  📬 Notification sent")

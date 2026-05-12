@@ -1102,6 +1102,66 @@ func TestHandleEvent_NotifyFailed(t *testing.T) {
 	}
 }
 
+func TestNewRunCmd_ForceFlag(t *testing.T) {
+	cmd := newRunCmd()
+	flag := cmd.Flags().Lookup("force")
+	if flag == nil {
+		t.Fatal("--force flag should be registered on run command")
+	}
+	if flag.DefValue != "false" {
+		t.Errorf("--force default = %q, want %q", flag.DefValue, "false")
+	}
+}
+
+func TestHandleEvent_SchemaVersionMismatch(t *testing.T) {
+	dir := t.TempDir()
+	state, _ := pipeline.LoadOrCreate(dir, "T-1")
+
+	var buf bytes.Buffer
+	prog := progress.New(&buf, false)
+
+	event := pipeline.Event{
+		Phase: "triage",
+		Kind:  pipeline.EventSchemaVersionMismatch,
+		Data: map[string]any{
+			"stored_version":  "aaaa1111bbbb2222",
+			"current_version": "cccc3333dddd4444",
+		},
+	}
+	handleEvent(context.Background(), nil, nil, state, prog, event)
+
+	output := buf.String()
+	if !strings.Contains(output, "triage") {
+		t.Errorf("expected phase name in output, got %q", output)
+	}
+	if !strings.Contains(output, "mismatch") {
+		t.Errorf("expected 'mismatch' in output, got %q", output)
+	}
+}
+
+func TestHandleEvent_SchemaVersionMismatchMissingVersion(t *testing.T) {
+	dir := t.TempDir()
+	state, _ := pipeline.LoadOrCreate(dir, "T-1")
+
+	var buf bytes.Buffer
+	prog := progress.New(&buf, false)
+
+	event := pipeline.Event{
+		Phase: "triage",
+		Kind:  pipeline.EventSchemaVersionMismatch,
+		Data: map[string]any{
+			"stored_version":  "",
+			"current_version": "cccc3333dddd4444",
+		},
+	}
+	handleEvent(context.Background(), nil, nil, state, prog, event)
+
+	output := buf.String()
+	if !strings.Contains(output, "no schema version") {
+		t.Errorf("expected 'no schema version' in output, got %q", output)
+	}
+}
+
 func TestFormatTokenCount(t *testing.T) {
 	tests := []struct {
 		name string
