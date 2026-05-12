@@ -216,6 +216,11 @@ func (e *Engine) runParallelReview(ctx context.Context, phase PhaseConfig) error
 		return fmt.Errorf("engine: build prompt data for %s: %w", phase.Name, err)
 	}
 
+	// Populate diff for review-scoped focus. Uses the same helper as
+	// corrective phases but writes to Diff (not DiffContext) so the
+	// review templates can render a dedicated "Changed Files" section.
+	promptData.Diff = e.computeDiffContext(ctx)
+
 	// Resolve timeout and model before launching goroutines — avoid concurrent Meta() reads.
 	resolvedTimeout := e.resolvePhaseTimeout(phase)
 	resolvedModel := e.resolvePhaseModel(phase)
@@ -310,11 +315,17 @@ func (e *Engine) runParallelReview(ctx context.Context, phase PhaseConfig) error
 			results[idx] = reviewerResult{Name: reviewer.Name, Findings: carried}
 			continue
 		}
+		// Clone promptData by value so each reviewer gets its own copy
+		// with per-reviewer PriorFindings. On the first run priorReview
+		// is nil so PriorFindings stays nil; on rework cycles it is
+		// populated with findings the reviewer raised in the prior cycle.
+		reviewerData := promptData
+		reviewerData.PriorFindings = priorFindingsForReviewer(priorReview, reviewer.Name)
 		wg.Add(1)
-		go func(idx int, reviewer ReviewerConfig) {
+		go func(idx int, reviewer ReviewerConfig, data PromptData) {
 			defer wg.Done()
-			e.runReviewer(ctx, phase, reviewer, promptData, budgetRemaining, resolvedTimeout, resolvedModel, idx, msgCh)
-		}(idx, reviewer)
+			e.runReviewer(ctx, phase, reviewer, data, budgetRemaining, resolvedTimeout, resolvedModel, idx, msgCh)
+		}(idx, reviewer, reviewerData)
 	}
 
 	// Close channel once all goroutines finish.
