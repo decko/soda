@@ -674,6 +674,111 @@ func TestValidateTranscript_InvalidLevel(t *testing.T) {
 	}
 }
 
+func TestRunValidateSession_Current(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &config.Config{StateDir: dir}
+
+	// Create state with current schema version (via WriteResult injection).
+	state, err := pipeline.LoadOrCreate(dir, "T-1")
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+	_ = state.MarkRunning("triage")
+	_ = state.WriteResult("triage", []byte(`{"ticket_key":"T-1","complexity":"low"}`))
+	_ = state.MarkCompleted("triage")
+
+	var buf bytes.Buffer
+	err = runValidateSession(&buf, cfg, "T-1", "")
+	if err != nil {
+		t.Fatalf("runValidateSession: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "current") {
+		t.Errorf("expected 'current' in output, got %q", output)
+	}
+	if !strings.Contains(output, "✓") {
+		t.Errorf("expected ✓ in output, got %q", output)
+	}
+}
+
+func TestRunValidateSession_Outdated(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &config.Config{StateDir: dir}
+
+	state, err := pipeline.LoadOrCreate(dir, "T-2")
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+	_ = state.MarkRunning("triage")
+	// Write with fake old schema version.
+	resultPath := state.Dir() + "/triage.json"
+	_ = os.WriteFile(resultPath, []byte(`{"ticket_key":"T-2","_schema_version":"deadbeef12345678"}`), 0644)
+	_ = state.MarkCompleted("triage")
+
+	var buf bytes.Buffer
+	err = runValidateSession(&buf, cfg, "T-2", "")
+	if err == nil {
+		t.Fatal("expected error for outdated schema version")
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "outdated") {
+		t.Errorf("expected 'outdated' in output, got %q", output)
+	}
+	if !strings.Contains(output, "✗") {
+		t.Errorf("expected ✗ in output, got %q", output)
+	}
+}
+
+func TestRunValidateSession_NoVersion(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &config.Config{StateDir: dir}
+
+	state, err := pipeline.LoadOrCreate(dir, "T-3")
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+	_ = state.MarkRunning("triage")
+	// Write without _schema_version.
+	resultPath := state.Dir() + "/triage.json"
+	_ = os.WriteFile(resultPath, []byte(`{"ticket_key":"T-3"}`), 0644)
+	_ = state.MarkCompleted("triage")
+
+	var buf bytes.Buffer
+	err = runValidateSession(&buf, cfg, "T-3", "")
+	if err == nil {
+		t.Fatal("expected error for missing schema version")
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "no _schema_version") {
+		t.Errorf("expected 'no _schema_version' in output, got %q", output)
+	}
+}
+
+func TestRunValidateSession_MissingDir(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &config.Config{StateDir: dir}
+
+	var buf bytes.Buffer
+	err := runValidateSession(&buf, cfg, "NONEXISTENT-999", "")
+	if err == nil {
+		t.Fatal("expected error for missing session directory")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("expected 'not found' in error, got %q", err.Error())
+	}
+}
+
+func TestNewValidateCmd_SessionFlag(t *testing.T) {
+	cmd := newValidateCmd()
+	flag := cmd.Flags().Lookup("session")
+	if flag == nil {
+		t.Fatal("--session flag should be registered on validate command")
+	}
+}
+
 func TestRunValidate_WithTranscriptConfig(t *testing.T) {
 	cfg := &config.Config{
 		TicketSource: "github",
