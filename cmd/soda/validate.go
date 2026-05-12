@@ -381,9 +381,9 @@ func runValidateSession(w io.Writer, cfg *config.Config, ticketKey string, pipel
 		}
 
 		if storedVersion == currentVersion {
-			fmt.Fprintf(w, "  %-15s  ✓  current (%s)\n", phase.Name, storedVersion[:8])
+			fmt.Fprintf(w, "  %-15s  ✓  current (%s)\n", phase.Name, truncateVersion(storedVersion, 8))
 		} else {
-			fmt.Fprintf(w, "  %-15s  ✗  outdated (stored: %s, current: %s)\n", phase.Name, storedVersion[:8], currentVersion[:8])
+			fmt.Fprintf(w, "  %-15s  ✗  outdated (stored: %s, current: %s)\n", phase.Name, truncateVersion(storedVersion, 8), truncateVersion(currentVersion, 8))
 			hasIssues = true
 		}
 	}
@@ -419,6 +419,16 @@ func extractSessionSchemaVersion(state *pipeline.State, phase string) (string, e
 		return "", fmt.Errorf("unmarshal _schema_version: %w", err)
 	}
 	return version, nil
+}
+
+// truncateVersion returns the first n characters of version, or the full
+// string when it is shorter than n. This guards against panics on corrupted
+// or manually edited _schema_version values.
+func truncateVersion(version string, maxLen int) string {
+	if len(version) <= maxLen {
+		return version
+	}
+	return version[:maxLen]
 }
 
 // validateTranscript checks that the transcript level is a recognized value.

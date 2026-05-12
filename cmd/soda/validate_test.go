@@ -771,6 +771,56 @@ func TestRunValidateSession_MissingDir(t *testing.T) {
 	}
 }
 
+func TestTruncateVersion(t *testing.T) {
+	tests := []struct {
+		name    string
+		version string
+		maxLen  int
+		want    string
+	}{
+		{"full 16-char", "abcdef1234567890", 8, "abcdef12"},
+		{"exact length", "abcdef12", 8, "abcdef12"},
+		{"short value", "abc", 8, "abc"},
+		{"empty string", "", 8, ""},
+		{"single char", "x", 8, "x"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := truncateVersion(tt.version, tt.maxLen)
+			if got != tt.want {
+				t.Errorf("truncateVersion(%q, %d) = %q, want %q", tt.version, tt.maxLen, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRunValidateSession_ShortVersion(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &config.Config{StateDir: dir}
+
+	state, err := pipeline.LoadOrCreate(dir, "T-SHORT")
+	if err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+	_ = state.MarkRunning("triage")
+	// Write with a very short _schema_version to test no panic.
+	resultPath := state.Dir() + "/triage.json"
+	_ = os.WriteFile(resultPath, []byte(`{"ticket_key":"T-SHORT","_schema_version":"abc"}`), 0644)
+	_ = state.MarkCompleted("triage")
+
+	var buf bytes.Buffer
+	// Should not panic, even though stored version is shorter than 8 chars.
+	err = runValidateSession(&buf, cfg, "T-SHORT", "")
+	if err == nil {
+		t.Fatal("expected error for mismatched schema version")
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "outdated") {
+		t.Errorf("expected 'outdated' in output, got %q", output)
+	}
+}
+
 func TestNewValidateCmd_SessionFlag(t *testing.T) {
 	cmd := newValidateCmd()
 	flag := cmd.Flags().Lookup("session")
