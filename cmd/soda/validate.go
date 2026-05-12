@@ -85,6 +85,9 @@ func runValidate(w io.Writer, errW io.Writer, cfg *config.Config, pipelineName s
 	// Stage 7: Notify hooks
 	validateNotify(w, result, cfg)
 
+	// Stage 8: Transcript config
+	validateTranscript(w, result, cfg)
+
 	// Print summary
 	fmt.Fprintln(w)
 	for _, warn := range result.warnings {
@@ -307,5 +310,20 @@ func validateNotifyScript(result *validationResult, prefix string, sc *config.Sc
 	binary := parts[0]
 	if _, err := exec.LookPath(binary); err != nil {
 		result.addWarning("%s: script binary %q not found in PATH: %v", prefix, binary, err)
+	}
+}
+
+// validateTranscript checks that the transcript level is a recognized value.
+func validateTranscript(w io.Writer, result *validationResult, cfg *config.Config) {
+	level := cfg.Transcript.Level
+	switch level {
+	case "", "off":
+		fmt.Fprintln(w, "✓ transcript: off (default)")
+	case "tools":
+		fmt.Fprintln(w, "✓ transcript: tools")
+	case "full":
+		fmt.Fprintln(w, "✓ transcript: full")
+	default:
+		result.addError("transcript: unknown level %q (expected 'tools', 'full', or 'off')", level)
 	}
 }
