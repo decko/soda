@@ -170,8 +170,13 @@ func TestMarkRunning(t *testing.T) {
 		if err != nil {
 			t.Fatalf("archived .json: %v", err)
 		}
-		if string(archived) != `{"verdict":"pass"}` {
-			t.Errorf("archived content = %q", archived)
+		// Archived content includes injected _schema_version; verify original field.
+		var archivedObj map[string]interface{}
+		if err := json.Unmarshal(archived, &archivedObj); err != nil {
+			t.Fatalf("unmarshal archived: %v", err)
+		}
+		if archivedObj["verdict"] != "pass" {
+			t.Errorf("archived verdict = %v, want pass", archivedObj["verdict"])
 		}
 
 		archivedMd, err := os.ReadFile(filepath.Join(stateDir, "verify.md.1"))
@@ -967,8 +972,13 @@ func TestFullLifecycle(t *testing.T) {
 		t.Errorf("triage artifact = %q", triageArtifact)
 	}
 	triageResult, _ := state2.ReadResult("triage")
-	if string(triageResult) != `{"complexity":"medium"}` {
-		t.Errorf("triage result = %q", triageResult)
+	// Result includes injected _schema_version; verify original field is present.
+	var triageObj map[string]interface{}
+	if err := json.Unmarshal(triageResult, &triageObj); err != nil {
+		t.Fatalf("unmarshal triage result: %v", err)
+	}
+	if triageObj["complexity"] != "medium" {
+		t.Errorf("triage result complexity = %v, want medium", triageObj["complexity"])
 	}
 
 	// Re-run implement (generation 2)
