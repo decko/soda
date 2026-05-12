@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"github.com/decko/soda/internal/git"
 	"github.com/decko/soda/internal/progress"
 	"github.com/decko/soda/internal/runner"
+	"github.com/decko/soda/internal/transcript"
 )
 
 // Mode controls whether the engine pauses between phases.
@@ -71,6 +73,7 @@ type EngineConfig struct {
 	MergeMethod             string            // merge method: "merge", "squash", "rebase"; defaults to "squash"
 	MergeLabels             []string          // required PR labels before auto-merge proceeds
 	AutoMergeTimeout        time.Duration     // max wait after approval before giving up; defaults to 30m
+	TranscriptLevel         transcript.Level  // transcript capture level; empty/"off" disables
 }
 
 // TokenBudgetConfig configures the prompt-size estimation check.
@@ -760,17 +763,18 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 	// before falling back to the phase default.
 	resolvedTimeout := e.resolvePhaseTimeout(phase)
 	opts := runner.RunOpts{
-		Phase:        phase.Name,
-		SystemPrompt: rendered,
-		UserPrompt:   "Execute the task described in the system prompt.",
-		OutputSchema: phase.Schema,
-		AllowedTools: phase.Tools,
-		MaxBudgetUSD: remaining,
-		WorkDir:      e.workDir(phase),
-		Model:        model,
-		Timeout:      resolvedTimeout,
-		OnChunk:      e.makeOnChunk(ctx, phase.Name),
-		ApiKeyHelper: e.config.ApiKeyHelper,
+		Phase:           phase.Name,
+		SystemPrompt:    rendered,
+		UserPrompt:      "Execute the task described in the system prompt.",
+		OutputSchema:    phase.Schema,
+		AllowedTools:    phase.Tools,
+		MaxBudgetUSD:    remaining,
+		WorkDir:         e.workDir(phase),
+		Model:           model,
+		Timeout:         resolvedTimeout,
+		OnChunk:         e.makeOnChunk(ctx, phase.Name),
+		ApiKeyHelper:    e.config.ApiKeyHelper,
+		TranscriptLevel: e.config.TranscriptLevel,
 	}
 
 	// Run with retry.
@@ -797,6 +801,17 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 	}
 	if err := e.state.AccumulateTokens(phase.Name, result.TokensIn, result.TokensOut, result.CacheTokensIn); err != nil {
 		return fmt.Errorf("engine: accumulate tokens for %s: %w", phase.Name, err)
+	}
+
+	// Persist transcript if capture was enabled and entries were collected.
+	if len(result.Transcript) > 0 {
+		transcriptJSON, jsonErr := json.Marshal(result.Transcript)
+		if jsonErr != nil {
+			// Non-fatal: log warning but don't fail the phase.
+			fmt.Fprintf(e.config.Stderr, "engine: warning: failed to marshal transcript for %s: %v\n", phase.Name, jsonErr)
+		} else if writeErr := e.state.WriteTranscript(phase.Name, transcriptJSON); writeErr != nil {
+			fmt.Fprintf(e.config.Stderr, "engine: warning: failed to write transcript for %s: %v\n", phase.Name, writeErr)
+		}
 	}
 
 	// Token budget calibration: after the LLM returns actual token counts,

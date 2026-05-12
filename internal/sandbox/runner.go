@@ -142,6 +142,7 @@ func (r *Runner) Run(ctx context.Context, opts runner.RunOpts) (*runner.RunResul
 		AllowedTools:     opts.AllowedTools,
 		MaxBudgetUSD:     budgetPtr,
 		Timeout:          opts.Timeout,
+		TranscriptLevel:  opts.TranscriptLevel,
 	}
 	args := claude.BuildArgs(claudeOpts, opts.Model)
 
@@ -353,7 +354,8 @@ func (r *Runner) Run(ctx context.Context, opts runner.RunOpts) (*runner.RunResul
 		if stdout.Len() > 0 {
 			result, parseErr := claude.ParseResponse(stdout.Bytes())
 			if parseErr == nil {
-				return mapResult(result), nil
+				transcript := claude.FilterTranscript(stdout.Bytes(), opts.TranscriptLevel)
+				return mapResult(result, transcript), nil
 			}
 		}
 		return nil, mapSandboxError(&ExitError{
@@ -368,11 +370,13 @@ func (r *Runner) Run(ctx context.Context, opts runner.RunOpts) (*runner.RunResul
 		return nil, mapClaudeParseError(err)
 	}
 
-	return mapResult(result), nil
+	transcript := claude.FilterTranscript(stdout.Bytes(), opts.TranscriptLevel)
+	return mapResult(result, transcript), nil
 }
 
 // mapResult converts a claude.RunResult to a runner.RunResult.
-func mapResult(cr *claude.RunResult) *runner.RunResult {
+// transcript is computed post-run by FilterTranscript on buffered stdout.
+func mapResult(cr *claude.RunResult, transcript []claude.TranscriptEntry) *runner.RunResult {
 	return &runner.RunResult{
 		Output:        cr.Output,
 		RawText:       cr.Result,
@@ -382,6 +386,7 @@ func mapResult(cr *claude.RunResult) *runner.RunResult {
 		CacheTokensIn: cr.Tokens.CacheCreationInputTokens + cr.Tokens.CacheReadInputTokens,
 		DurationMs:    cr.Duration.Milliseconds(),
 		Turns:         cr.Turns,
+		Transcript:    transcript,
 	}
 }
 

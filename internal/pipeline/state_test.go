@@ -626,6 +626,25 @@ func TestWriteLog(t *testing.T) {
 	}
 }
 
+func TestWriteTranscript(t *testing.T) {
+	dir := t.TempDir()
+	state, _ := LoadOrCreate(dir, "T-1")
+
+	transcript := []byte(`[{"role":"tool_use","content":"{\"file_path\":\"main.go\"}","tool":"Read","tool_id":"tu_1"}]`)
+	if err := state.WriteTranscript("implement", transcript); err != nil {
+		t.Fatalf("WriteTranscript: %v", err)
+	}
+
+	transcriptPath := filepath.Join(dir, "T-1", "logs", "implement_transcript.json")
+	got, err := os.ReadFile(transcriptPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(got) != string(transcript) {
+		t.Errorf("transcript content = %q, want %q", got, transcript)
+	}
+}
+
 func TestStateAcquireReleaseLock(t *testing.T) {
 	dir := t.TempDir()
 	state, _ := LoadOrCreate(dir, "T-1")

@@ -35,6 +35,14 @@ type Config struct {
 	Repos               []RepoConfig        `yaml:"repos"`
 	Monitor             MonitorConfig       `yaml:"monitor"`
 	Notify              NotifyConfig        `yaml:"notify"`
+	Transcript          TranscriptConfig    `yaml:"transcript,omitempty"`
+}
+
+// TranscriptConfig controls agent transcript persistence.
+// When Level is "tools" or "full", the engine writes a JSON transcript
+// file alongside the phase result for retrieval quality analysis.
+type TranscriptConfig struct {
+	Level string `yaml:"level,omitempty"` // "off" (default), "tools", or "full"
 }
 
 // AuthConfig holds authentication settings for the Claude Code CLI.

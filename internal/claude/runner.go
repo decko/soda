@@ -216,26 +216,43 @@ func (r *Runner) Stream(ctx context.Context, opts RunOpts, onChunk func(string))
 	var wg sync.WaitGroup
 	wg.Add(2)
 
+	// Determine transcript capture level from opts.
+	transcriptLevel := opts.TranscriptLevel
+	var transcriptEntries []TranscriptEntry
+
 	go func() {
 		defer wg.Done()
 		scanner := bufio.NewScanner(stdout)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024) // 1MB max line
 		for scanner.Scan() {
 			line := scanner.Text()
+			lineBytes := scanner.Bytes()
 			outputBuf.Write([]byte(line))
 			outputBuf.Write([]byte("\n"))
+
+			// Extract human-readable text for the TUI callback.
+			// stream-json lines are JSON objects; extractDisplayText returns
+			// readable text for assistant messages, "" for everything else.
 			if onChunk != nil {
-				func() {
-					defer func() {
-						if r := recover(); r != nil {
-							// Log the panic rather than silently swallowing it.
-							// onChunk may do non-trivial work (e.g., waitIfPaused)
-							// and a panic here could indicate corrupted state.
-							fmt.Fprintf(os.Stderr, "claude: onChunk panic: %v\n", r)
-						}
+				displayText := extractDisplayText(lineBytes)
+				if displayText != "" {
+					func() {
+						defer func() {
+							if r := recover(); r != nil {
+								// Log the panic rather than silently swallowing it.
+								// onChunk may do non-trivial work (e.g., waitIfPaused)
+								// and a panic here could indicate corrupted state.
+								fmt.Fprintf(os.Stderr, "claude: onChunk panic: %v\n", r)
+							}
+						}()
+						onChunk(displayText)
 					}()
-					onChunk(line)
-				}()
+				}
+			}
+
+			// Accumulate transcript entries.
+			if shouldPersist(lineBytes, transcriptLevel) {
+				transcriptEntries = append(transcriptEntries, parseTranscriptEntry(lineBytes)...)
 			}
 		}
 		if err := scanner.Err(); err != nil {
@@ -270,6 +287,7 @@ func (r *Runner) Stream(ctx context.Context, opts RunOpts, onChunk func(string))
 		if outputBuf.Len() > 0 && !outputBuf.overflow {
 			result, parseErr := ParseResponse(outputBuf.Bytes())
 			if parseErr == nil {
+				result.Transcript = transcriptEntries
 				return result, nil
 			}
 		}
@@ -294,7 +312,12 @@ func (r *Runner) Stream(ctx context.Context, opts RunOpts, onChunk func(string))
 		}
 	}
 
-	return ParseResponse(outputBuf.Bytes())
+	result, err := ParseResponse(outputBuf.Bytes())
+	if err != nil {
+		return nil, err
+	}
+	result.Transcript = transcriptEntries
+	return result, nil
 }
 
 // DryRun returns the command that would be executed, without running it.

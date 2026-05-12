@@ -9,6 +9,7 @@ import "strconv"
 //
 //	--print                            pre-0.2.x
 //	--output-format json               ≤ v0.2.66
+//	--output-format stream-json        ≤ v0.2.66 (same flag, JSONL variant)
 //	--allowed-tools                    pre-1.0.x
 //	--system-prompt-file               v1.0.55
 //	--permission-mode bypassPermissions ≤ v2.0.x
@@ -24,7 +25,7 @@ func BuildArgs(opts RunOpts, model string) []string {
 	args := []string{
 		"--print",
 		"--bare",
-		"--output-format", "json",
+		"--output-format", "stream-json",
 		"--permission-mode", "bypassPermissions",
 	}
 

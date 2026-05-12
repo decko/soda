@@ -78,19 +78,29 @@ func ParseResponse(output []byte) (*RunResult, error) {
 }
 
 // extractJSON finds the JSON response envelope in the output.
-// Strategy 1: try the last non-empty line (common case — envelope on final line).
-// Strategy 2: backward brace scan for multi-line JSON.
+// Strategy 1 (JSONL): scan lines in reverse for a {"type":"result",...} line.
+//
+//	This handles stream-json output where every line is a JSON object.
+//
+// Strategy 2 (legacy): try the last non-empty line as a single JSON envelope.
+// Strategy 3 (fallback): backward brace scan for multi-line JSON.
 func extractJSON(output []byte) ([]byte, error) {
 	if len(output) == 0 {
 		return nil, errNoJSON
 	}
 
-	// Strategy 1: last non-empty line
 	trimmed := bytes.TrimRight(output, " \t\n\r")
 	if len(trimmed) == 0 {
 		return nil, errNoJSON
 	}
 
+	// Strategy 1 (JSONL): scan lines in reverse for a result envelope.
+	// This is the common case with --output-format stream-json.
+	if line := findResultLineReverse(trimmed); line != nil {
+		return line, nil
+	}
+
+	// Strategy 2 (legacy): last non-empty line is the whole envelope.
 	lastNewline := bytes.LastIndexByte(trimmed, '\n')
 	var lastLine []byte
 	if lastNewline == -1 {
@@ -103,8 +113,36 @@ func extractJSON(output []byte) ([]byte, error) {
 		return lastLine, nil
 	}
 
-	// Strategy 2: backward scan — find last '}', try '{' candidates with json.Valid
+	// Strategy 3 (fallback): backward brace scan for multi-line JSON.
 	return extractJSONByDepth(output)
+}
+
+// findResultLineReverse scans lines from the end looking for a result envelope.
+// Returns nil if no result line is found. This avoids the O(n²) backward brace
+// scan in extractJSONByDepth when processing JSONL (stream-json) output.
+func findResultLineReverse(data []byte) []byte {
+	// Scan from end to start, checking each line.
+	end := len(data)
+	for end > 0 {
+		lineStart := bytes.LastIndexByte(data[:end], '\n')
+		var line []byte
+		if lineStart == -1 {
+			line = data[:end]
+		} else {
+			line = data[lineStart+1 : end]
+		}
+
+		line = bytes.TrimSpace(line)
+		if len(line) > 0 && line[0] == '{' && isResultEnvelope(line) {
+			return line
+		}
+
+		if lineStart == -1 {
+			break
+		}
+		end = lineStart
+	}
+	return nil
 }
 
 // isResultEnvelope checks if JSON data contains "type":"result".

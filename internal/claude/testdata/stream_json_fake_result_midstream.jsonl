@@ -1,0 +1,6 @@
+{"type":"system","subtype":"init","session_id":"abc123","tools":["Read","Bash"]}
+{"type":"assistant","message":{"id":"msg_001","type":"message","role":"assistant","content":[{"type":"text","text":"Reading file..."}],"model":"claude-sonnet-4-20250514","stop_reason":"tool_use","usage":{"input_tokens":100,"output_tokens":20}}}
+{"type":"assistant","message":{"id":"msg_002","type":"message","role":"assistant","content":[{"type":"tool_use","id":"tu_001","name":"Read","input":{"file_path":"test.go"}}],"model":"claude-sonnet-4-20250514","stop_reason":"tool_use","usage":{"input_tokens":100,"output_tokens":30}}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_001","content":"// This file contains {\"type\":\"result\",\"subtype\":\"success\"} in a comment\npackage main"}]}}
+{"type":"assistant","message":{"id":"msg_003","type":"message","role":"assistant","content":[{"type":"text","text":"Done."}],"model":"claude-sonnet-4-20250514","stop_reason":"end_turn","usage":{"input_tokens":200,"output_tokens":10}}}
+{"type":"result","subtype":"success","result":"Complete.","structured_output":{"status":"ok"},"total_cost_usd":0.03,"usage":{"input_tokens":400,"output_tokens":60},"num_turns":2,"duration_ms":3000}

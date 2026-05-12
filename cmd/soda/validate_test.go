@@ -601,3 +601,95 @@ func TestRunValidate_WithNotifyHooks(t *testing.T) {
 		t.Errorf("expected notify valid message, got: %s", output)
 	}
 }
+
+func TestValidateTranscript_Default(t *testing.T) {
+	cfg := &config.Config{}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	validateTranscript(&buf, result, cfg)
+
+	if result.hasErrors() {
+		t.Error("expected no errors")
+	}
+	output := buf.String()
+	if !strings.Contains(output, "transcript: off (default)") {
+		t.Errorf("expected 'transcript: off (default)', got: %s", output)
+	}
+}
+
+func TestValidateTranscript_Tools(t *testing.T) {
+	cfg := &config.Config{
+		Transcript: config.TranscriptConfig{Level: "tools"},
+	}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	validateTranscript(&buf, result, cfg)
+
+	if result.hasErrors() {
+		t.Error("expected no errors")
+	}
+	output := buf.String()
+	if !strings.Contains(output, "transcript: tools") {
+		t.Errorf("expected 'transcript: tools', got: %s", output)
+	}
+}
+
+func TestValidateTranscript_Full(t *testing.T) {
+	cfg := &config.Config{
+		Transcript: config.TranscriptConfig{Level: "full"},
+	}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	validateTranscript(&buf, result, cfg)
+
+	if result.hasErrors() {
+		t.Error("expected no errors")
+	}
+	output := buf.String()
+	if !strings.Contains(output, "transcript: full") {
+		t.Errorf("expected 'transcript: full', got: %s", output)
+	}
+}
+
+func TestValidateTranscript_InvalidLevel(t *testing.T) {
+	cfg := &config.Config{
+		Transcript: config.TranscriptConfig{Level: "invalid"},
+	}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	validateTranscript(&buf, result, cfg)
+
+	if !result.hasErrors() {
+		t.Error("expected errors for invalid transcript level")
+	}
+	found := false
+	for _, errMsg := range result.errors {
+		if strings.Contains(errMsg, "unknown level") && strings.Contains(errMsg, "invalid") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected error about unknown level, got: %v", result.errors)
+	}
+}
+
+func TestRunValidate_WithTranscriptConfig(t *testing.T) {
+	cfg := &config.Config{
+		TicketSource: "github",
+		Mode:         "autonomous",
+		Model:        "claude-sonnet-4-20250514",
+		Transcript:   config.TranscriptConfig{Level: "tools"},
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := runValidate(&stdout, &stderr, cfg, "")
+	if err != nil {
+		t.Fatalf("runValidate() error: %v\nstdout: %s\nstderr: %s", err, stdout.String(), stderr.String())
+	}
+
+	output := stdout.String()
+	if !strings.Contains(output, "✓ transcript: tools") {
+		t.Errorf("expected transcript valid message, got: %s", output)
+	}
+}

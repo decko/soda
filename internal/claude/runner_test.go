@@ -113,9 +113,15 @@ func TestStream_Success(t *testing.T) {
 	if result.Turns != 3 {
 		t.Errorf("Turns = %d, want 3", result.Turns)
 	}
-	// Should have streaming lines: "Thinking...", "Reading files...", and the JSON line
-	if len(chunks) < 3 {
-		t.Errorf("expected at least 3 chunks, got %d: %v", len(chunks), chunks)
+	// With stream-json, onChunk receives extracted display text from assistant messages.
+	// The mock outputs two assistant text messages ("Thinking..." and "Reading files...").
+	// System and result events produce no display text.
+	if len(chunks) < 2 {
+		t.Errorf("expected at least 2 chunks, got %d: %v", len(chunks), chunks)
+	}
+	// Verify display text extraction works — first chunk should be "Thinking..."
+	if len(chunks) > 0 && chunks[0] != "Thinking..." {
+		t.Errorf("chunks[0] = %q, want %q", chunks[0], "Thinking...")
 	}
 }
 
@@ -364,6 +370,74 @@ func TestStream_OnChunkPanic(t *testing.T) {
 	if result.CostUSD != 0.05 {
 		t.Errorf("CostUSD = %v, want 0.05", result.CostUSD)
 	}
+}
+
+func TestStream_TranscriptCapture(t *testing.T) {
+	runner, err := NewRunner(mockBinaryPath(t), "test-model", t.TempDir())
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	t.Run("tools_level_captures_tool_events", func(t *testing.T) {
+		t.Setenv("MOCK_CLAUDE_MODE", "tool_events")
+
+		result, err := runner.Stream(context.Background(), RunOpts{
+			Timeout:         10 * time.Second,
+			TranscriptLevel: TranscriptTools,
+		}, nil)
+		if err != nil {
+			t.Fatalf("Stream: %v", err)
+		}
+
+		if len(result.Transcript) == 0 {
+			t.Fatal("expected transcript entries at tools level, got none")
+		}
+
+		toolNames := make(map[string]bool)
+		for _, entry := range result.Transcript {
+			if entry.Tool != "" {
+				toolNames[entry.Tool] = true
+			}
+		}
+		if !toolNames["Read"] {
+			t.Error("expected Read tool_use in transcript")
+		}
+		if !toolNames["Bash"] {
+			t.Error("expected Bash tool_use in transcript")
+		}
+	})
+
+	t.Run("off_level_captures_nothing", func(t *testing.T) {
+		t.Setenv("MOCK_CLAUDE_MODE", "tool_events")
+
+		result, err := runner.Stream(context.Background(), RunOpts{
+			Timeout:         10 * time.Second,
+			TranscriptLevel: TranscriptOff,
+		}, nil)
+		if err != nil {
+			t.Fatalf("Stream: %v", err)
+		}
+
+		if len(result.Transcript) != 0 {
+			t.Errorf("expected no transcript at off level, got %d entries", len(result.Transcript))
+		}
+	})
+
+	t.Run("empty_level_captures_nothing", func(t *testing.T) {
+		t.Setenv("MOCK_CLAUDE_MODE", "tool_events")
+
+		result, err := runner.Stream(context.Background(), RunOpts{
+			Timeout: 10 * time.Second,
+			// TranscriptLevel is empty (zero value)
+		}, nil)
+		if err != nil {
+			t.Fatalf("Stream: %v", err)
+		}
+
+		if len(result.Transcript) != 0 {
+			t.Errorf("expected no transcript at empty level, got %d entries", len(result.Transcript))
+		}
+	})
 }
 
 func TestStream_RejectsOversizedSchema(t *testing.T) {

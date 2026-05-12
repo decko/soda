@@ -16,7 +16,7 @@ Each pipeline phase follows this lifecycle:
 1. Engine calls `buildPromptData()` — assembles ticket, artifacts from prior phases, config, and context
 2. `PromptLoader.Load()` resolves the prompt template (user override > working dir > embedded)
 3. `RenderPrompt()` executes the Go `text/template` against `PromptData`
-4. Runner invokes Claude Code CLI with `--print --bare --output-format json --json-schema <schema>`
+4. Runner invokes Claude Code CLI with `--print --bare --output-format stream-json --json-schema <schema>`
 5. Response is parsed via `claude.ParseResponse()` — extracts structured output, cost, tokens
 6. Result is written atomically to `.soda/<ticket>/<phase>.json`
 7. Engine emits events (`EventPhaseStarted`, `EventPhaseCompleted`, etc.)

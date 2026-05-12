@@ -24,6 +24,7 @@ import (
 	"github.com/decko/soda/internal/runner"
 	"github.com/decko/soda/internal/sandbox"
 	"github.com/decko/soda/internal/ticket"
+	"github.com/decko/soda/internal/transcript"
 	"github.com/decko/soda/internal/tui"
 	"github.com/decko/soda/schemas"
 	"github.com/mattn/go-isatty"
@@ -33,16 +34,18 @@ import (
 // pipelineOpts holds all flag-driven parameters for runPipeline so callers
 // don't need to register or pass a *cobra.Command with the right flags.
 type pipelineOpts struct {
-	ticketKey       string
-	pipelineName    string
-	pipelineChanged bool // true when --pipeline was explicitly passed
-	mode            string
-	modeChanged     bool // true when --mode was explicitly passed
-	fromPhase       string
-	dryRun          bool
-	estimate        bool
-	useMock         bool
-	useTUI          bool
+	ticketKey         string
+	pipelineName      string
+	pipelineChanged   bool // true when --pipeline was explicitly passed
+	mode              string
+	modeChanged       bool // true when --mode was explicitly passed
+	fromPhase         string
+	dryRun            bool
+	estimate          bool
+	useMock           bool
+	useTUI            bool
+	transcript        string // CLI override: "tools", "full", or "off"
+	transcriptChanged bool   // true when --transcript was explicitly passed
 }
 
 // pipelineOptsFromCmd extracts pipelineOpts from Cobra flags registered on the
@@ -55,18 +58,21 @@ func pipelineOptsFromCmd(cmd *cobra.Command, ticketKey string) pipelineOpts {
 	estimate, _ := cmd.Flags().GetBool("estimate")
 	useMock, _ := cmd.Flags().GetBool("mock")
 	useTUI, _ := cmd.Flags().GetBool("tui")
+	transcript, _ := cmd.Flags().GetString("transcript")
 
 	return pipelineOpts{
-		ticketKey:       ticketKey,
-		pipelineName:    pipelineName,
-		pipelineChanged: cmd.Flags().Changed("pipeline"),
-		mode:            mode,
-		modeChanged:     cmd.Flags().Changed("mode"),
-		fromPhase:       fromPhase,
-		dryRun:          dryRun,
-		estimate:        estimate,
-		useMock:         useMock,
-		useTUI:          useTUI,
+		ticketKey:         ticketKey,
+		pipelineName:      pipelineName,
+		pipelineChanged:   cmd.Flags().Changed("pipeline"),
+		mode:              mode,
+		modeChanged:       cmd.Flags().Changed("mode"),
+		fromPhase:         fromPhase,
+		dryRun:            dryRun,
+		estimate:          estimate,
+		useMock:           useMock,
+		useTUI:            useTUI,
+		transcript:        transcript,
+		transcriptChanged: cmd.Flags().Changed("transcript"),
 	}
 }
 
@@ -95,6 +101,7 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().Bool("mock", false, "use mock runner for testing")
 	cmd.Flags().Bool("tui", false, "use interactive TUI display")
 	cmd.Flags().String("query", "", "search filter for listing tickets (picker mode)")
+	cmd.Flags().String("transcript", "", "transcript capture level: tools, full, or off (overrides config)")
 
 	return cmd
 }
@@ -370,6 +377,21 @@ func runPipeline(cfg *config.Config, opts pipelineOpts) error {
 		maxPipelineDuration = parsed
 	}
 
+	// Resolve transcript level: CLI flag overrides config.
+	transcriptLevel := transcript.Level(cfg.Transcript.Level)
+	if opts.transcriptChanged {
+		transcriptLevel = transcript.Level(opts.transcript)
+	}
+	// Validate the resolved level; default to off for unknown values.
+	switch transcriptLevel {
+	case transcript.Tools, transcript.Full, transcript.Off:
+		// valid
+	case "":
+		transcriptLevel = transcript.Off
+	default:
+		return fmt.Errorf("run: unknown transcript level %q (expected 'tools', 'full', or 'off')", transcriptLevel)
+	}
+
 	engineCfg := pipeline.EngineConfig{
 		Pipeline:               pl,
 		Loader:                 loader,
@@ -403,6 +425,7 @@ func runPipeline(cfg *config.Config, opts pipelineOpts) error {
 		BotUsers:          botUsers,
 		MonitorProfile:    monitorProfile,
 		AuthorityResolver: authorityResolver,
+		TranscriptLevel:   transcriptLevel,
 		OnEvent: func(event pipeline.Event) {
 			if event.Kind == pipeline.EventPhaseSkipped || event.Kind == pipeline.EventMonitorSkipped {
 				skippedPhases[event.Phase] = true
