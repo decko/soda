@@ -43,7 +43,7 @@ Use --global to install to ~/.claude/ instead.
 
 Installed components:
   Commands: /project:soda-run, /project:soda-resume, /project:soda-status, etc.
-  Skills:   soda-pipeline (architecture + operational runbook)
+  Skills:   soda-pipeline (architecture + operational runbook), orchestrate (milestone coordination)
   Agents:   pipeline-architect (design-only pipeline advisor)`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			global, _ := cmd.Flags().GetBool("global")
@@ -192,7 +192,7 @@ func installPlugin(w io.Writer, destDir string, force bool) error {
 
 	fmt.Fprintf(w, "Installed SODA for Claude Code in %s/\n", destDir)
 	fmt.Fprintf(w, "  Commands: %d slash commands (soda-run, soda-resume, soda-status, ...)\n", commands)
-	fmt.Fprintf(w, "  Skills:   %d skill(s) (soda-pipeline)\n", skills)
+	fmt.Fprintf(w, "  Skills:   %d skill(s) (soda-pipeline, orchestrate)\n", skills)
 	fmt.Fprintf(w, "  Agents:   %d agent(s) (pipeline-architect)\n", agents)
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Auto-discovered by Claude Code from .claude/ — no further setup needed.")
@@ -240,9 +240,12 @@ func uninstallPlugin(w io.Writer, destDir string) error {
 		return fmt.Errorf("plugin: uninstall: %w", err)
 	}
 
-	// Clean up the soda-pipeline skill directory if empty.
+	// Clean up skill directories if empty.
 	skillDir := filepath.Join(destDir, "skills", "soda-pipeline")
 	_ = os.Remove(skillDir) // only succeeds if empty
+
+	orchestrateDir := filepath.Join(destDir, "skills", "orchestrate")
+	_ = os.Remove(orchestrateDir) // only succeeds if empty
 
 	fmt.Fprintf(w, "Removed SODA from %s/ (%d files)\n", destDir, removed)
 	return nil

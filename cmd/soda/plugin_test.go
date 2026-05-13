@@ -23,6 +23,9 @@ func TestInstallPlugin(t *testing.T) {
 	if !contains(output, "soda-pipeline") {
 		t.Errorf("expected output to mention soda-pipeline skill")
 	}
+	if !contains(output, "orchestrate") {
+		t.Errorf("expected output to mention orchestrate skill")
+	}
 	if !contains(output, "pipeline-architect") {
 		t.Errorf("expected output to mention pipeline-architect agent")
 	}
@@ -45,6 +48,7 @@ func TestInstallPlugin(t *testing.T) {
 		"commands/soda-pick.md",
 		"skills/soda-pipeline/SKILL.md",
 		"skills/soda-pipeline/RUNBOOK.md",
+		"skills/orchestrate/SKILL.md",
 		"agents/pipeline-architect.md",
 	}
 
