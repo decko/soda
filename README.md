@@ -192,6 +192,7 @@ soda plugin uninstall --global   # remove global plugin
 | Component | Description |
 |-----------|-------------|
 | **Skill: `soda-pipeline`** | Pipeline architecture, phase lifecycle, state management, troubleshooting |
+| **Skill: `orchestrate`** | Milestone-level coordination: dependency ordering, label lifecycle, SODA dispatch, cost tracking, progress reporting |
 | **`/soda:run <ticket>`** | Run the pipeline for a ticket |
 | **`/soda:status`** | Show current pipeline status |
 | **`/soda:sessions`** | List previous pipeline sessions |
