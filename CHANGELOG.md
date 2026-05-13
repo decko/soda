@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] — "Sharp Review" - 2026-05-13
+
+### Added
+
+#### Review quality improvements
+- **Diff-scoped review** (#495) — inject `git diff main...HEAD` into review prompts so
+  reviewers focus on changed code only. Prior findings injected on rework cycles with
+  exclusion instructions to prevent re-discovery. Explicit severity definitions
+  (critical/major/minor) calibrate reviewer thresholds. Measured impact: first-pass rate
+  for medium-complexity tickets went from 0% (n=20) to 67% (n=6).
+
+#### Observability and metrics
+- **Agent transcript persistence** (#483) — switch to `--output-format stream-json` for
+  JSONL event capture. Configurable transcript levels (`tools`, `full`, `off`) with
+  `--transcript` CLI flag and `transcript.level` config. JSONL-aware `ParseResponse` with
+  reverse line scan for reliable result envelope extraction. Agent-agnostic transcript
+  types in `internal/transcript` package.
+- **Cost-per-complexity-band tracking** (#490) — persist triage complexity in `meta.json`,
+  include in `engine_completed` events. New `soda cost --by-complexity` command shows
+  cost breakdown by complexity band (low/medium/high). Validates model routing decisions.
+- **Model routing quality gate** (#385) — track per-model structured output success rate
+  in `PhaseState` (`ModelUsed`, `ParseAttempts`, `ParseSuccessOnFirst`). Config-driven
+  fallback threshold: auto-escalate to default model after N parse failures.
+
+#### Pipeline reliability
+- **Resume-from-phase validation** (#493) — validate upstream phase artifacts are
+  compatible when resuming with `--from`. Detect stale/missing dependencies from schema
+  changes and warn before executing.
+- **Orchestrate skill** (#494) — milestone-level SODA coordination skill shipped with
+  `soda plugin install`. Covers dependency ordering, label lifecycle, base branch health,
+  dispatch, and progress reporting.
+
+#### Test coverage
+- **Jira smoke tests** (#492) — smoke tests for Jira ticket source covering
+  authentication, field mapping, extraction, and error handling.
+
+### Fixed
+
+- **`--verbose` required for stream-json** (#499) — Claude CLI 2.1.128 requires
+  `--verbose` when using `--print` with `--output-format stream-json`. Without it, the
+  sandbox exits with code 1 and $0 cost.
+
+### Metrics (raki v0.12.0, n=76)
+
+| Metric | v0.4.0 (n=70) | v0.5.0 (n=76) | v0.5.0 sessions only (n=6) |
+|--------|---------------|---------------|---------------------------|
+| First-pass | 0.36 | 0.38 | **0.67** |
+| Rework cycles | 0.9 | 0.9 | **0.3** |
+| Cost/session | $8.99 | $8.98 | **$8.91** |
+| Self-correction | 0.98 | 0.99 | 1.00 |
+
+Medium-complexity tickets (15-30K plan tokens): 0% → 67% first-pass rate.
+Total milestone pipeline cost: ~$77 across 7 issues.
+
 ## [0.4.0] — "Adaptive Pipeline" - 2026-05-12
 
 ### Added
