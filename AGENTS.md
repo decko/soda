@@ -245,6 +245,8 @@ soda/
 │   │   ├── jira.go                # Jira via wtmcp CLI
 │   │   ├── mcp.go                 # MCP ticket source
 │   │   └── extract.go             # Spec/plan extraction from comments
+│   ├── transcript/
+│   │   └── transcript.go          # Agent-agnostic transcript types (Level, Entry)
 │   └── tui/
 │       ├── app.go                 # Bubbletea main model
 │       ├── ticket.go              # Ticket display widget
@@ -283,7 +285,7 @@ soda/
 Every phase invokes Claude Code with these flags:
 
 ```
-claude --print --bare --output-format stream-json --json-schema <schema> \
+claude --print --bare --verbose --output-format stream-json --json-schema <schema> \
        --system-prompt-file <prompt> --model <model> \
        [--max-budget-usd <budget>] --permission-mode bypassPermissions
 ```
@@ -292,6 +294,7 @@ claude --print --bare --output-format stream-json --json-schema <schema> \
 |------|-----|
 | `--print` | Non-interactive, exit after response |
 | `--bare` | No auto-discovery of CLAUDE.md, plugins, hooks, MCP. SODA controls the full context window. |
+| `--verbose` | Required by Claude CLI ≥2.1.128 when using `--print` with `--output-format stream-json` |
 | `--output-format stream-json` | JSONL per event (enables transcript capture); last line is the result envelope with `structured_output`, `total_cost_usd`, `usage`, `duration_ms` |
 | `--json-schema` | Enforce structured output. CLI validates against schema. No regex parsing needed. |
 | `--system-prompt-file` | Phase role + context as system prompt from file |
@@ -343,6 +346,7 @@ Additional engine-level errors:
 └── logs/
     ├── triage_prompt.md
     ├── triage_response.md
+    ├── triage_transcript.json  # agent transcript (when capture enabled)
     ├── review/
     │   ├── prompt_go-specialist.md
     │   └── prompt_ai-harness.md
@@ -363,6 +367,8 @@ Atomic writes: always write to `.tmp` then rename. Archive on re-run (`verify.js
 - `escalated_from_patch` — one-shot escalation flag
 - `previous_failures` — criteria IDs for regression detection
 - Per-phase `cumulative_cost` — survives across generations
+- Per-phase `model_used` — the model that ran the phase (for routing validation)
+- Per-phase `parse_attempts`, `parse_success_on_first` — structured output quality tracking
 
 ## Key design decisions
 
@@ -379,6 +385,8 @@ Atomic writes: always write to `.tmp` then rename. Archive on re-run (`verify.js
 - **Post-submit best-effort**: follow-up phase failures are swallowed, not terminal. Pipeline succeeds even if follow-up can't create tickets.
 - **Agent-agnostic runner**: `internal/runner/` decouples the engine from Claude Code CLI specifics, enabling future backend swaps.
 - **Code snippet injection for rework**: when review triggers rework, the engine reads ±5 lines around each critical/major finding's `file:line` and injects them as `CodeSnippet` on `EnrichedFinding`. This eliminates a retrieval gap — the rework implement session sees the exact code without spending tokens on tool calls to find it. Validated by raki: reduced rework cycles by 25% and cost by 17%.
+- **Diff-scoped review**: review prompts include `git diff main...HEAD` so reviewers focus on changed code only. On rework cycles, prior findings are injected with exclusion instructions to prevent the whack-a-mole pattern (reviewer finds new issues in untouched code after each rework). Severity definitions (critical/major/minor) calibrate the reviewer's threshold. Validated by raki: medium-complexity first-pass rate went from 0% to 67%.
+- **Agent-agnostic transcript types**: `TranscriptLevel` and `TranscriptEntry` live in `internal/transcript/`, not `internal/claude/`. The runner interface stays agent-agnostic — future backends (Pi, Opencode) can produce transcripts without importing Claude-specific code. `internal/claude/transcript.go` re-exports via type aliases for backward compatibility.
 
 ## Git workflow
 
@@ -436,6 +444,11 @@ Atomic writes: always write to `.tmp` then rename. Archive on re-run (`verify.js
 24. **`tabwriter.StripEscape` does NOT make content zero-width**: wrapping ANSI codes in `\xff` delimiters only prevents tab/newline interpretation inside the escaped segment — the bytes are still counted for column width. For ANSI-colored table output, compute column widths from plain text, pad before adding escape codes, and use `fmt.Sprintf` instead of tabwriter.
 25. **Default implement timeout (15m) is too short for large tickets**: tickets with 7+ tasks routinely exceed 15 minutes. The root `phases.yaml` should use 25m for implement. The embedded default remains 15m for backward compatibility.
 26. **Review budget can exhaust with 2+ rework cycles**: `CumulativeCost` accumulates across rework generations. With the default `max_cost_per_phase: $8.00`, two review cycles ($3-5 each) plus rework implement sessions can exceed the limit. Consider raising to $15 for review-heavy workflows or using `max_cost_per_generation` instead.
+27. **`--verbose` required for stream-json with `--print`**: Claude CLI ≥2.1.128 requires `--verbose` when using `--print` with `--output-format stream-json`. Without it, the CLI exits with code 1 and $0 cost. The flag is always included in `BuildArgs`.
+28. **Monitor ignores self-authored PR comments**: comments from the `self_user` are classified as `CommentSelfAuthored` and skipped. If you post review findings from the same account as `self_user`, the monitor won't respond. Post from a different account or use the rework pipeline instead.
+29. **Monitor requires `respond_to_comments` in `phases.yaml`**: the `self_user` field in `soda.yaml` enables comment classification, but active comment response also requires `respond_to_comments: true` in the monitor phase's `polling` config in `phases.yaml`.
+30. **PR reviews vs PR comments**: `gh pr review` posts to `/pulls/N/reviews`, which the monitor's GitHub poller does NOT poll. Only `/pulls/N/comments` (inline review comments) and `/issues/N/comments` (top-level conversation comments) are fetched. Post feedback as issue comments for the monitor to see it.
+31. **`ParseResponse` uses JSONL reverse line scan**: with `--output-format stream-json`, `extractJSON` scans lines from the end to find the `{"type":"result"}` envelope. This is O(n) and handles fake result strings in tool output. The legacy backward brace scan (`extractJSONByDepth`) is the fallback for non-JSONL output.
 
 ## Raki evaluation framework
 
@@ -443,16 +456,17 @@ Atomic writes: always write to `.tmp` then rename. Archive on re-run (`verify.js
 
 ### Metrics
 
-| Metric | What it measures | Baseline (n=11) |
+| Metric | What it measures | Baseline (n=76) |
 |--------|-----------------|-----------------|
 | `first_pass_verify_rate` | Sessions passing verify without corrective patch | 1.0 |
-| `rework_cycles` | Mean review→implement rework loops per session | 0.64 |
-| `review_severity_distribution` | Finding counts by severity (critical/major/minor) | 0/12/128 |
-| `cost_efficiency` | Mean USD per session | $7.62 ($5.15–$11.35) |
-| `knowledge_retrieval_miss_rate` | Fraction of rework findings caused by missing context | 1.0 |
-| `phase_execution_time` | Mean wall-clock seconds per session | 847s (p50=801, p95=1309) |
-| `token_efficiency` | Mean tokens per phase | available (persisted in meta.json) |
-| `cost_by_complexity` | Mean/median/total USD per triage complexity band | n/a (new) |
+| `first_pass_success_rate` | Sessions with no rework cycles | 0.38 (0.67 for v0.5.0 sessions) |
+| `rework_cycles` | Mean review→implement rework loops per session | 0.9 |
+| `review_severity_distribution` | Finding counts by severity (critical/major/minor) | — |
+| `cost_efficiency` | Mean USD per session | $8.98 |
+| `knowledge_retrieval_miss_rate` | Fraction of rework findings caused by missing context | 0.97 |
+| `phase_execution_time` | Mean wall-clock seconds per session | 1581s |
+| `token_efficiency` | Mean tokens per phase | 14,856 |
+| `cost_by_complexity` | Mean/median/total USD per triage complexity band | available via `soda cost --by-complexity` |
 
 ### Interpretation
 
@@ -463,8 +477,10 @@ Atomic writes: always write to `.tmp` then rename. Archive on re-run (`verify.js
 ### Running evaluation
 
 ```bash
-raki run -m raki.yaml --no-llm    # operational metrics only, no API key needed
-raki validate -m raki.yaml        # check manifest without running
+raki run -m raki.yaml              # operational + knowledge metrics, no API key needed
+raki run -m raki.yaml --docs-path . --judge --judge-provider vertex-anthropic --judge-model claude-sonnet-4-6  # includes LLM-judged retrieval quality
+raki validate -m raki.yaml         # check manifest without running
+raki trends                        # show metric trajectories over time
 ```
 
 Reports are written to `results/`.
