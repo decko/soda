@@ -12,11 +12,15 @@ import (
 
 // CostEntry records the cost of a single pipeline run in the persistent ledger.
 type CostEntry struct {
-	Ticket     string    `json:"ticket"`
-	Timestamp  time.Time `json:"timestamp"`
-	Cost       float64   `json:"cost"`
-	Success    bool      `json:"success"`
-	Complexity string    `json:"complexity,omitempty"`
+	Ticket       string    `json:"ticket"`
+	Timestamp    time.Time `json:"timestamp"`
+	Cost         float64   `json:"cost"`
+	Success      bool      `json:"success"`
+	Complexity   string    `json:"complexity,omitempty"`
+	ReworkCycles int       `json:"rework_cycles,omitempty"`
+	PatchCycles  int       `json:"patch_cycles,omitempty"`
+	Escalated    bool      `json:"escalated,omitempty"`
+	DurationMs   int64     `json:"duration_ms,omitempty"`
 }
 
 // costLedgerFile is the filename of the cost ledger within the state directory.
@@ -183,6 +187,105 @@ func CostByComplexity(entries []CostEntry) map[string]ComplexityStats {
 			Mean:     mean,
 			Median:   median,
 			Total:    total,
+		}
+	}
+	return result
+}
+
+// OutcomeStats holds aggregated cost and duration statistics for a single
+// pipeline outcome bucket (e.g. "clean", "patched", "rework_1").
+type OutcomeStats struct {
+	Sessions  int
+	Mean      float64
+	Median    float64
+	Total     float64
+	MeanDurMs int64
+}
+
+// ClassifyOutcome assigns a pipeline outcome label using a 5-level precedence:
+//
+//  1. !Success              → "failed"
+//  2. ReworkCycles ≥ 2      → "rework_2+"
+//  3. ReworkCycles == 1 OR Escalated with ReworkCycles == 0 → "rework_1"
+//  4. PatchCycles > 0       → "patched"
+//  5. otherwise             → "clean"
+//
+// Escalation with zero rework cycles is treated as a minimum of one rework
+// cycle because the patch-to-rework escalation itself constitutes a rework.
+func ClassifyOutcome(entry CostEntry) string {
+	if !entry.Success {
+		return "failed"
+	}
+	rework := entry.ReworkCycles
+	if entry.Escalated && rework == 0 {
+		rework = 1
+	}
+	switch {
+	case rework >= 2:
+		return "rework_2+"
+	case rework == 1:
+		return "rework_1"
+	case entry.PatchCycles > 0:
+		return "patched"
+	default:
+		return "clean"
+	}
+}
+
+// CostByOutcome groups cost entries by their classified outcome and returns
+// aggregated statistics per outcome bucket. The median uses "lower-median"
+// semantics: sorted[n/2-1] for even n, sorted[n/2] for odd n. This is
+// intentionally different from CostByComplexity's interpolated median.
+func CostByOutcome(entries []CostEntry) map[string]OutcomeStats {
+	type bucket struct {
+		costs       []float64
+		durationsMs []int64
+	}
+	grouped := make(map[string]*bucket)
+	for _, entry := range entries {
+		outcome := ClassifyOutcome(entry)
+		bkt, ok := grouped[outcome]
+		if !ok {
+			bkt = &bucket{}
+			grouped[outcome] = bkt
+		}
+		bkt.costs = append(bkt.costs, entry.Cost)
+		bkt.durationsMs = append(bkt.durationsMs, entry.DurationMs)
+	}
+
+	result := make(map[string]OutcomeStats, len(grouped))
+	for outcome, bkt := range grouped {
+		var totalCost float64
+		for _, cost := range bkt.costs {
+			totalCost += cost
+		}
+		mean := totalCost / float64(len(bkt.costs))
+
+		sorted := make([]float64, len(bkt.costs))
+		copy(sorted, bkt.costs)
+		sort.Float64s(sorted)
+
+		// Lower-median: sorted[n/2-1] for even n, sorted[n/2] for odd n.
+		var median float64
+		n := len(sorted)
+		if n%2 == 0 {
+			median = sorted[n/2-1]
+		} else {
+			median = sorted[n/2]
+		}
+
+		var totalDurMs int64
+		for _, dur := range bkt.durationsMs {
+			totalDurMs += dur
+		}
+		meanDurMs := totalDurMs / int64(len(bkt.durationsMs))
+
+		result[outcome] = OutcomeStats{
+			Sessions:  len(bkt.costs),
+			Mean:      mean,
+			Median:    median,
+			Total:     totalCost,
+			MeanDurMs: meanDurMs,
 		}
 	}
 	return result
