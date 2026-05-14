@@ -45,6 +45,15 @@ Use these as a guide to the package API surface, naming conventions, and structu
 
 {{.PackageExemplars}}
 {{- end}}
+{{- if .TriageFiles}}
+
+## Priority Files
+
+Read these files first — triage identified them as most relevant to this ticket:
+{{range .TriageFiles}}
+- `{{.}}`
+{{- end}}
+{{- end}}
 
 {{- if .ReworkFeedback}}
 {{- if .ReworkFeedback.ImplementDiff}}
