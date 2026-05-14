@@ -360,3 +360,216 @@ func TestBuildPromptData_Smoke(t *testing.T) {
 	// Run context (to silence unused import warnings).
 	_ = context.Background()
 }
+
+func TestBuildPromptData_TriageFiles_Populated(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "implement",
+			Prompt: "prompts/implement.md",
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"ticket_key":"TEST-1"}`),
+					RawText: "done",
+				},
+			}},
+		},
+	}
+
+	engine, state := setupEngine(t, phases, mock)
+
+	// Write a triage artifact with files.
+	triageJSON := `{"ticket_key":"TEST-1","repo":"test","code_area":"pipeline","files":["internal/pipeline/prompt.go","schemas/triage.go"],"complexity":"low","approach":"add field","risks":[],"automatable":"yes"}`
+	if err := state.WriteArtifact("triage", []byte(triageJSON)); err != nil {
+		t.Fatalf("WriteArtifact triage: %v", err)
+	}
+
+	phase := PhaseConfig{Name: "implement", DependsOn: []string{"triage"}}
+	data, err := engine.buildPromptData(context.Background(), phase)
+	if err != nil {
+		t.Fatalf("buildPromptData: %v", err)
+	}
+
+	want := []string{"internal/pipeline/prompt.go", "schemas/triage.go"}
+	if len(data.TriageFiles) != len(want) {
+		t.Fatalf("TriageFiles = %v, want %v", data.TriageFiles, want)
+	}
+	for idx, got := range data.TriageFiles {
+		if got != want[idx] {
+			t.Errorf("TriageFiles[%d] = %q, want %q", idx, got, want[idx])
+		}
+	}
+}
+
+func TestBuildPromptData_TriageFiles_EmptyWhenNoTriage(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "implement",
+			Prompt: "prompts/implement.md",
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"ticket_key":"TEST-1"}`),
+					RawText: "done",
+				},
+			}},
+		},
+	}
+
+	engine, _ := setupEngine(t, phases, mock)
+
+	// Phase without triage dependency.
+	phase := PhaseConfig{Name: "implement", DependsOn: []string{}}
+	data, err := engine.buildPromptData(context.Background(), phase)
+	if err != nil {
+		t.Fatalf("buildPromptData: %v", err)
+	}
+
+	if data.TriageFiles != nil {
+		t.Errorf("TriageFiles should be nil when no triage dep, got %v", data.TriageFiles)
+	}
+}
+
+func TestBuildPromptData_TriageFiles_EmptyWhenMalformedJSON(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "implement",
+			Prompt: "prompts/implement.md",
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"ticket_key":"TEST-1"}`),
+					RawText: "done",
+				},
+			}},
+		},
+	}
+
+	engine, state := setupEngine(t, phases, mock)
+
+	// Write malformed triage artifact.
+	if err := state.WriteArtifact("triage", []byte("not-json")); err != nil {
+		t.Fatalf("WriteArtifact triage: %v", err)
+	}
+
+	phase := PhaseConfig{Name: "implement", DependsOn: []string{"triage"}}
+	data, err := engine.buildPromptData(context.Background(), phase)
+	if err != nil {
+		t.Fatalf("buildPromptData: %v", err)
+	}
+
+	if data.TriageFiles != nil {
+		t.Errorf("TriageFiles should be nil on malformed JSON, got %v", data.TriageFiles)
+	}
+}
+
+func TestImplementTemplateTriageFiles(t *testing.T) {
+	_, thisFile, _, _ := runtime.Caller(0)
+	repoRoot := filepath.Join(filepath.Dir(thisFile), "..", "..")
+	embedDir := filepath.Join(repoRoot, "cmd", "soda", "embeds", "prompts")
+	raw, err := os.ReadFile(filepath.Join(embedDir, "implement.md"))
+	if err != nil {
+		t.Fatalf("read implement.md: %v", err)
+	}
+	tmpl := string(raw)
+
+	baseData := PromptData{
+		Ticket:       TicketData{Key: "TEST-1", Summary: "Test"},
+		Artifacts:    ArtifactData{Plan: "plan content"},
+		WorktreePath: "/tmp/test",
+		Branch:       "test-branch",
+		BaseBranch:   "main",
+	}
+
+	t.Run("present", func(t *testing.T) {
+		data := baseData
+		data.TriageFiles = []string{"foo.go", "bar.go"}
+		rendered, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+		if !strings.Contains(rendered, "## Priority Files") {
+			t.Error("expected '## Priority Files' section when TriageFiles is set")
+		}
+		if !strings.Contains(rendered, "- `foo.go`") {
+			t.Error("expected foo.go in rendered output")
+		}
+		if !strings.Contains(rendered, "- `bar.go`") {
+			t.Error("expected bar.go in rendered output")
+		}
+	})
+
+	t.Run("absent", func(t *testing.T) {
+		data := baseData
+		data.TriageFiles = nil
+		rendered, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+		if strings.Contains(rendered, "## Priority Files") {
+			t.Error("'## Priority Files' should be absent when TriageFiles is nil")
+		}
+	})
+}
+
+func TestPatchTemplateTriageFiles(t *testing.T) {
+	_, thisFile, _, _ := runtime.Caller(0)
+	repoRoot := filepath.Join(filepath.Dir(thisFile), "..", "..")
+	embedDir := filepath.Join(repoRoot, "cmd", "soda", "embeds", "prompts")
+	raw, err := os.ReadFile(filepath.Join(embedDir, "patch.md"))
+	if err != nil {
+		t.Fatalf("read patch.md: %v", err)
+	}
+	tmpl := string(raw)
+
+	baseData := PromptData{
+		Ticket:       TicketData{Key: "TEST-1", Summary: "Test"},
+		WorktreePath: "/tmp/test",
+		Branch:       "test-branch",
+		BaseBranch:   "main",
+		ReworkFeedback: &ReworkFeedback{
+			Source:        "verify",
+			Verdict:       "fail",
+			FixesRequired: []string{"fix something"},
+		},
+	}
+
+	t.Run("present", func(t *testing.T) {
+		data := baseData
+		data.TriageFiles = []string{"internal/handler.go"}
+		rendered, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+		if !strings.Contains(rendered, "## Priority Files") {
+			t.Error("expected '## Priority Files' section when TriageFiles is set")
+		}
+		if !strings.Contains(rendered, "- `internal/handler.go`") {
+			t.Error("expected internal/handler.go in rendered output")
+		}
+	})
+
+	t.Run("absent", func(t *testing.T) {
+		data := baseData
+		data.TriageFiles = nil
+		rendered, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+		if strings.Contains(rendered, "## Priority Files") {
+			t.Error("'## Priority Files' should be absent when TriageFiles is nil")
+		}
+	})
+}
