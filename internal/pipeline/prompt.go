@@ -30,6 +30,7 @@ type PromptData struct {
 	Diff             string                  // git diff of current branch vs base, injected for review phases (distinct from DiffContext which is used for corrective/monitor phases)
 	SiblingContext   string                  // function signatures from files referenced in the plan; helps implement see surrounding code
 	PackageExemplars string                  // function signatures from existing files in the same packages as new files being created
+	TriageFiles      []string                // files identified by triage as most relevant; injected into implement/patch prompts as priority reads
 	VerifyClean      bool                    // true when the verify phase produced a "pass" verdict (no failures)
 	PriorFindings    []schemas.ReviewFinding // findings from a prior review cycle, injected per-reviewer so the model avoids re-reporting addressed issues
 	ContextFitted    bool                    // true when fitToBudget reduced the prompt to fit the context window

@@ -19,6 +19,9 @@ Siblings: {{.SiblingContext}}
 {{- if .PackageExemplars}}
 Exemplars: {{.PackageExemplars}}
 {{- end}}
+{{- if .TriageFiles}}
+TriageFiles: {{range .TriageFiles}}{{.}} {{end}}
+{{- end}}
 {{- if .DiffContext}}
 Diff: {{.DiffContext}}
 {{- end}}
@@ -680,6 +683,88 @@ func TestFitToBudget_ReducesExemplarsBeforeProjectContext_Implement(t *testing.T
 	}
 	if projectIdx != -1 {
 		t.Error("ProjectContext should NOT be in reduced list when budget is met without it")
+	}
+}
+
+func TestPhaseReductionOrder_TriageFilesStep_Implement(t *testing.T) {
+	steps := phaseReductionOrder("implement")
+	exemplarIdx := -1
+	triageFilesIdx := -1
+	projectIdx := -1
+	for idx, step := range steps {
+		switch step.label {
+		case "PackageExemplars":
+			exemplarIdx = idx
+		case "TriageFiles":
+			triageFilesIdx = idx
+		case "ProjectContext":
+			projectIdx = idx
+		}
+	}
+	if triageFilesIdx == -1 {
+		t.Fatal("TriageFiles step not found in implement reduction order")
+	}
+	if exemplarIdx == -1 {
+		t.Fatal("PackageExemplars step not found")
+	}
+	if projectIdx == -1 {
+		t.Fatal("ProjectContext step not found")
+	}
+	if triageFilesIdx <= exemplarIdx {
+		t.Errorf("TriageFiles (idx=%d) should be after PackageExemplars (idx=%d)", triageFilesIdx, exemplarIdx)
+	}
+	if triageFilesIdx >= projectIdx {
+		t.Errorf("TriageFiles (idx=%d) should be before ProjectContext (idx=%d)", triageFilesIdx, projectIdx)
+	}
+}
+
+func TestPhaseReductionOrder_TriageFilesStep_Patch(t *testing.T) {
+	steps := phaseReductionOrder("patch")
+	exemplarIdx := -1
+	triageFilesIdx := -1
+	extrasIdx := -1
+	for idx, step := range steps {
+		switch step.label {
+		case "PackageExemplars":
+			exemplarIdx = idx
+		case "TriageFiles":
+			triageFilesIdx = idx
+		case "Artifacts.Extras":
+			extrasIdx = idx
+		}
+	}
+	if triageFilesIdx == -1 {
+		t.Fatal("TriageFiles step not found in patch reduction order")
+	}
+	if exemplarIdx == -1 {
+		t.Fatal("PackageExemplars step not found")
+	}
+	if extrasIdx == -1 {
+		t.Fatal("Artifacts.Extras step not found")
+	}
+	if triageFilesIdx <= exemplarIdx {
+		t.Errorf("TriageFiles (idx=%d) should be after PackageExemplars (idx=%d)", triageFilesIdx, exemplarIdx)
+	}
+	if triageFilesIdx >= extrasIdx {
+		t.Errorf("TriageFiles (idx=%d) should be before Artifacts.Extras (idx=%d)", triageFilesIdx, extrasIdx)
+	}
+}
+
+func TestPhaseReductionOrder_TriageFilesAbsent_Review(t *testing.T) {
+	steps := phaseReductionOrder("review")
+	for _, step := range steps {
+		if step.label == "TriageFiles" {
+			t.Fatal("review phase should not include TriageFiles reduction step — review.md never renders it")
+		}
+	}
+}
+
+func TestPhaseReductionOrder_TriageFilesAbsent_Verify(t *testing.T) {
+	steps := phaseReductionOrder("verify")
+	for _, step := range steps {
+		if step.label == "TriageFiles" {
+			t.Fatal("verify phase should not include TriageFiles reduction step — verify.md never renders it")
+		}
 	}
 }
 

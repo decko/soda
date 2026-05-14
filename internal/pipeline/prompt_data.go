@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/decko/soda/internal/git"
+	"github.com/decko/soda/schemas"
 )
 
 // defaultMaxDiffBytes is the default byte limit for git diffs injected into
@@ -56,6 +57,14 @@ func (e *Engine) buildPromptData(ctx context.Context, phase PhaseConfig) (Prompt
 			// Custom/user-defined phase: store in Extras map so
 			// templates can access via {{index .Artifacts.Extras "name"}}.
 			data.Artifacts.Extras[dep] = content
+		}
+	}
+
+	// Parse triage files for structured injection into downstream phases.
+	if data.Artifacts.Triage != "" {
+		var triageResult schemas.TriageOutput
+		if json.Unmarshal([]byte(data.Artifacts.Triage), &triageResult) == nil {
+			data.TriageFiles = triageResult.Files
 		}
 	}
 

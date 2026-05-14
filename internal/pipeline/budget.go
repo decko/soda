@@ -76,6 +76,11 @@ func phaseReductionOrder(phase string) []reductionStep {
 		reduce:  func(d *PromptData) { d.Context.RepoConventions = "" },
 		applies: func(d *PromptData) bool { return d.Context.RepoConventions != "" },
 	}
+	triageFilesStep := reductionStep{
+		label:   "TriageFiles",
+		reduce:  func(d *PromptData) { d.TriageFiles = nil },
+		applies: func(d *PromptData) bool { return len(d.TriageFiles) > 0 },
+	}
 	extrasStep := reductionStep{
 		label:   "Artifacts.Extras",
 		reduce:  func(d *PromptData) { d.Artifacts.Extras = nil },
@@ -190,7 +195,7 @@ func phaseReductionOrder(phase string) []reductionStep {
 	switch phase {
 	case "implement":
 		// Conventions are shed last — they are compact and high-value for implement.
-		steps := []reductionStep{siblingStep, exemplarStep, projectContextStep, extrasStep, reviewCommentsStep, diffStep}
+		steps := []reductionStep{siblingStep, exemplarStep, triageFilesStep, projectContextStep, extrasStep, reviewCommentsStep, diffStep}
 		steps = append(steps, reworkSteps...)
 		steps = append(steps, artifactSteps...)
 		steps = append(steps, conventionsStep)
@@ -211,7 +216,7 @@ func phaseReductionOrder(phase string) []reductionStep {
 		steps = append(steps, artifactSteps...)
 		return steps
 	case "patch":
-		steps := []reductionStep{diffStep, siblingStep, exemplarStep, extrasStep, projectContextStep}
+		steps := []reductionStep{diffStep, siblingStep, exemplarStep, triageFilesStep, extrasStep, projectContextStep}
 		steps = append(steps, reworkSteps...)
 		steps = append(steps, artifactSteps...)
 		steps = append(steps, conventionsStep)

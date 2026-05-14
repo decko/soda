@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"github.com/decko/soda/internal/config"
 	"github.com/decko/soda/internal/pipeline"
 	"github.com/decko/soda/internal/ticket"
+	"github.com/decko/soda/schemas"
 	"github.com/spf13/cobra"
 )
 
@@ -268,6 +270,13 @@ func loadArtifacts(state *pipeline.State, data *pipeline.PromptData, pl *pipelin
 
 	if artifact, err := state.ReadArtifact("triage"); err == nil {
 		data.Artifacts.Triage = string(artifact)
+	}
+	// Parse triage files for structured injection into downstream phases.
+	if data.Artifacts.Triage != "" {
+		var triageResult schemas.TriageOutput
+		if json.Unmarshal([]byte(data.Artifacts.Triage), &triageResult) == nil {
+			data.TriageFiles = triageResult.Files
+		}
 	}
 	if artifact, err := state.ReadArtifact("plan"); err == nil {
 		data.Artifacts.Plan = string(artifact)
