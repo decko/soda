@@ -471,7 +471,7 @@ func TestClassifyOutcome(t *testing.T) {
 		{
 			name:     "clean run",
 			entry:    CostEntry{Success: true},
-			expected: "clean",
+			expected: "first_pass",
 		},
 		{
 			name:     "patched only",
@@ -541,9 +541,9 @@ func TestCostByOutcome_Grouping(t *testing.T) {
 	}
 	result := CostByOutcome(entries)
 
-	clean, ok := result["clean"]
+	clean, ok := result["first_pass"]
 	if !ok {
-		t.Fatal("missing 'clean' outcome")
+		t.Fatal("missing 'first_pass' outcome")
 	}
 	if clean.Sessions != 2 {
 		t.Errorf("clean.Sessions = %d, want 2", clean.Sessions)
@@ -584,7 +584,7 @@ func TestCostByOutcome_LowerMedianEven(t *testing.T) {
 		{Ticket: "T-4", Cost: 7.00, Success: true},
 	}
 	result := CostByOutcome(entries)
-	clean := result["clean"]
+	clean := result["first_pass"]
 	// Sorted: 1,3,5,7 → lower-median = sorted[4/2-1] = sorted[1] = 3
 	if clean.Median != 3.00 {
 		t.Errorf("clean.Median = %f, want 3.00 (lower-median)", clean.Median)
@@ -599,7 +599,7 @@ func TestCostByOutcome_LowerMedianOdd(t *testing.T) {
 		{Ticket: "T-3", Cost: 3.00, Success: true},
 	}
 	result := CostByOutcome(entries)
-	clean := result["clean"]
+	clean := result["first_pass"]
 	// Sorted: 1,3,5 → lower-median = sorted[3/2] = sorted[1] = 3
 	if clean.Median != 3.00 {
 		t.Errorf("clean.Median = %f, want 3.00 (lower-median)", clean.Median)
@@ -613,7 +613,7 @@ func TestCostByOutcome_MeanDuration(t *testing.T) {
 		{Ticket: "T-3", Cost: 3.00, Success: true, DurationMs: 5000},
 	}
 	result := CostByOutcome(entries)
-	clean := result["clean"]
+	clean := result["first_pass"]
 	// Mean duration: (1000 + 3000 + 5000) / 3 = 3000
 	if clean.MeanDurMs != 3000 {
 		t.Errorf("clean.MeanDurMs = %d, want 3000", clean.MeanDurMs)

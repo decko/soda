@@ -267,7 +267,7 @@ func TestRunCostByOutcome_RowOrder(t *testing.T) {
 		dataLines = append(dataLines, trimmed)
 	}
 
-	expectedOrder := []string{"CLEAN", "PATCHED", "REWORK_1", "REWORK_2+", "FAILED"}
+	expectedOrder := []string{"FIRST_PASS", "PATCHED", "REWORK_1", "REWORK_2+", "FAILED"}
 	if len(dataLines) != len(expectedOrder) {
 		t.Fatalf("expected %d data lines, got %d:\n%s", len(expectedOrder), len(dataLines), output)
 	}
@@ -358,8 +358,8 @@ func TestRunCostByOutcomeAndComplexity_MixedEntries(t *testing.T) {
 	}
 
 	// Check outcome rows.
-	if !strings.Contains(output, "CLEAN") {
-		t.Errorf("output missing CLEAN row:\n%s", output)
+	if !strings.Contains(output, "FIRST_PASS") {
+		t.Errorf("output missing FIRST_PASS row:\n%s", output)
 	}
 	if !strings.Contains(output, "REWORK_1") {
 		t.Errorf("output missing REWORK_1 row:\n%s", output)

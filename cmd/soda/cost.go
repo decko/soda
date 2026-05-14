@@ -202,7 +202,7 @@ func runCostByComplexity(entries []pipeline.CostEntry) error {
 }
 
 // outcomeOrder defines the canonical display order for pipeline outcome buckets.
-var outcomeOrder = []string{"clean", "patched", "rework_1", "rework_2+", "failed"}
+var outcomeOrder = []string{"first_pass", "patched", "rework_1", "rework_2+", "failed"}
 
 // runCostByOutcome renders a cost breakdown grouped by pipeline outcome.
 func runCostByOutcome(entries []pipeline.CostEntry) error {
@@ -307,7 +307,7 @@ func runCostByOutcome(entries []pipeline.CostEntry) error {
 	fmt.Printf("\nTotal: $%.2f across %d session(s)\n", totalCost, totalSessions)
 
 	// Rework-tax line: weighted mean of rework_1 + rework_2+ vs clean mean.
-	cleanStats, hasClean := byOutcome["clean"]
+	cleanStats, hasClean := byOutcome["first_pass"]
 	rework1Stats, hasR1 := byOutcome["rework_1"]
 	rework2Stats, hasR2 := byOutcome["rework_2+"]
 	if hasClean && (hasR1 || hasR2) {
@@ -324,7 +324,7 @@ func runCostByOutcome(entries []pipeline.CostEntry) error {
 		reworkMean := reworkTotal / float64(reworkSessions)
 		if cleanStats.Mean > 0 {
 			tax := ((reworkMean - cleanStats.Mean) / cleanStats.Mean) * 100
-			fmt.Printf("Rework tax: %.0f%% (rework mean $%.2f vs clean mean $%.2f)\n", tax, reworkMean, cleanStats.Mean)
+			fmt.Printf("Rework tax: %.0f%% (rework mean $%.2f vs first_pass mean $%.2f)\n", tax, reworkMean, cleanStats.Mean)
 		}
 	}
 

@@ -193,7 +193,7 @@ func CostByComplexity(entries []CostEntry) map[string]ComplexityStats {
 }
 
 // OutcomeStats holds aggregated cost and duration statistics for a single
-// pipeline outcome bucket (e.g. "clean", "patched", "rework_1").
+// pipeline outcome bucket (e.g. "first_pass", "patched", "rework_1").
 type OutcomeStats struct {
 	Sessions  int
 	Mean      float64
@@ -208,7 +208,7 @@ type OutcomeStats struct {
 //  2. ReworkCycles ≥ 2      → "rework_2+"
 //  3. ReworkCycles == 1 OR Escalated with ReworkCycles == 0 → "rework_1"
 //  4. PatchCycles > 0       → "patched"
-//  5. otherwise             → "clean"
+//  5. otherwise             → "first_pass"
 //
 // Escalation with zero rework cycles is treated as a minimum of one rework
 // cycle because the patch-to-rework escalation itself constitutes a rework.
@@ -228,7 +228,7 @@ func ClassifyOutcome(entry CostEntry) string {
 	case entry.PatchCycles > 0:
 		return "patched"
 	default:
-		return "clean"
+		return "first_pass"
 	}
 }
 
