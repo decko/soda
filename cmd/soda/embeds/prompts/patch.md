@@ -28,6 +28,15 @@ The following diff shows what was implemented (base...HEAD):
 {{.DiffContext}}
 ```
 {{- end}}
+{{- if .TriageFiles}}
+
+## Priority Files
+
+Read these files first — triage identified them as most relevant to this ticket:
+{{range .TriageFiles}}
+- `{{.}}`
+{{- end}}
+{{- end}}
 
 {{- if .ReworkFeedback}}
 {{- if .ReworkFeedback.PriorCycles}}
