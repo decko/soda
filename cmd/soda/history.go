@@ -88,6 +88,13 @@ func renderEventsHistory(meta *pipeline.PipelineMeta, events []pipeline.Event, s
 			h.Entries[i].TransientRetries = ps.TransientRetries
 			h.Entries[i].ParseRetries = ps.ParseRetries
 			h.Entries[i].SemanticRetries = ps.SemanticRetries
+			// Fallback: use PhaseState's FailureCategory when the event-sourced
+			// value is empty. This covers gate errors (no EventPhaseFailed emitted)
+			// and timeout errors (state overwrites "context" → "timeout" after the
+			// event is emitted).
+			if h.Entries[i].FailureCategory == "" {
+				h.Entries[i].FailureCategory = ps.FailureCategory
+			}
 		}
 	}
 
