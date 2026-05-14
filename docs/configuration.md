@@ -259,9 +259,30 @@ phases:
                               # (e.g. "prompts/implement.md")
     schema: string            # structured output schema: inline JSON, file path, or empty to use
                               # the auto-generated schema for the phase name
-    model: string             # per-phase model override; empty uses the global model from soda.yaml
+
+    # Per-phase model override — use this to balance cost and capability across phases.
+    # For example: Sonnet for cheap classification phases (triage, plan, submit) and Opus for
+    # complex reasoning phases (implement, review). Omit to use the global model from soda.yaml.
+    model: string
+
     tools: [string]           # allowed tools list (see Tool scoping below)
-    timeout: duration         # phase timeout as a Go duration string (e.g. "25m", "3m")
+
+    # Per-phase timeout — set tighter limits for fast phases (triage: 3m, submit: 3m) and
+    # longer limits for phases that run tests or write code (implement: 25m, review: 12m).
+    # Catching runaway sessions early saves both time and cost.
+    timeout: duration         # Go duration string (e.g. "25m", "3m")
+
+    # Skip condition — a Go template expression evaluated against pipeline state.
+    # The phase is skipped when the expression evaluates to the string "false".
+    # Use this to build adaptive pipelines: skip planning for low-complexity tickets,
+    # skip review for docs-only changes, or skip monitor for quick-fix pipelines.
+    # Template variables: .Complexity, .TicketType, and all PromptData fields.
+    # Example: '{{ ne .Complexity "low" }}'  — skips the phase for low-complexity tickets
+    condition: string
+
+    # Per-phase retry policy — tune separately from other phases.
+    # implement often benefits from fewer semantic retries (fail fast and rework instead);
+    # verify benefits from more transient retries to handle flaky tests.
     retry:
       transient: int          # retries for transient API errors (rate limits, timeouts) (default: 2)
       parse: int              # retries when output fails JSON schema validation (default: 1)
@@ -282,6 +303,12 @@ phases:
 
 ### Rework routing
 
+Use rework routing to close the review → implement loop. When a phase returns a
+`rework` verdict (e.g. review finds critical or major issues), the engine routes
+back to the target phase and re-runs from there. Prior findings are injected
+into the rework prompt so the agent knows what to fix without re-reading the
+whole diff.
+
 To route back to an earlier phase on a bad verdict, add a `rework` block to the phase that produces the verdict:
 
 ```yaml
@@ -292,6 +319,14 @@ To route back to an earlier phase on a bad verdict, add a `rework` block to the 
 Example: the review phase routes back to implement on a `rework` verdict.
 
 ### Corrective routing
+
+Use corrective routing to close the verify → patch loop. When a phase fails
+(e.g. verify finds test failures), the engine triggers a lightweight corrective
+phase (patch) to attempt targeted fixes, then re-runs verify. This avoids
+routing all failures back through a full implement session. Configure
+`on_exhausted` to decide what happens when the corrective phase runs out of
+attempts: stop the pipeline, escalate to a full implement session, or allow one
+extra attempt.
 
 To trigger a corrective phase on failure, add a `corrective` block to the triggering phase:
 
@@ -307,7 +342,14 @@ Example: the verify phase triggers the patch corrective phase on a FAIL verdict.
 
 ### Parallel review
 
-For `type: parallel-review`, configure individual reviewers and quorum requirements:
+For `type: parallel-review`, configure individual reviewers and quorum requirements.
+
+Configure multiple reviewers when you need specialist perspectives on the same
+diff — for example, a Go specialist for correctness, an AI harness reviewer for
+prompt quality, and an SRE reviewer for operational concerns. Reviewers run in
+parallel and their findings are merged before a final verdict is determined.
+Use per-reviewer model overrides to run cheaper reviewers on Sonnet while
+reserving Opus for the most critical specialist.
 
 ```yaml
     min_reviewers: int         # minimum number of reviewers that must succeed; 0 means all must succeed
@@ -316,10 +358,18 @@ For `type: parallel-review`, configure individual reviewers and quorum requireme
       - name: string           # reviewer identifier (used in log filenames and output)
         prompt: string         # reviewer-specific prompt template path
         focus: string          # short description of the reviewer's focus area (injected into the prompt)
-        model: string          # per-reviewer model override (optional)
+        model: string          # per-reviewer model override (optional; empty = global model)
+        condition: string      # skip this reviewer when expression evaluates to "false" (optional)
+                               # useful for running expensive reviewers only on high-complexity tickets
 ```
 
 ### Polling (monitor)
+
+The polling phase type is used for the monitor phase — a long-running loop that
+watches the PR for review comments and CI status, then responds or fixes as
+needed. Configure `max_response_rounds` to limit how many Claude sessions can
+run during monitoring (each fix or reply counts as one round). Set
+`max_duration` to cap the total wall-clock time the monitor phase can consume.
 
 For `type: polling`, add a `polling` block:
 
@@ -336,7 +386,14 @@ For `type: polling`, add a `polling` block:
 
 ### Tool scoping
 
-The `tools` list in each phase is passed to Claude Code as `--allowed-tools`. This is advisory — use sandbox isolation for enforcement in unattended runs.
+Restrict what each phase can do by limiting its tools. Read-only phases
+(triage, plan) don't need write access — scoping them to `Read`, `Glob`,
+`Grep`, and `Bash(git:*)` reduces the blast radius if anything goes wrong.
+Submit phases only need forge CLI access and never need to read source files.
+
+The `tools` list in each phase is passed to Claude Code as `--allowed-tools`.
+This is advisory — use sandbox isolation for enforcement in unattended runs
+(see [docs/sandbox.md](sandbox.md)).
 
 Supported tool names and patterns:
 
@@ -425,6 +482,9 @@ soda pipelines new <name> --global     # write to ~/.config/soda/phases-<name>.y
 This scaffolds a new pipeline definition file named `phases-<name>.yaml`. Edit the generated file to add, remove, or reorder phases.
 
 Custom pipelines follow the same file format as the default `phases.yaml`. The pipeline file is self-contained: it references prompt templates and the schema is either inline JSON or resolved automatically from the phase name.
+
+For a step-by-step tutorial with conditional phases and model routing cookbooks,
+see [docs/pipelines.md](pipelines.md).
 
 ### Running with a named pipeline
 

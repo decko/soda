@@ -2,30 +2,94 @@
 
 [![CI](https://github.com/decko/soda/actions/workflows/ci.yaml/badge.svg)](https://github.com/decko/soda/actions/workflows/ci.yaml) [![Go 1.25](https://img.shields.io/badge/go-1.25-blue.svg)](https://go.dev) [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-Give it a ticket, get a PR. SODA is a Go CLI/TUI that orchestrates AI coding
-sessions through a structured pipeline to implement GitHub Issues end-to-end.
-Each pipeline phase runs in a fresh, sandboxed Claude Code session with
-structured output — no shared context, no prompt bleed. A typical run costs
-**$5–11 USD** in Claude API usage and produces a reviewed, tested pull request.
+A programmable pipeline that turns tickets into PRs — one phase at a time. SODA
+is a Go CLI/TUI that orchestrates AI coding sessions through configurable
+pipelines to implement GitHub Issues end-to-end. Each phase runs in a fresh,
+sandboxed Claude Code session with structured output — no shared context, no
+prompt bleed. Use the default 9-phase pipeline out of the box, or compose your
+own from scratch.
 
-## Pipeline
+## Build Your Pipeline
+
+SODA ships three built-in pipelines. Pick one, or compose your own.
+
+| Want to… | Use |
+|----------|-----|
+| Run everything end-to-end | `soda run 42` (default pipeline) |
+| Skip triage and planning | `soda run 42 --pipeline quick-fix` |
+| Update docs only (Sonnet) | `soda run 42 --pipeline docs-only` |
+| Build a custom pipeline | `soda pipelines new my-pipeline` |
+| Design phases interactively | Ask the `pipeline-architect` agent |
+
+### Minimal custom pipeline (3 phases)
+
+Create `phases-my-pipeline.yaml` in your project root:
+
+```yaml
+phases:
+  - name: implement
+    tools: [Read, Write, Edit, Glob, Grep, Bash]
+    timeout: 25m
+
+  - name: verify
+    tools: [Read, Glob, Grep, Bash]
+    timeout: 8m
+
+  - name: submit
+    tools: ["Bash(git:*)", "Bash(gh:*)"]
+    timeout: 3m
+```
+
+Then run it:
+
+```bash
+soda run 42 --pipeline my-pipeline
+```
+
+See [docs/pipelines.md](docs/pipelines.md) for the full tutorial, conditional
+phases, and model routing cookbooks.
+
+## Default Pipeline
 
 ```
 Ticket → Triage → Plan → Implement → Verify → Review → Submit → Monitor → PR
 ```
 
-| Phase | What it does |
-|-------|-------------|
-| **Triage** | Classifies the ticket, identifies relevant files, routes the pipeline |
-| **Plan** | Designs the approach, breaks work into atomic tasks |
-| **Implement** | Writes code, runs tests, commits |
-| **Verify** | Runs tests, checks acceptance criteria, reviews code quality |
-| **Review** | Parallel specialist review (Go, AI harness, SRE) |
-| **Submit** | Pushes branch, opens pull request |
-| **Monitor** | Polls PR for comments and CI, responds and fixes |
+| Phase | What it does | Tools | Timeout | Model |
+|-------|-------------|-------|---------|-------|
+| **Triage** | Classifies the ticket, identifies relevant files, routes the default pipeline | Read-only | 3m | global |
+| **Plan** | Designs the approach, breaks work into atomic tasks | Read-only | 8m | global |
+| **Implement** | Writes code, runs tests, commits | Full | 25m | global |
+| **Verify** | Runs tests, checks acceptance criteria, reviews code quality | Read + Bash | 8m | global |
+| **Review** | Parallel specialist review (Go, AI harness, SRE) | Read + Bash | 12m | global |
+| **Submit** | Pushes branch, opens pull request | git + gh/glab | 3m | global |
+| **Monitor** | Polls PR for comments and CI, responds and fixes | Full | 10m/round | global |
 
-Conditional phases: **Patch** runs when verify fails (targeted fixes);
-**Follow-up** runs when review passes with minor findings (creates follow-up tickets).
+Conditional phases: **Patch** runs when verify fails (targeted fixes, Sonnet);
+**Follow-up** runs when review passes with minor findings (creates follow-up
+tickets). All phases, tools, timeouts, and models are configurable in
+`phases.yaml`.
+
+## Per-Phase Control
+
+Every knob in the default pipeline is configurable per phase in `phases.yaml`:
+
+| Knob | Scope | Example |
+|------|-------|---------|
+| Model | Per phase | Sonnet for triage, Opus for implement |
+| Tools | Per phase | Read-only for triage, full write for implement |
+| Timeout | Per phase | 3m for triage, 25m for implement |
+| Skip condition | Per phase | `{{ ne .Complexity "low" }}` |
+| Retry policy | Per phase, per error type | 2 transient, 1 parse, 0 semantic |
+
+See [docs/pipelines.md](docs/pipelines.md) and
+[docs/configuration.md](docs/configuration.md) for the full reference.
+
+## Status
+
+**Status (v0.5.0):** 185+ default pipeline runs across 6 releases. 67%
+first-pass success rate on medium-complexity tickets. Average cost $5–11 per
+session. SODA is used to develop itself.
 
 ## Cost
 
@@ -33,10 +97,24 @@ Conditional phases: **Patch** runs when verify fails (targeted fixes);
 |-------------|-------------|
 | Simple fix (1–3 tasks) | $2–6 |
 | Medium feature (4–8 tasks) | $8–15 |
-| Full 9-phase pipeline | $5–11 average |
+| Full default pipeline | $5–11 average |
 
 Set `max_cost_per_ticket` in `soda.yaml` as a hard safety net. Per-phase
 and per-generation limits are also available.
+
+## Quick Start
+
+```bash
+soda init                    # generate soda.yaml for this project
+soda doctor                  # verify prerequisites are installed
+soda run <issue-number>      # run the default pipeline for a GitHub issue
+soda run <issue-number> --pipeline quick-fix   # or choose a named pipeline
+soda status                  # check active and recent pipelines
+soda history <issue-number>  # inspect phase-by-phase results
+```
+
+See [docs/quickstart.md](docs/quickstart.md) for a step-by-step walkthrough
+including pipeline selection.
 
 ## Prerequisites
 
@@ -80,18 +158,6 @@ builds, and checksum verification.
 > `-sandbox` binary (Linux amd64 only). All other binaries work without
 > sandbox — it's optional.
 
-## Quick Start
-
-```bash
-soda init                    # generate soda.yaml for this project
-soda doctor                  # verify prerequisites are installed
-soda run <issue-number>      # run the full pipeline for a GitHub issue
-soda status                  # check active and recent pipelines
-soda history <issue-number>  # inspect phase-by-phase results
-```
-
-See [docs/quickstart.md](docs/quickstart.md) for a step-by-step walkthrough.
-
 ## Configuration
 
 SODA uses three config layers:
@@ -99,7 +165,7 @@ SODA uses three config layers:
 | Layer | File | Purpose |
 |-------|------|---------|
 | Project config | `soda.yaml` | Ticket source, model, budget limits, repo settings |
-| Pipeline config | `phases.yaml` | Add, remove, or reorder phases; set tools and timeouts |
+| Pipeline config | `phases.yaml` | Add, remove, or reorder phases; set tools, timeouts, and models |
 | Prompt overrides | `~/.config/soda/prompts/<phase>.md` | Customize phase prompts without forking |
 
 Run `soda init` to generate a `soda.yaml` auto-detected from your project.
@@ -110,8 +176,8 @@ and [docs/configuration.md](docs/configuration.md) for the full guide.
 
 | Command | Purpose |
 |---------|---------|
-| `soda run <ticket>` | Run pipeline for a ticket |
-| `soda run <ticket> --pipeline docs-only` | Use a named pipeline |
+| `soda run <ticket>` | Run the default pipeline for a ticket |
+| `soda run <ticket> --pipeline quick-fix` | Use a named pipeline |
 | `soda run <ticket> --from last` | Resume from last failed phase |
 | `soda run <ticket> --mode checkpoint` | Pause after each phase for confirmation |
 | `soda status` | Show active and recent pipelines |
@@ -125,81 +191,34 @@ and [docs/configuration.md](docs/configuration.md) for the full guide.
 | `soda spec "description"` | Generate a ticket specification |
 | `soda pick` | Interactive ticket picker |
 | `soda pipelines` | List available named pipelines |
+| `soda pipelines new <name>` | Scaffold a custom pipeline |
 | `soda init` | Generate `soda.yaml` config |
-
-## Named Pipelines
-
-| Pipeline | Phases | Use case |
-|----------|--------|----------|
-| `default` | Full 9-phase pipeline | New features, bug fixes |
-| `quick-fix` | implement → verify → submit | Small, well-understood fixes |
-| `docs-only` | plan → implement → submit | Documentation changes (Sonnet) |
-
-```bash
-soda run 42 --pipeline quick-fix
-soda run 42 --pipeline docs-only
-soda pipelines new my-pipeline   # create a custom pipeline
-```
 
 ## How It Works
 
-SODA creates a Git worktree before any phase runs — all phases execute inside
-the worktree, never in the main checkout. For each phase, SODA renders a prompt
-template with handoff artifacts from upstream phases, spawns a Claude Code
-session with `--bare --json-schema` (structured output, no auto-discovery),
-streams output to the TUI, parses the JSON response, and writes the artifact
-to `.soda/<ticket>/`. Context resets between phases: each session starts fresh.
-A rework loop triggers when review flags critical or major findings (max 2
-cycles). A corrective loop triggers when verify fails (patch phase, then
-re-verify).
+- **Worktree isolation** — a Git worktree is created before any phase runs; all
+  phases execute inside it, never in the main checkout
+- **Fresh context per phase** — each phase starts a new Claude Code session;
+  context resets between phases, no prompt bleed
+- **Structured JSON artifact handoff** — each phase writes a validated JSON
+  artifact to `.soda/<ticket>/`; the next phase reads it as structured input
+- **Rework loop** — when Review flags critical or major findings, the default
+  pipeline routes back to Implement (max 2 cycles); prior findings are injected
+  to prevent the whack-a-mole pattern
+- **Corrective loop** — when Verify fails, a targeted Patch phase runs before
+  re-verification; on exhaustion, the policy escalates or stops
 
 ## Sandbox
 
-When built with `CGO_ENABLED=1`, SODA uses
-[go-arapuca](https://github.com/sergio-correia/go-arapuca) for OS-level
-isolation around each Claude Code session:
+OS-level isolation for each Claude Code session (Landlock, seccomp, cgroups).
+See [docs/sandbox.md](docs/sandbox.md) for setup, configuration, and platform
+requirements.
 
-- **Landlock** — filesystem access restricted to the worktree
-- **seccomp** — syscall allowlist enforced at the kernel level
-- **cgroups** — memory, CPU, and PID limits
+## Plugin
 
-Sandbox is **optional**. Builds with `CGO_ENABLED=0` run without isolation —
-useful for environments where CGO is unavailable. Configure via the `sandbox:`
-block in `soda.yaml`.
-
-## Claude Code Plugin
-
-SODA ships an embedded plugin that gives Claude Code knowledge of SODA
-pipelines and quick access to soda commands. The plugin is auto-discovered
-from the `.claude/` directory.
-
-### Install
-
-```bash
-soda plugin install              # project-local: .claude/plugins/soda/
-soda plugin install --global     # global: ~/.claude/plugins/soda/
-```
-
-### Uninstall
-
-```bash
-soda plugin uninstall            # remove project-local plugin
-soda plugin uninstall --global   # remove global plugin
-```
-
-### What the plugin provides
-
-| Component | Description |
-|-----------|-------------|
-| **Skill: `soda-pipeline`** | Pipeline architecture, phase lifecycle, state management, troubleshooting |
-| **Skill: `orchestrate`** | Milestone-level coordination: dependency ordering, label lifecycle, SODA dispatch, cost tracking, progress reporting |
-| **`/soda:run <ticket>`** | Run the pipeline for a ticket |
-| **`/soda:status`** | Show current pipeline status |
-| **`/soda:sessions`** | List previous pipeline sessions |
-| **Agent: `pipeline-architect`** | Design-only agent that proposes a `phases.yaml` |
-
-Plugin files are embedded in the soda binary and version-matched — updates
-arrive with `go install`.
+Embedded plugin that gives Claude Code knowledge of SODA pipelines and quick
+access to `soda` commands. See [docs/plugin.md](docs/plugin.md) for install
+instructions and what the plugin provides.
 
 ## Contributing
 

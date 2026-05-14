@@ -222,7 +222,40 @@ gh issue create \
 
 ---
 
-## Step 6 — Run `soda run <issue-number>`
+## Step 6 — Choose your pipeline
+
+SODA ships three built-in pipelines. For your first run, the default pipeline
+is a good choice — it handles triage, planning, implementation, verification,
+review, and submission end-to-end.
+
+| Pipeline | Phases | Use case |
+|----------|--------|----------|
+| `default` | triage → plan → implement → verify → review → submit → monitor | New features, bug fixes |
+| `quick-fix` | implement → verify → submit | Small, well-understood fixes |
+| `docs-only` | plan → implement → submit | Documentation changes (Sonnet) |
+
+```bash
+soda pipelines     # see all available pipelines
+```
+
+To use a specific pipeline, pass `--pipeline` to `soda run`:
+
+```bash
+soda run 42 --pipeline quick-fix
+```
+
+You can also build a custom pipeline tailored to your project:
+
+```bash
+soda pipelines new my-pipeline   # scaffolds phases-my-pipeline.yaml
+```
+
+See [docs/pipelines.md](pipelines.md) for the full tutorial, conditional
+phases, and model routing cookbooks.
+
+---
+
+## Step 7 — Run `soda run <issue-number>`
 
 ```bash
 soda run 42
@@ -268,7 +301,7 @@ SODA — myorg/my-service — issue #42
 
 ---
 
-## Step 7 — Find your pull request
+## Step 8 — Find your pull request
 
 When Submit completes, SODA prints the PR URL:
 
