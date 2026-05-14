@@ -1,6 +1,10 @@
 package claude
 
-import "strconv"
+import (
+	"fmt"
+	"strconv"
+	"strings"
+)
 
 // MinCLIVersion is the minimum Claude Code CLI version that supports all
 // flags used by SODA. The bottleneck is --bare, introduced in v2.1.81.
@@ -17,6 +21,49 @@ import "strconv"
 //	--json-schema                      ≤ v2.1.21 (fix in v2.1.22)
 //	--bare                             v2.1.81 ← bottleneck
 const MinCLIVersion = "2.1.81"
+
+// MaxTestedCLIVersion is the highest Claude Code CLI version that SODA has
+// been tested against. Versions above this will still work but produce a
+// warning in `soda doctor` so operators know the pairing is unverified.
+//
+// Bump this constant after validating SODA against a newer CLI release.
+// See CONTRIBUTING.md § "Release checklist" for the full procedure.
+const MaxTestedCLIVersion = "2.2.0"
+
+func init() {
+	if compareCLIVersions(MinCLIVersion, MaxTestedCLIVersion) >= 0 {
+		panic(fmt.Sprintf(
+			"claude: MinCLIVersion (%s) must be less than MaxTestedCLIVersion (%s)",
+			MinCLIVersion, MaxTestedCLIVersion,
+		))
+	}
+}
+
+// compareCLIVersions compares two semver strings (X.Y.Z).
+// Returns -1 if a < b, 0 if a == b, +1 if a > b.
+// This is intentionally duplicated from cmd/soda/doctor.go's compareSemver
+// because internal/claude cannot import cmd/soda.
+func compareCLIVersions(a, b string) int {
+	aParts := strings.SplitN(a, ".", 3)
+	bParts := strings.SplitN(b, ".", 3)
+
+	for idx := 0; idx < 3; idx++ {
+		ai, bi := 0, 0
+		if idx < len(aParts) {
+			ai, _ = strconv.Atoi(aParts[idx])
+		}
+		if idx < len(bParts) {
+			bi, _ = strconv.Atoi(bParts[idx])
+		}
+		if ai < bi {
+			return -1
+		}
+		if ai > bi {
+			return 1
+		}
+	}
+	return 0
+}
 
 // BuildArgs constructs the CLI argument list from RunOpts and model.
 // When opts.Model is non-empty it takes precedence over the runner-level
