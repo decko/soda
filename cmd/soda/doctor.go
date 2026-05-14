@@ -248,6 +248,14 @@ func checkClaudeVersion(env *doctorEnv) checkResult {
 		}
 	}
 
+	if compareSemver(ver, claude.MaxTestedCLIVersion) > 0 {
+		return checkResult{
+			name:   "claude-version",
+			passed: true,
+			detail: fmt.Sprintf("%s ⚠ newer than tested range (%s–%s)", out, claude.MinCLIVersion, claude.MaxTestedCLIVersion),
+		}
+	}
+
 	return checkResult{
 		name:     "claude-version",
 		passed:   true,
