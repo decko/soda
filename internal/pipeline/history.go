@@ -26,6 +26,10 @@ type PhaseGeneration struct {
 	Superseded            bool            // true if a later generation exists
 	PromptHash            string          // SHA-256 hex digest of the rendered prompt (from PhaseState)
 	EstimatedPromptTokens int64           // pre-invocation token estimate (from PhaseState)
+	FailureCategory       string          // error classification (e.g. "transient", "gate", "timeout")
+	TransientRetries      int             // number of transient-error retries
+	ParseRetries          int             // number of parse-error retries
+	SemanticRetries       int             // number of semantic-error retries
 }
 
 // History holds the reconstructed multi-generation history for a ticket.
@@ -121,6 +125,11 @@ func BuildHistory(events []Event, stateDir string) History {
 			}
 			if v, ok := ev.Data["cost"]; ok {
 				h.Entries[idx].Cost = toFloat64(v)
+			}
+			if v, ok := ev.Data["failure_category"]; ok {
+				if s, ok := v.(string); ok {
+					h.Entries[idx].FailureCategory = s
+				}
 			}
 			// Load details from result JSON (may exist even for failed phases,
 			// e.g. verify with verdict=FAIL); fall back to event-embedded summary.

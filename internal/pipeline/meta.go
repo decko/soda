@@ -38,6 +38,10 @@ type PhaseState struct {
 	ModelUsed             string      `json:"model_used,omitempty"`              // resolved model name used for this phase execution
 	ParseAttempts         int         `json:"parse_attempts,omitempty"`          // number of parse retry attempts during this execution
 	ParseSuccessOnFirst   bool        `json:"parse_success_on_first,omitempty"`  // true if output parsed successfully on the first attempt
+	TransientRetries      int         `json:"transient_retries,omitempty"`       // number of transient-error retries during this execution
+	ParseRetries          int         `json:"parse_retries,omitempty"`           // number of parse-error retries during this execution
+	SemanticRetries       int         `json:"semantic_retries,omitempty"`        // number of semantic-error retries during this execution
+	FailureCategory       string      `json:"failure_category,omitempty"`        // error classification on terminal failure (e.g. "transient", "gate", "timeout")
 	startedAt             time.Time
 }
 

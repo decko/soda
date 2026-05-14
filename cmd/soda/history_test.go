@@ -321,3 +321,169 @@ func TestRenderEventsHistory_PromptHashNoDetail(t *testing.T) {
 		t.Errorf("non-detail output should not contain prompt hash %q\ngot:\n%s", wantHash, output)
 	}
 }
+
+// TestRenderEventsHistory_FailureCategoryFallbackFromMeta verifies that when
+// a phase's FailureCategory is set in PhaseState but not in events (e.g., gate
+// errors where no EventPhaseFailed carries failure_category), the enrichment
+// loop fills it from meta.Phases.
+func TestRenderEventsHistory_FailureCategoryFallbackFromMeta(t *testing.T) {
+	dir := t.TempDir()
+
+	// Write a result file so the phase has output.
+	result := map[string]any{"verdict": "PASS"}
+	data, _ := json.Marshal(result)
+	if err := os.WriteFile(filepath.Join(dir, "verify.json"), data, 0644); err != nil {
+		t.Fatalf("WriteFile verify.json: %v", err)
+	}
+
+	meta := &pipeline.PipelineMeta{
+		Ticket:    "TEST-GATE",
+		TotalCost: 0.50,
+		Phases: map[string]*pipeline.PhaseState{
+			"verify": {
+				Status:          pipeline.PhaseCompleted,
+				Cost:            0.50,
+				FailureCategory: "gate", // set by SetFailureCategory, no event carries it
+			},
+		},
+	}
+
+	// Gate errors don't emit EventPhaseFailed with failure_category — only
+	// EventPhaseCompleted is emitted before the gate check.
+	events := []pipeline.Event{
+		{Phase: "verify", Kind: pipeline.EventPhaseStarted, Data: map[string]any{"generation": float64(1)}},
+		{Phase: "verify", Kind: pipeline.EventPhaseCompleted, Data: map[string]any{"cost": 0.50, "duration_ms": float64(3000)}},
+	}
+
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	err := renderEventsHistory(meta, events, dir, true /* detail */, "" /* phaseFilter */)
+
+	w.Close()
+	os.Stdout = old
+
+	var buf bytes.Buffer
+	_, _ = buf.ReadFrom(r)
+	output := buf.String()
+
+	if err != nil {
+		t.Fatalf("renderEventsHistory error: %v", err)
+	}
+
+	if !strings.Contains(output, "Failure Category: gate") {
+		t.Errorf("detail output should contain 'Failure Category: gate' from meta fallback\ngot:\n%s", output)
+	}
+}
+
+// TestRenderEventsHistory_FailureCategoryTimeoutOverride verifies that for
+// timeout errors, the PhaseState value ("timeout") takes precedence over
+// the event-sourced value ("context") when the event has no failure_category.
+func TestRenderEventsHistory_FailureCategoryTimeoutOverride(t *testing.T) {
+	dir := t.TempDir()
+
+	meta := &pipeline.PipelineMeta{
+		Ticket:    "TEST-TIMEOUT",
+		TotalCost: 1.00,
+		Phases: map[string]*pipeline.PhaseState{
+			"implement": {
+				Status:          pipeline.PhaseFailed,
+				Cost:            1.00,
+				FailureCategory: "timeout", // set by wrapTimeoutError after event emission
+			},
+		},
+	}
+
+	// The EventPhaseFailed event was emitted with failure_category="context"
+	// by emitPhaseFailed, but wrapTimeoutError later overwrites the state to
+	// "timeout". When the event carries "context", the fallback should NOT
+	// overwrite it (event-sourced value wins). But if the event doesn't carry
+	// failure_category at all, the meta fallback should fill it.
+	events := []pipeline.Event{
+		{Phase: "implement", Kind: pipeline.EventPhaseStarted, Data: map[string]any{"generation": float64(1)}},
+		{Phase: "implement", Kind: pipeline.EventPhaseFailed, Data: map[string]any{
+			"error":       "context deadline exceeded",
+			"duration_ms": float64(60000),
+			"cost":        1.00,
+			// No failure_category in event — meta fallback should fill "timeout"
+		}},
+	}
+
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	err := renderEventsHistory(meta, events, dir, true /* detail */, "" /* phaseFilter */)
+
+	w.Close()
+	os.Stdout = old
+
+	var buf bytes.Buffer
+	_, _ = buf.ReadFrom(r)
+	output := buf.String()
+
+	if err != nil {
+		t.Fatalf("renderEventsHistory error: %v", err)
+	}
+
+	if !strings.Contains(output, "Failure Category: timeout") {
+		t.Errorf("detail output should contain 'Failure Category: timeout' from meta fallback\ngot:\n%s", output)
+	}
+}
+
+// TestRenderEventsHistory_FailureCategoryEventPreserved verifies that when
+// an EventPhaseFailed carries a failure_category, the event-sourced value
+// is NOT overwritten by the meta fallback.
+func TestRenderEventsHistory_FailureCategoryEventPreserved(t *testing.T) {
+	dir := t.TempDir()
+
+	meta := &pipeline.PipelineMeta{
+		Ticket:    "TEST-PRESERVE",
+		TotalCost: 0.30,
+		Phases: map[string]*pipeline.PhaseState{
+			"implement": {
+				Status:          pipeline.PhaseFailed,
+				Cost:            0.30,
+				FailureCategory: "transient", // same as event — no conflict
+			},
+		},
+	}
+
+	events := []pipeline.Event{
+		{Phase: "implement", Kind: pipeline.EventPhaseStarted, Data: map[string]any{"generation": float64(1)}},
+		{Phase: "implement", Kind: pipeline.EventPhaseFailed, Data: map[string]any{
+			"error":            "retries exhausted",
+			"duration_ms":      float64(5000),
+			"cost":             0.30,
+			"failure_category": "transient", // event carries the value
+		}},
+	}
+
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	err := renderEventsHistory(meta, events, dir, true /* detail */, "" /* phaseFilter */)
+
+	w.Close()
+	os.Stdout = old
+
+	var buf bytes.Buffer
+	_, _ = buf.ReadFrom(r)
+	output := buf.String()
+
+	if err != nil {
+		t.Fatalf("renderEventsHistory error: %v", err)
+	}
+
+	if !strings.Contains(output, "Failure Category: transient") {
+		t.Errorf("detail output should preserve event-sourced 'Failure Category: transient'\ngot:\n%s", output)
+	}
+
+	// Should appear exactly once — not duplicated.
+	count := strings.Count(output, "Failure Category:")
+	if count != 1 {
+		t.Errorf("'Failure Category:' should appear exactly once, appeared %d times\ngot:\n%s", count, output)
+	}
+}

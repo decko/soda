@@ -146,6 +146,10 @@ func (s *State) MarkRunning(phase string) error {
 	ps.ModelUsed = ""
 	ps.ParseAttempts = 0
 	ps.ParseSuccessOnFirst = false
+	ps.TransientRetries = 0
+	ps.ParseRetries = 0
+	ps.SemanticRetries = 0
+	ps.FailureCategory = ""
 	ps.startedAt = time.Now()
 
 	return s.flushMeta()
@@ -159,6 +163,7 @@ func (s *State) MarkCompleted(phase string) error {
 	}
 
 	ps.Status = PhaseCompleted
+	ps.FailureCategory = ""
 	if !ps.startedAt.IsZero() {
 		ps.DurationMs = time.Since(ps.startedAt).Milliseconds()
 	}
@@ -250,6 +255,37 @@ func (s *State) RecordParseFirstSuccess(phase string) error {
 		return fmt.Errorf("pipeline: record parse first success: phase %q not started", phase)
 	}
 	ps.ParseSuccessOnFirst = true
+	return s.flushMeta()
+}
+
+// IncrementRetryCounter increments the retry counter for the given category
+// ("transient", "parse", or "semantic"). Phase must exist (via MarkRunning).
+func (s *State) IncrementRetryCounter(phase string, category string) error {
+	ps := s.meta.Phases[phase]
+	if ps == nil {
+		return fmt.Errorf("pipeline: increment retry counter: phase %q not started", phase)
+	}
+	switch category {
+	case "transient":
+		ps.TransientRetries++
+	case "parse":
+		ps.ParseRetries++
+	case "semantic":
+		ps.SemanticRetries++
+	default:
+		return fmt.Errorf("pipeline: increment retry counter: unknown category %q", category)
+	}
+	return s.flushMeta()
+}
+
+// SetFailureCategory records the terminal failure classification on the phase.
+// Phase must exist (via MarkRunning).
+func (s *State) SetFailureCategory(phase string, category string) error {
+	ps := s.meta.Phases[phase]
+	if ps == nil {
+		return fmt.Errorf("pipeline: set failure category: phase %q not started", phase)
+	}
+	ps.FailureCategory = category
 	return s.flushMeta()
 }
 

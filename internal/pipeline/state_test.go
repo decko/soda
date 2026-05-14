@@ -573,6 +573,213 @@ func TestRecordParseFirstSuccess(t *testing.T) {
 	}
 }
 
+func TestIncrementRetryCounter(t *testing.T) {
+	t.Run("increments_transient", func(t *testing.T) {
+		dir := t.TempDir()
+		state, _ := LoadOrCreate(dir, "T-RETRY-1")
+
+		state.MarkRunning("triage")
+		state.IncrementRetryCounter("triage", "transient")
+		state.IncrementRetryCounter("triage", "transient")
+
+		ps := state.meta.Phases["triage"]
+		if ps.TransientRetries != 2 {
+			t.Errorf("TransientRetries = %d, want 2", ps.TransientRetries)
+		}
+		if ps.ParseRetries != 0 {
+			t.Errorf("ParseRetries = %d, want 0", ps.ParseRetries)
+		}
+		if ps.SemanticRetries != 0 {
+			t.Errorf("SemanticRetries = %d, want 0", ps.SemanticRetries)
+		}
+	})
+
+	t.Run("increments_parse", func(t *testing.T) {
+		dir := t.TempDir()
+		state, _ := LoadOrCreate(dir, "T-RETRY-2")
+
+		state.MarkRunning("plan")
+		state.IncrementRetryCounter("plan", "parse")
+
+		ps := state.meta.Phases["plan"]
+		if ps.ParseRetries != 1 {
+			t.Errorf("ParseRetries = %d, want 1", ps.ParseRetries)
+		}
+	})
+
+	t.Run("increments_semantic", func(t *testing.T) {
+		dir := t.TempDir()
+		state, _ := LoadOrCreate(dir, "T-RETRY-3")
+
+		state.MarkRunning("verify")
+		state.IncrementRetryCounter("verify", "semantic")
+
+		ps := state.meta.Phases["verify"]
+		if ps.SemanticRetries != 1 {
+			t.Errorf("SemanticRetries = %d, want 1", ps.SemanticRetries)
+		}
+	})
+
+	t.Run("error_on_unknown_category", func(t *testing.T) {
+		dir := t.TempDir()
+		state, _ := LoadOrCreate(dir, "T-RETRY-4")
+
+		state.MarkRunning("triage")
+		err := state.IncrementRetryCounter("triage", "unknown_cat")
+		if err == nil {
+			t.Fatal("expected error for unknown category")
+		}
+	})
+
+	t.Run("error_on_unstarted_phase", func(t *testing.T) {
+		dir := t.TempDir()
+		state, _ := LoadOrCreate(dir, "T-RETRY-5")
+
+		err := state.IncrementRetryCounter("nonexistent", "transient")
+		if err == nil {
+			t.Fatal("expected error for unstarted phase")
+		}
+	})
+}
+
+func TestSetFailureCategory(t *testing.T) {
+	t.Run("sets_category", func(t *testing.T) {
+		dir := t.TempDir()
+		state, _ := LoadOrCreate(dir, "T-FAIL-1")
+
+		state.MarkRunning("triage")
+		if err := state.SetFailureCategory("triage", "transient"); err != nil {
+			t.Fatalf("SetFailureCategory: %v", err)
+		}
+
+		ps := state.meta.Phases["triage"]
+		if ps.FailureCategory != "transient" {
+			t.Errorf("FailureCategory = %q, want %q", ps.FailureCategory, "transient")
+		}
+	})
+
+	t.Run("overwrites_category", func(t *testing.T) {
+		dir := t.TempDir()
+		state, _ := LoadOrCreate(dir, "T-FAIL-2")
+
+		state.MarkRunning("plan")
+		state.SetFailureCategory("plan", "parse")
+		state.SetFailureCategory("plan", "budget")
+
+		ps := state.meta.Phases["plan"]
+		if ps.FailureCategory != "budget" {
+			t.Errorf("FailureCategory = %q, want %q", ps.FailureCategory, "budget")
+		}
+	})
+
+	t.Run("cleared_by_mark_completed", func(t *testing.T) {
+		dir := t.TempDir()
+		state, _ := LoadOrCreate(dir, "T-FAIL-3")
+
+		state.MarkRunning("verify")
+		state.SetFailureCategory("verify", "transient")
+		state.MarkCompleted("verify")
+
+		ps := state.meta.Phases["verify"]
+		if ps.FailureCategory != "" {
+			t.Errorf("FailureCategory = %q, want empty after MarkCompleted", ps.FailureCategory)
+		}
+	})
+
+	t.Run("cleared_by_mark_running", func(t *testing.T) {
+		dir := t.TempDir()
+		state, _ := LoadOrCreate(dir, "T-FAIL-4")
+
+		state.MarkRunning("impl")
+		state.SetFailureCategory("impl", "transient")
+		state.MarkFailed("impl", fmt.Errorf("fail"))
+
+		// Re-run should clear FailureCategory.
+		state.MarkRunning("impl")
+
+		ps := state.meta.Phases["impl"]
+		if ps.FailureCategory != "" {
+			t.Errorf("FailureCategory = %q, want empty after MarkRunning", ps.FailureCategory)
+		}
+	})
+
+	t.Run("error_on_unstarted_phase", func(t *testing.T) {
+		dir := t.TempDir()
+		state, _ := LoadOrCreate(dir, "T-FAIL-5")
+
+		err := state.SetFailureCategory("nonexistent", "parse")
+		if err == nil {
+			t.Fatal("expected error for unstarted phase")
+		}
+	})
+
+	t.Run("persists_to_disk", func(t *testing.T) {
+		dir := t.TempDir()
+		state, _ := LoadOrCreate(dir, "T-FAIL-6")
+
+		state.MarkRunning("triage")
+		state.SetFailureCategory("triage", "gate")
+		state.MarkFailed("triage", fmt.Errorf("gated"))
+
+		// Reload from disk.
+		state2, err := LoadOrCreate(dir, "T-FAIL-6")
+		if err != nil {
+			t.Fatalf("reload: %v", err)
+		}
+		ps := state2.Meta().Phases["triage"]
+		if ps == nil {
+			t.Fatal("triage phase not found after reload")
+		}
+		if ps.FailureCategory != "gate" {
+			t.Errorf("FailureCategory after reload = %q, want %q", ps.FailureCategory, "gate")
+		}
+	})
+}
+
+func TestMarkRunning_ZeroesRetryCounters(t *testing.T) {
+	dir := t.TempDir()
+	state, _ := LoadOrCreate(dir, "T-RETRY-ZERO")
+
+	state.MarkRunning("triage")
+	state.IncrementRetryCounter("triage", "transient")
+	state.IncrementRetryCounter("triage", "parse")
+	state.IncrementRetryCounter("triage", "semantic")
+	state.SetFailureCategory("triage", "transient")
+	state.MarkFailed("triage", fmt.Errorf("fail"))
+
+	// Verify fields are set before re-run.
+	ps := state.meta.Phases["triage"]
+	if ps.TransientRetries != 1 {
+		t.Errorf("TransientRetries before rerun = %d, want 1", ps.TransientRetries)
+	}
+	if ps.ParseRetries != 1 {
+		t.Errorf("ParseRetries before rerun = %d, want 1", ps.ParseRetries)
+	}
+	if ps.SemanticRetries != 1 {
+		t.Errorf("SemanticRetries before rerun = %d, want 1", ps.SemanticRetries)
+	}
+	if ps.FailureCategory != "transient" {
+		t.Errorf("FailureCategory before rerun = %q, want %q", ps.FailureCategory, "transient")
+	}
+
+	// Re-run should clear all retry counters and failure category.
+	state.MarkRunning("triage")
+
+	ps = state.meta.Phases["triage"]
+	if ps.TransientRetries != 0 {
+		t.Errorf("TransientRetries after rerun = %d, want 0", ps.TransientRetries)
+	}
+	if ps.ParseRetries != 0 {
+		t.Errorf("ParseRetries after rerun = %d, want 0", ps.ParseRetries)
+	}
+	if ps.SemanticRetries != 0 {
+		t.Errorf("SemanticRetries after rerun = %d, want 0", ps.SemanticRetries)
+	}
+	if ps.FailureCategory != "" {
+		t.Errorf("FailureCategory after rerun = %q, want empty", ps.FailureCategory)
+	}
+}
+
 func TestWriteReadArtifact(t *testing.T) {
 	dir := t.TempDir()
 	state, _ := LoadOrCreate(dir, "T-1")

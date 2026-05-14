@@ -39,6 +39,7 @@ func (e *Engine) runWithRetry(ctx context.Context, phase PhaseConfig, opts runne
 
 		left, tracked := remaining[category]
 		if !tracked || left <= 0 {
+			_ = e.state.SetFailureCategory(phase.Name, category)
 			return nil, &RetriesExhaustedError{
 				Phase:    phase.Name,
 				Category: category,
@@ -47,6 +48,9 @@ func (e *Engine) runWithRetry(ctx context.Context, phase PhaseConfig, opts runne
 			}
 		}
 		remaining[category]--
+
+		// Increment the per-category retry counter in phase state.
+		_ = e.state.IncrementRetryCounter(phase.Name, category)
 
 		switch category {
 		case "transient":

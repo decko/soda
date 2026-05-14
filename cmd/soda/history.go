@@ -85,6 +85,16 @@ func renderEventsHistory(meta *pipeline.PipelineMeta, events []pipeline.Event, s
 		if ps, ok := meta.Phases[h.Entries[i].Phase]; ok {
 			h.Entries[i].PromptHash = ps.PromptHash
 			h.Entries[i].EstimatedPromptTokens = ps.EstimatedPromptTokens
+			h.Entries[i].TransientRetries = ps.TransientRetries
+			h.Entries[i].ParseRetries = ps.ParseRetries
+			h.Entries[i].SemanticRetries = ps.SemanticRetries
+			// Fallback: use PhaseState's FailureCategory when the event-sourced
+			// value is empty. This covers gate errors (no EventPhaseFailed emitted)
+			// and timeout errors (state overwrites "context" → "timeout" after the
+			// event is emitted).
+			if h.Entries[i].FailureCategory == "" {
+				h.Entries[i].FailureCategory = ps.FailureCategory
+			}
 		}
 	}
 
@@ -121,6 +131,10 @@ func renderEventsHistory(meta *pipeline.PipelineMeta, events []pipeline.Event, s
 		generation            int
 		promptHash            string
 		estimatedPromptTokens int64
+		failureCategory       string
+		transientRetries      int
+		parseRetries          int
+		semanticRetries       int
 		data                  json.RawMessage
 	}
 	var outputs []outputBlock
@@ -148,12 +162,18 @@ func renderEventsHistory(meta *pipeline.PipelineMeta, events []pipeline.Event, s
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
 			entry.Phase, gen, sym, dur, cost, details)
 
-		if (detail || phaseFilter != "") && (len(entry.FullOutput) > 0 || entry.PromptHash != "" || entry.EstimatedPromptTokens > 0) {
+		hasRetries := entry.TransientRetries > 0 || entry.ParseRetries > 0 || entry.SemanticRetries > 0
+		hasDetailData := len(entry.FullOutput) > 0 || entry.PromptHash != "" || entry.EstimatedPromptTokens > 0 || entry.FailureCategory != "" || hasRetries
+		if (detail || phaseFilter != "") && hasDetailData {
 			outputs = append(outputs, outputBlock{
 				phase:                 entry.Phase,
 				generation:            entry.Generation,
 				promptHash:            entry.PromptHash,
 				estimatedPromptTokens: entry.EstimatedPromptTokens,
+				failureCategory:       entry.FailureCategory,
+				transientRetries:      entry.TransientRetries,
+				parseRetries:          entry.ParseRetries,
+				semanticRetries:       entry.SemanticRetries,
 				data:                  entry.FullOutput,
 			})
 		}
@@ -188,6 +208,13 @@ func renderEventsHistory(meta *pipeline.PipelineMeta, events []pipeline.Event, s
 		}
 		if ob.estimatedPromptTokens > 0 {
 			fmt.Printf("Estimated Prompt Tokens: %d\n", ob.estimatedPromptTokens)
+		}
+		if ob.failureCategory != "" {
+			fmt.Printf("Failure Category: %s\n", ob.failureCategory)
+		}
+		if ob.transientRetries > 0 || ob.parseRetries > 0 || ob.semanticRetries > 0 {
+			fmt.Printf("Retries: transient=%d parse=%d semantic=%d\n",
+				ob.transientRetries, ob.parseRetries, ob.semanticRetries)
 		}
 		if len(ob.data) > 0 {
 			fmt.Println(prettyJSON(ob.data))

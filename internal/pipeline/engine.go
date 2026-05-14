@@ -478,6 +478,10 @@ func (e *Engine) executePhases(ctx context.Context, phases []PhaseConfig, forceF
 						rework = true
 						break
 					}
+					var gateErr *PhaseGateError
+					if errors.As(err, &gateErr) {
+						_ = e.state.SetFailureCategory(phase.Name, "gate")
+					}
 					return err
 				}
 				e.emit(Event{Phase: phase.Name, Kind: EventPhaseSkipped})
@@ -926,7 +930,14 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 	})
 
 	// Domain gating.
-	return e.gatePhase(phase)
+	if err := e.gatePhase(phase); err != nil {
+		var gateErr *PhaseGateError
+		if errors.As(err, &gateErr) {
+			_ = e.state.SetFailureCategory(phase.Name, "gate")
+		}
+		return err
+	}
+	return nil
 }
 
 // sleepWithContext runs SleepFunc(d) but returns early if ctx is cancelled.

@@ -233,6 +233,241 @@ func TestRetry_NoFallbackWhenAlreadyGlobalModel(t *testing.T) {
 	}
 }
 
+func TestRetry_TransientRetryCounterIncremented(t *testing.T) {
+	phases := []PhaseConfig{
+		{Name: "triage", Prompt: "prompts/triage.md", Retry: RetryConfig{Transient: 2, Parse: 1}},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {
+				{err: &runner.TransientError{Err: fmt.Errorf("503")}},
+				{result: &runner.RunResult{Output: json.RawMessage(`{}`)}},
+			},
+		},
+	}
+
+	engine, state := setupEngine(t, phases, mock)
+	if err := state.MarkRunning("triage"); err != nil {
+		t.Fatalf("MarkRunning: %v", err)
+	}
+
+	opts := runner.RunOpts{Phase: "triage", UserPrompt: "test"}
+	_, err := engine.runWithRetry(t.Context(), phases[0], opts)
+	if err != nil {
+		t.Fatalf("runWithRetry: %v", err)
+	}
+
+	ps := state.Meta().Phases["triage"]
+	if ps.TransientRetries != 1 {
+		t.Errorf("TransientRetries = %d, want 1", ps.TransientRetries)
+	}
+	if ps.ParseRetries != 0 {
+		t.Errorf("ParseRetries = %d, want 0 (no parse failures)", ps.ParseRetries)
+	}
+	if ps.SemanticRetries != 0 {
+		t.Errorf("SemanticRetries = %d, want 0", ps.SemanticRetries)
+	}
+}
+
+func TestRetry_ParseRetryCounterIncremented(t *testing.T) {
+	phases := []PhaseConfig{
+		{Name: "plan", Prompt: "prompts/plan.md", Retry: RetryConfig{Parse: 3}},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"plan": {
+				{err: &runner.ParseError{Err: fmt.Errorf("error 1")}},
+				{err: &runner.ParseError{Err: fmt.Errorf("error 2")}},
+				{result: &runner.RunResult{Output: json.RawMessage(`{}`)}},
+			},
+		},
+	}
+
+	engine, state := setupEngine(t, phases, mock)
+	if err := state.MarkRunning("plan"); err != nil {
+		t.Fatalf("MarkRunning: %v", err)
+	}
+
+	opts := runner.RunOpts{Phase: "plan", UserPrompt: "test"}
+	_, err := engine.runWithRetry(t.Context(), phases[0], opts)
+	if err != nil {
+		t.Fatalf("runWithRetry: %v", err)
+	}
+
+	ps := state.Meta().Phases["plan"]
+	if ps.ParseRetries != 2 {
+		t.Errorf("ParseRetries = %d, want 2", ps.ParseRetries)
+	}
+	if ps.TransientRetries != 0 {
+		t.Errorf("TransientRetries = %d, want 0", ps.TransientRetries)
+	}
+}
+
+func TestRetry_SemanticRetryCounterIncremented(t *testing.T) {
+	phases := []PhaseConfig{
+		{Name: "verify", Prompt: "prompts/verify.md", Retry: RetryConfig{Semantic: 2}},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"verify": {
+				{err: &runner.SemanticError{Message: "bad"}},
+				{result: &runner.RunResult{Output: json.RawMessage(`{}`)}},
+			},
+		},
+	}
+
+	engine, state := setupEngine(t, phases, mock)
+	if err := state.MarkRunning("verify"); err != nil {
+		t.Fatalf("MarkRunning: %v", err)
+	}
+
+	opts := runner.RunOpts{Phase: "verify", UserPrompt: "test"}
+	_, err := engine.runWithRetry(t.Context(), phases[0], opts)
+	if err != nil {
+		t.Fatalf("runWithRetry: %v", err)
+	}
+
+	ps := state.Meta().Phases["verify"]
+	if ps.SemanticRetries != 1 {
+		t.Errorf("SemanticRetries = %d, want 1", ps.SemanticRetries)
+	}
+	if ps.TransientRetries != 0 {
+		t.Errorf("TransientRetries = %d, want 0", ps.TransientRetries)
+	}
+	if ps.ParseRetries != 0 {
+		t.Errorf("ParseRetries = %d, want 0", ps.ParseRetries)
+	}
+}
+
+func TestRetry_FailureCategoryOnExhaustion(t *testing.T) {
+	phases := []PhaseConfig{
+		{Name: "triage", Prompt: "prompts/triage.md", Retry: RetryConfig{Transient: 1}},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {
+				{err: &runner.TransientError{Err: fmt.Errorf("503")}},
+				{err: &runner.TransientError{Err: fmt.Errorf("503 again")}},
+			},
+		},
+	}
+
+	engine, state := setupEngine(t, phases, mock)
+	if err := state.MarkRunning("triage"); err != nil {
+		t.Fatalf("MarkRunning: %v", err)
+	}
+
+	opts := runner.RunOpts{Phase: "triage", UserPrompt: "test"}
+	_, err := engine.runWithRetry(t.Context(), phases[0], opts)
+	if err == nil {
+		t.Fatal("expected error from exhausted retries")
+	}
+
+	ps := state.Meta().Phases["triage"]
+	if ps.FailureCategory != "transient" {
+		t.Errorf("FailureCategory = %q, want %q", ps.FailureCategory, "transient")
+	}
+	if ps.TransientRetries != 1 {
+		t.Errorf("TransientRetries = %d, want 1 (one successful retry before exhaustion)", ps.TransientRetries)
+	}
+}
+
+func TestRetry_MixedRetryCounters(t *testing.T) {
+	phases := []PhaseConfig{
+		{Name: "impl", Prompt: "prompts/impl.md", Retry: RetryConfig{Transient: 2, Parse: 2, Semantic: 2}},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"impl": {
+				{err: &runner.TransientError{Err: fmt.Errorf("503")}},
+				{err: &runner.ParseError{Err: fmt.Errorf("bad json")}},
+				{err: &runner.SemanticError{Message: "bad logic"}},
+				{result: &runner.RunResult{Output: json.RawMessage(`{}`)}},
+			},
+		},
+	}
+
+	engine, state := setupEngine(t, phases, mock)
+	if err := state.MarkRunning("impl"); err != nil {
+		t.Fatalf("MarkRunning: %v", err)
+	}
+
+	opts := runner.RunOpts{Phase: "impl", UserPrompt: "test"}
+	_, err := engine.runWithRetry(t.Context(), phases[0], opts)
+	if err != nil {
+		t.Fatalf("runWithRetry: %v", err)
+	}
+
+	ps := state.Meta().Phases["impl"]
+	if ps.TransientRetries != 1 {
+		t.Errorf("TransientRetries = %d, want 1", ps.TransientRetries)
+	}
+	if ps.ParseRetries != 1 {
+		t.Errorf("ParseRetries = %d, want 1", ps.ParseRetries)
+	}
+	if ps.SemanticRetries != 1 {
+		t.Errorf("SemanticRetries = %d, want 1", ps.SemanticRetries)
+	}
+	if ps.FailureCategory != "" {
+		t.Errorf("FailureCategory = %q, want empty (no exhaustion)", ps.FailureCategory)
+	}
+}
+
+func TestRetry_CountersResetOnRerun(t *testing.T) {
+	phases := []PhaseConfig{
+		{Name: "triage", Prompt: "prompts/triage.md", Retry: RetryConfig{Transient: 2, Parse: 2}},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {
+				{err: &runner.TransientError{Err: fmt.Errorf("503")}},
+				{result: &runner.RunResult{Output: json.RawMessage(`{}`)}},
+			},
+		},
+	}
+
+	engine, state := setupEngine(t, phases, mock)
+	if err := state.MarkRunning("triage"); err != nil {
+		t.Fatalf("MarkRunning: %v", err)
+	}
+
+	opts := runner.RunOpts{Phase: "triage", UserPrompt: "test"}
+	_, err := engine.runWithRetry(t.Context(), phases[0], opts)
+	if err != nil {
+		t.Fatalf("runWithRetry: %v", err)
+	}
+
+	ps := state.Meta().Phases["triage"]
+	if ps.TransientRetries != 1 {
+		t.Errorf("TransientRetries after first run = %d, want 1", ps.TransientRetries)
+	}
+
+	// Simulate a resume --from by marking running again; counters should reset.
+	if err := state.MarkRunning("triage"); err != nil {
+		t.Fatalf("MarkRunning (rerun): %v", err)
+	}
+
+	ps = state.Meta().Phases["triage"]
+	if ps.TransientRetries != 0 {
+		t.Errorf("TransientRetries after rerun = %d, want 0", ps.TransientRetries)
+	}
+	if ps.ParseRetries != 0 {
+		t.Errorf("ParseRetries after rerun = %d, want 0", ps.ParseRetries)
+	}
+	if ps.SemanticRetries != 0 {
+		t.Errorf("SemanticRetries after rerun = %d, want 0", ps.SemanticRetries)
+	}
+	if ps.FailureCategory != "" {
+		t.Errorf("FailureCategory after rerun = %q, want empty", ps.FailureCategory)
+	}
+}
+
 func TestRetry_ModelUsedUpdatedAfterFallbackFailure(t *testing.T) {
 	// Verify that when a parse failure occurs *after* fallback,
 	// ModelUsed reflects the global model (not the original per-phase model).
