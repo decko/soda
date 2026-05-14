@@ -136,13 +136,12 @@ func claudeEnv(tmpDir string, opts runner.RunOpts, claudeBin, proxyURL string) [
 			)
 			// Resolve the Vertex region. Claude Code validates model
 			// availability directly (bypassing the proxy) using
-			// CLOUD_ML_REGION. The "global" region doesn't host models,
-			// so we fall back to the proxy's upstream region.
+			// CLOUD_ML_REGION.
 			region := os.Getenv("CLOUD_ML_REGION")
-			if region == "" || region == "global" {
+			if region == "" {
 				region = os.Getenv("VERTEXAI_LOCATION")
 			}
-			if region == "" || region == "global" {
+			if region == "" {
 				region = "us-east5"
 			}
 			for _, key := range []string{"VERTEXAI_PROJECT", "ANTHROPIC_VERTEX_PROJECT_ID"} {

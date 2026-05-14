@@ -192,16 +192,18 @@ func (r *Runner) Run(ctx context.Context, opts runner.RunOpts) (*runner.RunResul
 
 		if os.Getenv("CLAUDE_CODE_USE_VERTEX") != "" {
 			// Vertex mode: resolve upstream URL and token source from ADC.
-			// The "global" region is used for billing/routing but doesn't
-			// host model endpoints. Fall back to a real region.
 			region := os.Getenv("CLOUD_ML_REGION")
-			if region == "" || region == "global" {
+			if region == "" {
 				region = os.Getenv("VERTEXAI_LOCATION")
 			}
-			if region == "" || region == "global" {
+			if region == "" {
 				region = "us-east5"
 			}
-			proxyCfg.UpstreamURL = fmt.Sprintf("https://%s-aiplatform.googleapis.com/v1", region)
+			if region == "global" {
+				proxyCfg.UpstreamURL = "https://aiplatform.googleapis.com/v1"
+			} else {
+				proxyCfg.UpstreamURL = fmt.Sprintf("https://%s-aiplatform.googleapis.com/v1", region)
+			}
 
 			tokenFunc, tokenErr := proxy.VertexTokenSource("")
 			if tokenErr != nil {
