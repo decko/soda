@@ -335,6 +335,9 @@ func TestCheckClaudeVersion_AboveMax(t *testing.T) {
 	if !strings.Contains(r.detail, claude.MaxTestedCLIVersion) {
 		t.Errorf("expected detail to mention MaxTestedCLIVersion, got: %q", r.detail)
 	}
+	if !strings.Contains(r.detail, "@anthropic-ai/claude-code@"+claude.MaxTestedCLIVersion) {
+		t.Errorf("expected pin command in detail, got: %q", r.detail)
+	}
 }
 
 func TestCheckClaudeVersion_AtMax(t *testing.T) {
