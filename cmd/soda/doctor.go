@@ -252,7 +252,7 @@ func checkClaudeVersion(env *doctorEnv) checkResult {
 		return checkResult{
 			name:   "claude-version",
 			passed: true,
-			detail: fmt.Sprintf("%s ⚠ newer than tested range (%s–%s)", out, claude.MinCLIVersion, claude.MaxTestedCLIVersion),
+			detail: fmt.Sprintf("%s ⚠ newer than tested range (%s–%s); to pin: npm install -g @anthropic-ai/claude-code@%s", out, claude.MinCLIVersion, claude.MaxTestedCLIVersion, claude.MaxTestedCLIVersion),
 		}
 	}
 
