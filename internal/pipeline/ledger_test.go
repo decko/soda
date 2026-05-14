@@ -462,6 +462,228 @@ func TestCostEntryComplexityRoundTrip(t *testing.T) {
 	}
 }
 
+func TestClassifyOutcome(t *testing.T) {
+	tests := []struct {
+		name     string
+		entry    CostEntry
+		expected string
+	}{
+		{
+			name:     "clean run",
+			entry:    CostEntry{Success: true},
+			expected: "first_pass",
+		},
+		{
+			name:     "patched only",
+			entry:    CostEntry{Success: true, PatchCycles: 2},
+			expected: "patched",
+		},
+		{
+			name:     "single rework cycle",
+			entry:    CostEntry{Success: true, ReworkCycles: 1},
+			expected: "rework_1",
+		},
+		{
+			name:     "multiple rework cycles",
+			entry:    CostEntry{Success: true, ReworkCycles: 3},
+			expected: "rework_2+",
+		},
+		{
+			name:     "failed run overrides everything",
+			entry:    CostEntry{Success: false, ReworkCycles: 5, PatchCycles: 3, Escalated: true},
+			expected: "failed",
+		},
+		{
+			name:     "escalated with zero rework becomes rework_1",
+			entry:    CostEntry{Success: true, Escalated: true, ReworkCycles: 0},
+			expected: "rework_1",
+		},
+		{
+			name:     "escalated with rework>=2 becomes rework_2+",
+			entry:    CostEntry{Success: true, Escalated: true, ReworkCycles: 2},
+			expected: "rework_2+",
+		},
+		{
+			name:     "rework overrides patch",
+			entry:    CostEntry{Success: true, ReworkCycles: 1, PatchCycles: 3},
+			expected: "rework_1",
+		},
+		{
+			name:     "failed with zero cycles",
+			entry:    CostEntry{Success: false},
+			expected: "failed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ClassifyOutcome(tt.entry)
+			if got != tt.expected {
+				t.Errorf("ClassifyOutcome(%+v) = %q, want %q", tt.entry, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestCostByOutcome_Empty(t *testing.T) {
+	result := CostByOutcome(nil)
+	if len(result) != 0 {
+		t.Errorf("expected empty map, got %v", result)
+	}
+}
+
+func TestCostByOutcome_Grouping(t *testing.T) {
+	entries := []CostEntry{
+		{Ticket: "T-1", Cost: 2.00, Success: true, DurationMs: 1000},
+		{Ticket: "T-2", Cost: 4.00, Success: true, DurationMs: 3000},
+		{Ticket: "T-3", Cost: 10.00, Success: true, ReworkCycles: 1, DurationMs: 5000},
+		{Ticket: "T-4", Cost: 6.00, Success: false, DurationMs: 2000},
+	}
+	result := CostByOutcome(entries)
+
+	clean, ok := result["first_pass"]
+	if !ok {
+		t.Fatal("missing 'first_pass' outcome")
+	}
+	if clean.Sessions != 2 {
+		t.Errorf("clean.Sessions = %d, want 2", clean.Sessions)
+	}
+	if clean.Mean != 3.00 {
+		t.Errorf("clean.Mean = %f, want 3.00", clean.Mean)
+	}
+	if clean.Total != 6.00 {
+		t.Errorf("clean.Total = %f, want 6.00", clean.Total)
+	}
+	if clean.MeanDurMs != 2000 {
+		t.Errorf("clean.MeanDurMs = %d, want 2000", clean.MeanDurMs)
+	}
+
+	rework1, ok := result["rework_1"]
+	if !ok {
+		t.Fatal("missing 'rework_1' outcome")
+	}
+	if rework1.Sessions != 1 {
+		t.Errorf("rework_1.Sessions = %d, want 1", rework1.Sessions)
+	}
+
+	failed, ok := result["failed"]
+	if !ok {
+		t.Fatal("missing 'failed' outcome")
+	}
+	if failed.Sessions != 1 {
+		t.Errorf("failed.Sessions = %d, want 1", failed.Sessions)
+	}
+}
+
+func TestCostByOutcome_LowerMedianEven(t *testing.T) {
+	// Even number of entries: lower-median = sorted[n/2-1]
+	entries := []CostEntry{
+		{Ticket: "T-1", Cost: 1.00, Success: true},
+		{Ticket: "T-2", Cost: 3.00, Success: true},
+		{Ticket: "T-3", Cost: 5.00, Success: true},
+		{Ticket: "T-4", Cost: 7.00, Success: true},
+	}
+	result := CostByOutcome(entries)
+	clean := result["first_pass"]
+	// Sorted: 1,3,5,7 → lower-median = sorted[4/2-1] = sorted[1] = 3
+	if clean.Median != 3.00 {
+		t.Errorf("clean.Median = %f, want 3.00 (lower-median)", clean.Median)
+	}
+}
+
+func TestCostByOutcome_LowerMedianOdd(t *testing.T) {
+	// Odd number of entries: lower-median = sorted[n/2]
+	entries := []CostEntry{
+		{Ticket: "T-1", Cost: 1.00, Success: true},
+		{Ticket: "T-2", Cost: 5.00, Success: true},
+		{Ticket: "T-3", Cost: 3.00, Success: true},
+	}
+	result := CostByOutcome(entries)
+	clean := result["first_pass"]
+	// Sorted: 1,3,5 → lower-median = sorted[3/2] = sorted[1] = 3
+	if clean.Median != 3.00 {
+		t.Errorf("clean.Median = %f, want 3.00 (lower-median)", clean.Median)
+	}
+}
+
+func TestCostByOutcome_MeanDuration(t *testing.T) {
+	entries := []CostEntry{
+		{Ticket: "T-1", Cost: 1.00, Success: true, DurationMs: 1000},
+		{Ticket: "T-2", Cost: 2.00, Success: true, DurationMs: 3000},
+		{Ticket: "T-3", Cost: 3.00, Success: true, DurationMs: 5000},
+	}
+	result := CostByOutcome(entries)
+	clean := result["first_pass"]
+	// Mean duration: (1000 + 3000 + 5000) / 3 = 3000
+	if clean.MeanDurMs != 3000 {
+		t.Errorf("clean.MeanDurMs = %d, want 3000", clean.MeanDurMs)
+	}
+}
+
+func TestCostEntryOutcomeFieldsRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+
+	entry := CostEntry{
+		Ticket:       "T-1",
+		Timestamp:    time.Now().Truncate(time.Second),
+		Cost:         5.00,
+		Success:      true,
+		ReworkCycles: 2,
+		PatchCycles:  1,
+		Escalated:    true,
+		DurationMs:   45000,
+	}
+	if err := AppendCostEntry(dir, entry); err != nil {
+		t.Fatalf("AppendCostEntry: %v", err)
+	}
+
+	entries, err := ReadCostLedger(dir)
+	if err != nil {
+		t.Fatalf("ReadCostLedger: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("len(entries) = %d, want 1", len(entries))
+	}
+	got := entries[0]
+	if got.ReworkCycles != 2 {
+		t.Errorf("ReworkCycles = %d, want 2", got.ReworkCycles)
+	}
+	if got.PatchCycles != 1 {
+		t.Errorf("PatchCycles = %d, want 1", got.PatchCycles)
+	}
+	if !got.Escalated {
+		t.Error("Escalated = false, want true")
+	}
+	if got.DurationMs != 45000 {
+		t.Errorf("DurationMs = %d, want 45000", got.DurationMs)
+	}
+}
+
+func TestCostEntryOutcomeFieldsOmitEmpty(t *testing.T) {
+	dir := t.TempDir()
+
+	entry := CostEntry{
+		Ticket:    "T-1",
+		Timestamp: time.Now().Truncate(time.Second),
+		Cost:      5.00,
+		Success:   true,
+	}
+	if err := AppendCostEntry(dir, entry); err != nil {
+		t.Fatalf("AppendCostEntry: %v", err)
+	}
+
+	data, err := os.ReadFile(CostLedgerPath(dir))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	raw := string(data)
+	for _, field := range []string{"rework_cycles", "patch_cycles", "escalated", "duration_ms"} {
+		if strings.Contains(raw, field) {
+			t.Errorf("cost.json should omit %q when zero/false, got:\n%s", field, raw)
+		}
+	}
+}
+
 func TestCostEntryComplexityOmitEmpty(t *testing.T) {
 	dir := t.TempDir()
 
