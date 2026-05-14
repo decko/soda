@@ -26,12 +26,16 @@ func (e *Engine) emitPhaseFailed(phase string, phaseErr error) {
 	var pbe *PhaseBudgetExceededError
 	var gbe *GenerationBudgetExceededError
 	var dne *DependencyNotMetError
+	var cbe *ContextBudgetError
+
+	var failureCategory string
 
 	switch {
 	case errors.As(phaseErr, &re):
 		data["error_type"] = "retries_exhausted"
 		data["category"] = re.Category
 		data["attempts"] = re.Attempts
+		failureCategory = re.Category
 		if re.Reviewer != "" {
 			data["reviewer"] = re.Reviewer
 		}
@@ -42,6 +46,7 @@ func (e *Engine) emitPhaseFailed(phase string, phaseErr error) {
 	case errors.As(phaseErr, &pe):
 		data["error_type"] = "prompt_error"
 		data["operation"] = pe.Operation
+		failureCategory = "prompt"
 		if pe.Reviewer != "" {
 			data["reviewer"] = pe.Reviewer
 		}
@@ -49,17 +54,32 @@ func (e *Engine) emitPhaseFailed(phase string, phaseErr error) {
 		data["error_type"] = "budget_exceeded"
 		data["limit"] = be.Limit
 		data["actual"] = be.Actual
+		failureCategory = "budget"
 	case errors.As(phaseErr, &pbe):
 		data["error_type"] = "phase_budget_exceeded"
 		data["limit"] = pbe.Limit
 		data["actual"] = pbe.Actual
+		failureCategory = "budget"
 	case errors.As(phaseErr, &gbe):
 		data["error_type"] = "generation_budget_exceeded"
 		data["limit"] = gbe.Limit
 		data["actual"] = gbe.Actual
+		failureCategory = "budget"
 	case errors.As(phaseErr, &dne):
 		data["error_type"] = "dependency_not_met"
 		data["dependency"] = dne.Dependency
+		failureCategory = "dependency"
+	case errors.As(phaseErr, &cbe):
+		data["error_type"] = "context_budget_exceeded"
+		data["budget_tokens"] = cbe.BudgetTokens
+		data["current_tokens"] = cbe.CurrentTokens
+		failureCategory = "context"
+	}
+
+	// Persist and emit failure_category for downstream consumers.
+	if failureCategory != "" {
+		data["failure_category"] = failureCategory
+		_ = e.state.SetFailureCategory(phase, failureCategory)
 	}
 
 	e.emit(Event{Phase: phase, Kind: EventPhaseFailed, Data: data})
