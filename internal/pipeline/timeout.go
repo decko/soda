@@ -65,6 +65,11 @@ func (e *Engine) wrapTimeoutError(ctx context.Context, err error) error {
 	// Find the phase that was running when the timeout fired.
 	phase := e.lastRunningPhase()
 
+	// Persist failure category as "timeout" on the phase that was running.
+	if phase != "unknown" {
+		_ = e.state.SetFailureCategory(phase, "timeout")
+	}
+
 	e.emit(Event{
 		Kind: EventPipelineTimeout,
 		Data: map[string]any{
