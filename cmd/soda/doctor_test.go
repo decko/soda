@@ -314,6 +314,67 @@ func TestCheckClaudeVersion_BelowMinimum(t *testing.T) {
 	}
 }
 
+func TestCheckClaudeVersion_AboveMax(t *testing.T) {
+	env := allPassEnv()
+	env.RunCmd = func(name string, args ...string) (string, error) {
+		if name == "claude" && len(args) > 0 && args[0] == "--version" {
+			return "claude 99.0.0", nil
+		}
+		return ".git", nil
+	}
+	r := checkClaudeVersion(env)
+	if !r.passed {
+		t.Error("expected claude-version check to pass (warning only) for version above max")
+	}
+	if r.required {
+		t.Error("expected claude-version check to be non-required for version above max")
+	}
+	if !strings.Contains(r.detail, "⚠") {
+		t.Errorf("expected ⚠ in detail for untested version, got: %q", r.detail)
+	}
+	if !strings.Contains(r.detail, claude.MaxTestedCLIVersion) {
+		t.Errorf("expected detail to mention MaxTestedCLIVersion, got: %q", r.detail)
+	}
+	if !strings.Contains(r.detail, "@anthropic-ai/claude-code@"+claude.MaxTestedCLIVersion) {
+		t.Errorf("expected pin command in detail, got: %q", r.detail)
+	}
+}
+
+func TestCheckClaudeVersion_AtMax(t *testing.T) {
+	env := allPassEnv()
+	env.RunCmd = func(name string, args ...string) (string, error) {
+		if name == "claude" && len(args) > 0 && args[0] == "--version" {
+			return fmt.Sprintf("claude %s", claude.MaxTestedCLIVersion), nil
+		}
+		return ".git", nil
+	}
+	r := checkClaudeVersion(env)
+	if !r.passed {
+		t.Error("expected claude-version check to pass at MaxTestedCLIVersion")
+	}
+	if strings.Contains(r.detail, "⚠") {
+		t.Errorf("expected no warning at MaxTestedCLIVersion, got: %q", r.detail)
+	}
+}
+
+func TestCheckClaudeVersion_BelowMax(t *testing.T) {
+	env := allPassEnv()
+	// MinCLIVersion is below MaxTestedCLIVersion, so no warning expected.
+	env.RunCmd = func(name string, args ...string) (string, error) {
+		if name == "claude" && len(args) > 0 && args[0] == "--version" {
+			return fmt.Sprintf("claude %s", claude.MinCLIVersion), nil
+		}
+		return ".git", nil
+	}
+	r := checkClaudeVersion(env)
+	if !r.passed {
+		t.Error("expected claude-version check to pass at MinCLIVersion")
+	}
+	if strings.Contains(r.detail, "⚠") {
+		t.Errorf("expected no warning at MinCLIVersion, got: %q", r.detail)
+	}
+}
+
 func TestCheckClaudeVersion_UnparseableVersion(t *testing.T) {
 	env := allPassEnv()
 	env.RunCmd = func(name string, args ...string) (string, error) {
