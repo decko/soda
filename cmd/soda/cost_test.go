@@ -209,6 +209,171 @@ func TestRunCostByComplexity_UnknownBand(t *testing.T) {
 	}
 }
 
+func TestRunCostByOutcome_Empty(t *testing.T) {
+	output, err := captureStdout(t, func() error {
+		return runCostByOutcome(nil)
+	})
+	if err != nil {
+		t.Fatalf("runCostByOutcome error: %v", err)
+	}
+	if !strings.Contains(output, "No cost entries found") {
+		t.Errorf("expected 'No cost entries found', got: %s", output)
+	}
+}
+
+func TestRunCostByOutcome_Headers(t *testing.T) {
+	entries := []pipeline.CostEntry{
+		{Ticket: "T-1", Cost: 1.00, Success: true, DurationMs: 5000},
+	}
+
+	output, err := captureStdout(t, func() error {
+		return runCostByOutcome(entries)
+	})
+	if err != nil {
+		t.Fatalf("runCostByOutcome error: %v", err)
+	}
+
+	for _, header := range []string{"OUTCOME", "SESSIONS", "MEAN", "MEDIAN", "MEAN DUR", "TOTAL"} {
+		if !strings.Contains(output, header) {
+			t.Errorf("output missing %q header:\n%s", header, output)
+		}
+	}
+}
+
+func TestRunCostByOutcome_RowOrder(t *testing.T) {
+	entries := []pipeline.CostEntry{
+		{Ticket: "T-1", Cost: 1.00, Success: false},                                  // failed
+		{Ticket: "T-2", Cost: 2.00, Success: true},                                   // clean
+		{Ticket: "T-3", Cost: 3.00, Success: true, ReworkCycles: 1},                  // rework_1
+		{Ticket: "T-4", Cost: 4.00, Success: true, PatchCycles: 1},                   // patched
+		{Ticket: "T-5", Cost: 5.00, Success: true, ReworkCycles: 3, Escalated: true}, // rework_2+
+	}
+
+	output, err := captureStdout(t, func() error {
+		return runCostByOutcome(entries)
+	})
+	if err != nil {
+		t.Fatalf("runCostByOutcome error: %v", err)
+	}
+
+	// Extract non-header, non-footer data lines.
+	lines := strings.Split(output, "\n")
+	var dataLines []string
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "OUTCOME") || strings.HasPrefix(trimmed, "Total:") || strings.HasPrefix(trimmed, "Rework tax:") {
+			continue
+		}
+		dataLines = append(dataLines, trimmed)
+	}
+
+	expectedOrder := []string{"CLEAN", "PATCHED", "REWORK_1", "REWORK_2+", "FAILED"}
+	if len(dataLines) != len(expectedOrder) {
+		t.Fatalf("expected %d data lines, got %d:\n%s", len(expectedOrder), len(dataLines), output)
+	}
+	for idx, expected := range expectedOrder {
+		if !strings.HasPrefix(dataLines[idx], expected) {
+			t.Errorf("data line %d: expected prefix %q, got %q", idx, expected, dataLines[idx])
+		}
+	}
+}
+
+func TestRunCostByOutcome_ReworkTaxPresent(t *testing.T) {
+	entries := []pipeline.CostEntry{
+		{Ticket: "T-1", Cost: 2.00, Success: true},                  // clean
+		{Ticket: "T-2", Cost: 4.00, Success: true},                  // clean
+		{Ticket: "T-3", Cost: 6.00, Success: true, ReworkCycles: 1}, // rework_1
+	}
+
+	output, err := captureStdout(t, func() error {
+		return runCostByOutcome(entries)
+	})
+	if err != nil {
+		t.Fatalf("runCostByOutcome error: %v", err)
+	}
+
+	if !strings.Contains(output, "Rework tax:") {
+		t.Errorf("expected 'Rework tax:' line in output:\n%s", output)
+	}
+	// Clean mean = 3.00, rework mean = 6.00, tax = 100%
+	if !strings.Contains(output, "100%") {
+		t.Errorf("expected 100%% rework tax, got:\n%s", output)
+	}
+}
+
+func TestRunCostByOutcome_ReworkTaxAbsent(t *testing.T) {
+	entries := []pipeline.CostEntry{
+		{Ticket: "T-1", Cost: 2.00, Success: true}, // clean only
+		{Ticket: "T-2", Cost: 4.00, Success: true}, // clean only
+	}
+
+	output, err := captureStdout(t, func() error {
+		return runCostByOutcome(entries)
+	})
+	if err != nil {
+		t.Fatalf("runCostByOutcome error: %v", err)
+	}
+
+	if strings.Contains(output, "Rework tax:") {
+		t.Errorf("should not show rework tax when no rework entries exist:\n%s", output)
+	}
+}
+
+func TestRunCostByOutcomeAndComplexity_Empty(t *testing.T) {
+	output, err := captureStdout(t, func() error {
+		return runCostByOutcomeAndComplexity(nil)
+	})
+	if err != nil {
+		t.Fatalf("runCostByOutcomeAndComplexity error: %v", err)
+	}
+	if !strings.Contains(output, "No cost entries found") {
+		t.Errorf("expected 'No cost entries found', got: %s", output)
+	}
+}
+
+func TestRunCostByOutcomeAndComplexity_MixedEntries(t *testing.T) {
+	entries := []pipeline.CostEntry{
+		{Ticket: "T-1", Cost: 2.00, Success: true, Complexity: "low"},
+		{Ticket: "T-2", Cost: 4.00, Success: true, Complexity: "high"},
+		{Ticket: "T-3", Cost: 6.00, Success: true, ReworkCycles: 1, Complexity: "low"},
+		{Ticket: "T-4", Cost: 8.00, Success: false, Complexity: "high"},
+	}
+
+	output, err := captureStdout(t, func() error {
+		return runCostByOutcomeAndComplexity(entries)
+	})
+	if err != nil {
+		t.Fatalf("runCostByOutcomeAndComplexity error: %v", err)
+	}
+
+	// Check header has OUTCOME and complexity columns.
+	if !strings.Contains(output, "OUTCOME") {
+		t.Errorf("output missing OUTCOME header:\n%s", output)
+	}
+	if !strings.Contains(output, "LOW") {
+		t.Errorf("output missing LOW column:\n%s", output)
+	}
+	if !strings.Contains(output, "HIGH") {
+		t.Errorf("output missing HIGH column:\n%s", output)
+	}
+
+	// Check outcome rows.
+	if !strings.Contains(output, "CLEAN") {
+		t.Errorf("output missing CLEAN row:\n%s", output)
+	}
+	if !strings.Contains(output, "REWORK_1") {
+		t.Errorf("output missing REWORK_1 row:\n%s", output)
+	}
+	if !strings.Contains(output, "FAILED") {
+		t.Errorf("output missing FAILED row:\n%s", output)
+	}
+
+	// Absent cells should have "—".
+	if !strings.Contains(output, "—") {
+		t.Errorf("expected dash (—) for absent cells:\n%s", output)
+	}
+}
+
 func TestRunCostByComplexity_BandOrdering(t *testing.T) {
 	entries := []pipeline.CostEntry{
 		{Ticket: "T-1", Cost: 1.00, Complexity: "high"},
