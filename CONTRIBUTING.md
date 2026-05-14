@@ -63,3 +63,17 @@ Three ways to skip the pre-commit checks:
 - Build with `go build -o soda ./cmd/soda`.
 
 See [AGENTS.md](AGENTS.md) for the full list of conventions.
+
+## Release checklist
+
+When upgrading the supported Claude Code CLI version range:
+
+1. **Install** the target CLI version locally.
+2. **Run** the full test suite: `CGO_ENABLED=0 go test ./... -count=1`.
+3. **Run** `soda doctor` against a real project to confirm no regressions.
+4. **Bump** `MaxTestedCLIVersion` in `internal/claude/args.go` to the newly
+   validated version.
+5. **If** the new CLI introduces flags SODA depends on, bump
+   `MinCLIVersion` as well and update the flag timeline comment.
+6. **Commit** with a message like
+   `chore(claude): bump MaxTestedCLIVersion to X.Y.Z`.
