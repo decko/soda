@@ -299,7 +299,7 @@ func expandHome(path string) string {
 	return path
 }
 
-// DefaultPath returns the default config file path: ~/.config/soda/config.yaml.
+// DefaultPath returns the default config file path: ~/.config/soda/soda.yaml.
 func DefaultPath() (string, error) {
 	configDir, err := os.UserConfigDir()
 	if err != nil {
@@ -309,5 +309,5 @@ func DefaultPath() (string, error) {
 		}
 		configDir = filepath.Join(home, ".config")
 	}
-	return filepath.Join(configDir, "soda", "config.yaml"), nil
+	return filepath.Join(configDir, "soda", "soda.yaml"), nil
 }

@@ -527,8 +527,8 @@ type configLocation struct {
 // fallback chain as loadConfig and config.DefaultPath:
 //
 //  1. soda.yaml in CWD (project-local)
-//  2. UserConfigDir()/soda/config.yaml
-//  3. UserHomeDir()/.config/soda/config.yaml (fallback when UserConfigDir fails)
+//  2. UserConfigDir()/soda/soda.yaml
+//  3. UserHomeDir()/.config/soda/soda.yaml (fallback when UserConfigDir fails)
 //
 // Returns nil when no config file is found.
 func resolveConfigPath(env *doctorEnv) *configLocation {
@@ -540,7 +540,7 @@ func resolveConfigPath(env *doctorEnv) *configLocation {
 	// 2. Global config via UserConfigDir.
 	configDir, err := env.UserConfigDir()
 	if err == nil {
-		path := filepath.Join(configDir, "soda", "config.yaml")
+		path := filepath.Join(configDir, "soda", "soda.yaml")
 		if _, statErr := env.Stat(path); statErr == nil {
 			return &configLocation{path: path, label: "global"}
 		}
@@ -554,7 +554,7 @@ func resolveConfigPath(env *doctorEnv) *configLocation {
 	if env.UserHomeDir != nil {
 		home, homeErr := env.UserHomeDir()
 		if homeErr == nil {
-			path := filepath.Join(home, ".config", "soda", "config.yaml")
+			path := filepath.Join(home, ".config", "soda", "soda.yaml")
 			if _, statErr := env.Stat(path); statErr == nil {
 				return &configLocation{path: path, label: "global"}
 			}
@@ -581,7 +581,7 @@ func checkConfig(env *doctorEnv) checkResult {
 		name:     "config",
 		passed:   false,
 		required: true,
-		detail:   "no config file found (checked soda.yaml and ~/.config/soda/config.yaml)",
+		detail:   "no config file found (checked soda.yaml and ~/.config/soda/soda.yaml)",
 		fix:      "run: soda init",
 	}
 }
