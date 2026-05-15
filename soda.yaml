@@ -60,6 +60,11 @@ repos:
     trailers:
       - "Assisted-by: SODA"
 
+# Monitor — respond to PR review comments
+monitor:
+  self_user: decko
+  profile: smart
+
 # Convention checklist — injected into implement prompts (#475)
 convention_checklist: |
   - Errors: wrap with fmt.Errorf("context: %w", err), never discard

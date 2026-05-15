@@ -1,68 +1,43 @@
-%global soda_version %{?soda_version}%{!?soda_version:0.0.0}
-%global goipath         github.com/decko/soda
-%global gomodcache      %{_builddir}/gomodcache
+%global goipath github.com/decko/soda
 
 Name:           soda
-Version:        %{soda_version}
+Version:        0.6.0
 Release:        1%{?dist}
-Summary:        AI-powered software development pipeline orchestrator with sandbox support
+Summary:        AI-powered development pipeline orchestrator with sandbox support
 
-License:        MIT
+License:        Apache-2.0
 URL:            https://%{goipath}
-Source0:        soda-%{soda_version}.tar.gz
+Source0:        https://%{goipath}/archive/v%{version}/soda-%{version}.tar.gz
+Source1:        soda-%{version}-vendor.tar.bz2
 
 ExclusiveArch:  x86_64
 
-BuildRequires:  golang >= 1.25
+BuildRequires:  golang >= 1.24
 BuildRequires:  gcc
-BuildRequires:  git-lfs
-BuildRequires:  python3
-BuildRequires:  curl
+BuildRequires:  git-core
+BuildRequires:  arapuca-devel
 
 Conflicts:      soda-minimal
 
+# Go binary stripped with -s -w; no debug symbols to extract.
+%global debug_package %{nil}
+
 %description
-Soda is an AI-powered software development pipeline orchestrator that drives
-Claude Code through multi-phase workflows. This build includes CGO support
-and kernel-enforced process isolation via Landlock, seccomp, and cgroups
-(provided by the go-arapuca library).
+SODA is a configurable AI coding pipeline that turns tickets into PRs.
+Each phase runs in a fresh, sandboxed Claude Code session with structured
+output. This build includes CGO support and kernel-enforced process
+isolation via Landlock, seccomp, and cgroups (provided by arapuca).
 
 %prep
-%setup -q -n soda-%{soda_version}
+%autosetup -n soda-%{version}
+tar -xf %{SOURCE1}
 
 %build
-export GOMODCACHE=%{gomodcache}
-export GOFLAGS="-mod=mod"
+export GOFLAGS="-mod=vendor"
 export CGO_ENABLED=1
-
-# Resolve module dependencies
-go mod download
-
-# Fetch go-arapuca LFS binary
-arapuca_version=$(go list -m -f '{{.Version}}' github.com/sergio-correia/go-arapuca)
-mod_dir="${GOMODCACHE}/github.com/sergio-correia/go-arapuca@${arapuca_version}"
-lib_path="${mod_dir}/lib/linux_amd64/libarapuca.a"
-
-if [ -f "$lib_path" ] && file "$lib_path" | grep -q "ASCII"; then
-    oid=$(awk '/^oid sha256:/{print substr($2,8)}' "$lib_path")
-    url="https://github.com/sergio-correia/go-arapuca.git/info/lfs/objects/batch"
-    response=$(curl -s -X POST "$url" \
-        -H "Content-Type: application/vnd.git-lfs+json" \
-        -d "{\"operation\":\"download\",\"objects\":[{\"oid\":\"${oid}\",\"size\":1}]}")
-    download_url=$(echo "$response" | python3 -c \
-        "import sys,json; d=json.load(sys.stdin); print(d['objects'][0]['actions']['download']['href'])" 2>/dev/null) || {
-        echo "ERROR: Failed to resolve LFS object for libarapuca.a"
-        exit 1
-    }
-    chmod -R u+w "$(dirname "$lib_path")"
-    curl -sfL "$download_url" -o "$lib_path" || {
-        echo "ERROR: Failed to download libarapuca.a from LFS"
-        exit 1
-    }
-    echo "Fetched libarapuca.a ($(wc -c < "$lib_path") bytes)"
-fi
-
-go build -ldflags "-s -w -X main.version=%{soda_version}" \
+go build -trimpath \
+    -buildmode pie \
+    -ldflags "-s -w -X main.version=%{version} -linkmode=external" \
     -o soda ./cmd/soda
 
 # Generate shell completions
@@ -72,11 +47,17 @@ go build -ldflags "-s -w -X main.version=%{soda_version}" \
 
 %install
 install -Dpm 0755 soda %{buildroot}%{_bindir}/soda
-
-# Shell completions
 install -Dpm 0644 soda.bash %{buildroot}%{_datadir}/bash-completion/completions/soda
 install -Dpm 0644 _soda     %{buildroot}%{_datadir}/zsh/site-functions/_soda
 install -Dpm 0644 soda.fish %{buildroot}%{_datadir}/fish/vendor_completions.d/soda.fish
+
+%check
+export GOFLAGS="-mod=vendor"
+export CGO_ENABLED=1
+export GIT_CONFIG_GLOBAL=/dev/null
+export GIT_CONFIG_SYSTEM=/dev/null
+# Skip Jira smoke tests (require wtmcp binary).
+go test $(go list ./... | grep -v ticket)
 
 %files
 %license LICENSE
@@ -87,3 +68,5 @@ install -Dpm 0644 soda.fish %{buildroot}%{_datadir}/fish/vendor_completions.d/so
 %{_datadir}/fish/vendor_completions.d/soda.fish
 
 %changelog
+* Fri May 15 2026 decko de Brito <ddebrito@redhat.com> - 0.6.0-1
+- Initial COPR package (full build with sandbox support)
