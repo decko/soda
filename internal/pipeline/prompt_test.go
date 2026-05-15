@@ -1440,6 +1440,68 @@ Context: {{.}}
 		}
 	})
 
+	t.Run("renders_category_when_present", func(t *testing.T) {
+		tmplBytes, err := os.ReadFile(filepath.Join("..", "..", "cmd", "soda", "embeds", "prompts", "implement.md"))
+		if err != nil {
+			t.Skipf("skipping: cannot read embedded implement.md: %v", err)
+		}
+		tmpl := string(tmplBytes)
+
+		data := PromptData{
+			Ticket:       TicketData{Key: "TEST-509", Summary: "category rendering"},
+			WorktreePath: "/tmp/wt",
+			Branch:       "soda/TEST-509",
+			BaseBranch:   "main",
+			Config:       PromptConfigData{Formatter: "gofmt -w .", TestCommand: "go test ./..."},
+			ReworkFeedback: &ReworkFeedback{
+				Source:  "review",
+				Verdict: "rework",
+				ReviewFindings: []EnrichedFinding{
+					{ReviewFinding: schemas.ReviewFinding{Severity: "critical", File: "x.go", Line: 1, Issue: "bug", Suggestion: "fix", Source: "go-specialist", Category: "logic"}},
+				},
+			},
+		}
+
+		result, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+		if !strings.Contains(result, "Category: logic") {
+			t.Errorf("implement prompt should contain 'Category: logic' when category is set;\ngot: %s", result)
+		}
+	})
+
+	t.Run("omits_category_when_empty", func(t *testing.T) {
+		tmplBytes, err := os.ReadFile(filepath.Join("..", "..", "cmd", "soda", "embeds", "prompts", "implement.md"))
+		if err != nil {
+			t.Skipf("skipping: cannot read embedded implement.md: %v", err)
+		}
+		tmpl := string(tmplBytes)
+
+		data := PromptData{
+			Ticket:       TicketData{Key: "TEST-509", Summary: "no category rendering"},
+			WorktreePath: "/tmp/wt",
+			Branch:       "soda/TEST-509",
+			BaseBranch:   "main",
+			Config:       PromptConfigData{Formatter: "gofmt -w .", TestCommand: "go test ./..."},
+			ReworkFeedback: &ReworkFeedback{
+				Source:  "review",
+				Verdict: "rework",
+				ReviewFindings: []EnrichedFinding{
+					{ReviewFinding: schemas.ReviewFinding{Severity: "critical", File: "x.go", Line: 1, Issue: "bug", Suggestion: "fix", Source: "go-specialist"}},
+				},
+			},
+		}
+
+		result, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+		if strings.Contains(result, "Category:") {
+			t.Errorf("implement prompt should NOT contain 'Category:' when category is empty;\ngot: %s", result)
+		}
+	})
+
 	t.Run("omits_sibling_context_when_empty", func(t *testing.T) {
 		tmplBytes, err := os.ReadFile(filepath.Join("..", "..", "cmd", "soda", "embeds", "prompts", "implement.md"))
 		if err != nil {
