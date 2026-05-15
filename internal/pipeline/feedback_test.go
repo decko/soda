@@ -153,6 +153,84 @@ func TestExtractReviewFeedback(t *testing.T) {
 		}
 	})
 
+	t.Run("valid_category_passes_through", func(t *testing.T) {
+		stateDir := t.TempDir()
+		state, _ := LoadOrCreate(stateDir, "TEST-1")
+		_ = state.MarkRunning("review")
+		reviewResult := `{
+			"verdict": "rework",
+			"findings": [
+				{"severity":"critical","file":"a.go","issue":"bug","suggestion":"fix","category":"logic"}
+			]
+		}`
+		_ = state.WriteResult("review", json.RawMessage(reviewResult))
+		_ = state.MarkCompleted("review")
+
+		engine := &Engine{state: state, config: EngineConfig{}}
+		fb := engine.extractReviewFeedback()
+		if fb == nil {
+			t.Fatal("expected non-nil feedback for rework verdict")
+		}
+		if len(fb.ReviewFindings) != 1 {
+			t.Fatalf("ReviewFindings count = %d, want 1", len(fb.ReviewFindings))
+		}
+		if fb.ReviewFindings[0].Category != "logic" {
+			t.Errorf("Category = %q, want %q", fb.ReviewFindings[0].Category, "logic")
+		}
+	})
+
+	t.Run("invalid_category_defaults_to_unknown", func(t *testing.T) {
+		stateDir := t.TempDir()
+		state, _ := LoadOrCreate(stateDir, "TEST-1")
+		_ = state.MarkRunning("review")
+		reviewResult := `{
+			"verdict": "rework",
+			"findings": [
+				{"severity":"major","file":"b.go","issue":"oops","suggestion":"fix","category":"bogus"}
+			]
+		}`
+		_ = state.WriteResult("review", json.RawMessage(reviewResult))
+		_ = state.MarkCompleted("review")
+
+		engine := &Engine{state: state, config: EngineConfig{}}
+		fb := engine.extractReviewFeedback()
+		if fb == nil {
+			t.Fatal("expected non-nil feedback for rework verdict")
+		}
+		if len(fb.ReviewFindings) != 1 {
+			t.Fatalf("ReviewFindings count = %d, want 1", len(fb.ReviewFindings))
+		}
+		if fb.ReviewFindings[0].Category != "unknown" {
+			t.Errorf("Category = %q, want %q", fb.ReviewFindings[0].Category, "unknown")
+		}
+	})
+
+	t.Run("missing_category_defaults_to_unknown", func(t *testing.T) {
+		stateDir := t.TempDir()
+		state, _ := LoadOrCreate(stateDir, "TEST-1")
+		_ = state.MarkRunning("review")
+		reviewResult := `{
+			"verdict": "rework",
+			"findings": [
+				{"severity":"critical","file":"c.go","issue":"nil","suggestion":"check"}
+			]
+		}`
+		_ = state.WriteResult("review", json.RawMessage(reviewResult))
+		_ = state.MarkCompleted("review")
+
+		engine := &Engine{state: state, config: EngineConfig{}}
+		fb := engine.extractReviewFeedback()
+		if fb == nil {
+			t.Fatal("expected non-nil feedback for rework verdict")
+		}
+		if len(fb.ReviewFindings) != 1 {
+			t.Fatalf("ReviewFindings count = %d, want 1", len(fb.ReviewFindings))
+		}
+		if fb.ReviewFindings[0].Category != "unknown" {
+			t.Errorf("Category = %q, want %q", fb.ReviewFindings[0].Category, "unknown")
+		}
+	})
+
 	t.Run("budget_priority_critical_gets_full_file", func(t *testing.T) {
 		workDir := t.TempDir()
 		stateDir := t.TempDir()
