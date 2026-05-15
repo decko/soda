@@ -102,8 +102,16 @@ Read the actual code in the worktree. Do not rely solely on the implementation r
 - **major**: Functional bug that affects correctness under realistic usage, or a missing test for core acceptance criteria
 - **minor**: Style, naming, documentation, performance nits, or improvements that don't affect correctness
 
+For each issue found, you should also categorize it using one of these values:
+- **retrieval**: wrong file read, stale context, or missing context
+- **convention**: violates project style, naming, or structural conventions
+- **logic**: incorrect logic, missing edge case, or runtime bug
+- **test_pattern**: wrong test approach, missing coverage, or brittle assertions
+- **documentation**: missing, misleading, or outdated docs or comments
+
 For each issue found, provide:
 - severity: "critical", "major", or "minor"
+- category: one of the values above (if applicable)
 - file and line number
 - description of the issue
 - concrete suggestion for fixing it
