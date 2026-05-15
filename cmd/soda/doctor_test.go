@@ -520,7 +520,7 @@ func TestCheckConfig_UserHomeDirFallback(t *testing.T) {
 	env := allPassEnv()
 	env.Stat = func(name string) (os.FileInfo, error) {
 		// Only the UserHomeDir-based path exists.
-		if name == "/home/testuser/.config/soda/config.yaml" {
+		if name == "/home/testuser/.config/soda/soda.yaml" {
 			return mockFileInfo{name: name}, nil
 		}
 		return nil, os.ErrNotExist
@@ -535,7 +535,7 @@ func TestCheckConfig_UserHomeDirFallback(t *testing.T) {
 	if !strings.Contains(r.detail, "global") {
 		t.Errorf("expected detail to mention global, got: %q", r.detail)
 	}
-	if !strings.Contains(r.detail, "/home/testuser/.config/soda/config.yaml") {
+	if !strings.Contains(r.detail, "/home/testuser/.config/soda/soda.yaml") {
 		t.Errorf("expected detail to include fallback path, got: %q", r.detail)
 	}
 }
@@ -623,8 +623,8 @@ func TestCheckConfigValid_FallbackToGlobal(t *testing.T) {
 	if !r.passed {
 		t.Error("expected config-valid check to pass with global config")
 	}
-	if !strings.Contains(r.detail, "config.yaml") {
-		t.Errorf("expected detail to mention config.yaml, got: %q", r.detail)
+	if !strings.Contains(r.detail, "soda.yaml") {
+		t.Errorf("expected detail to mention soda.yaml, got: %q", r.detail)
 	}
 }
 
@@ -853,7 +853,7 @@ func TestRunDoctor_GhOptionalWhenJiraSource(t *testing.T) {
 
 func TestCheckConfigValid_UserHomeDirFallback(t *testing.T) {
 	env := allPassEnv()
-	homePath := "/home/testuser/.config/soda/config.yaml"
+	homePath := "/home/testuser/.config/soda/soda.yaml"
 	env.Stat = func(name string) (os.FileInfo, error) {
 		if name == homePath {
 			return mockFileInfo{name: name}, nil
@@ -903,14 +903,14 @@ func TestResolveConfigPath_GlobalViaUserConfigDir(t *testing.T) {
 	if loc.label != "global" {
 		t.Errorf("expected label 'global', got %q", loc.label)
 	}
-	if !strings.Contains(loc.path, ".config/soda/config.yaml") {
+	if !strings.Contains(loc.path, ".config/soda/soda.yaml") {
 		t.Errorf("expected global config path, got %q", loc.path)
 	}
 }
 
 func TestResolveConfigPath_GlobalViaUserHomeDir(t *testing.T) {
 	env := allPassEnv()
-	homePath := "/home/testuser/.config/soda/config.yaml"
+	homePath := "/home/testuser/.config/soda/soda.yaml"
 	env.Stat = func(name string) (os.FileInfo, error) {
 		if name == homePath {
 			return mockFileInfo{name: name}, nil
@@ -987,9 +987,9 @@ func TestResolveConfigPath_NoFalsePositive_WhenUserConfigDirSucceeds(t *testing.
 		return "/Users/testuser", nil
 	}
 	env.Stat = func(name string) (os.FileInfo, error) {
-		// Config exists at ~/.config/soda/config.yaml but NOT at
-		// ~/Library/Application Support/soda/config.yaml
-		if name == "/Users/testuser/.config/soda/config.yaml" {
+		// Config exists at ~/.config/soda/soda.yaml but NOT at
+		// ~/Library/Application Support/soda/soda.yaml
+		if name == "/Users/testuser/.config/soda/soda.yaml" {
 			return mockFileInfo{name: name}, nil
 		}
 		return nil, os.ErrNotExist

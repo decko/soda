@@ -237,8 +237,8 @@ func TestDefaultPath(t *testing.T) {
 	if !filepath.IsAbs(path) {
 		t.Errorf("DefaultPath() = %q, want absolute path", path)
 	}
-	if filepath.Base(path) != "config.yaml" {
-		t.Errorf("DefaultPath() base = %q, want config.yaml", filepath.Base(path))
+	if filepath.Base(path) != "soda.yaml" {
+		t.Errorf("DefaultPath() base = %q, want soda.yaml", filepath.Base(path))
 	}
 }
 

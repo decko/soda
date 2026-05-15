@@ -121,7 +121,7 @@ func TestLoadConfig_LocalSodaYAML_OverridesGlobal(t *testing.T) {
 	writeMinimalConfig(t, filepath.Join(localDir, "soda.yaml"), "github")
 
 	// Write global config with a different ticket_source.
-	globalPath := filepath.Join(globalDir, "config.yaml")
+	globalPath := filepath.Join(globalDir, "soda.yaml")
 	writeMinimalConfig(t, globalPath, "jira")
 
 	// Default flag points to global config; local should still win.
@@ -146,7 +146,7 @@ func TestLoadConfig_FallbackToDefaultPath(t *testing.T) {
 
 	// No soda.yaml in CWD — loadConfig should fall back to the default path.
 	globalDir := t.TempDir()
-	globalPath := filepath.Join(globalDir, "config.yaml")
+	globalPath := filepath.Join(globalDir, "soda.yaml")
 	writeMinimalConfig(t, globalPath, "github")
 
 	var cfg *config.Config
