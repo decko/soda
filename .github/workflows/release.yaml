@@ -143,6 +143,11 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: "1.25"
+
       - name: Install RPM tooling
         run: |
           sudo apt-get update
@@ -157,15 +162,27 @@ jobs:
           git archive --format=tar.gz --prefix="soda-${version}/" \
             -o "soda-${version}.tar.gz" HEAD
 
+      - name: Create vendor tarball
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          tmpdir=$(mktemp -d)
+          tar -xzf "soda-${version}.tar.gz" -C "$tmpdir"
+          (cd "$tmpdir/soda-${version}" && go mod vendor)
+          (cd "$tmpdir/soda-${version}" && tar -cjf "$(pwd)/../../soda-${version}-vendor.tar.bz2" vendor/)
+          mv "$tmpdir/soda-${version}/../../soda-${version}-vendor.tar.bz2" . 2>/dev/null || \
+            (cd "$tmpdir/soda-${version}" && tar -cjf "$GITHUB_WORKSPACE/soda-${version}-vendor.tar.bz2" vendor/)
+          rm -rf "$tmpdir"
+
       - name: Build SRPM
         run: |
           version="${GITHUB_REF_NAME#v}"
           mkdir -p rpmbuild/{SOURCES,SRPMS,SPECS}
           cp "soda-${version}.tar.gz" rpmbuild/SOURCES/
-          cp packaging/rpm/${{ matrix.spec }}.spec rpmbuild/SPECS/
+          cp "soda-${version}-vendor.tar.bz2" rpmbuild/SOURCES/
+          sed "s/^Version:.*$/Version:        ${version}/" \
+            packaging/rpm/${{ matrix.spec }}.spec > rpmbuild/SPECS/${{ matrix.spec }}.spec
           rpmbuild -bs \
             --define "_topdir $(pwd)/rpmbuild" \
-            --define "soda_version ${version}" \
             rpmbuild/SPECS/${{ matrix.spec }}.spec
 
       - name: Configure copr-cli
@@ -178,4 +195,4 @@ jobs:
         if: ${{ env.COPR_API_TOKEN != '' }}
         run: |
           srpm=$(find rpmbuild/SRPMS -name '*.src.rpm' | head -1)
-          copr-cli build soda "$srpm"
+          copr-cli build decko/soda "$srpm"
