@@ -16,4 +16,5 @@ type ReviewFinding struct {
 	Line       int    `json:"line,omitempty"`
 	Issue      string `json:"issue"`
 	Suggestion string `json:"suggestion"`
+	Category   string `json:"category,omitempty" jsonschema:"enum=retrieval|convention|logic|test_pattern|documentation"`
 }
