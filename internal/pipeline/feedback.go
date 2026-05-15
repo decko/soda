@@ -248,6 +248,13 @@ func (e *Engine) extractReviewFeedback() *ReworkFeedback {
 		return severityRank(result.Findings[i].Severity) < severityRank(result.Findings[j].Severity)
 	})
 
+	// Validate and default categories: invalid or empty → "unknown".
+	for idx := range result.Findings {
+		if !validCategory(result.Findings[idx].Category) {
+			result.Findings[idx].Category = "unknown"
+		}
+	}
+
 	workDir := e.workDir(PhaseConfig{})
 	budgetRemaining := maxFeedbackContextBytes
 	rawCache := make(map[string]string) // file path → raw file content
@@ -494,6 +501,16 @@ func summarizeVerifyFailures(fixesRequired []string) string {
 		return ""
 	}
 	return strings.Join(fixesRequired, "; ")
+}
+
+// validCategory reports whether cat is a recognized finding category.
+func validCategory(cat string) bool {
+	switch cat {
+	case "retrieval", "convention", "logic", "test_pattern", "documentation":
+		return true
+	default:
+		return false
+	}
 }
 
 // truncateLines returns at most maxLines lines from s.

@@ -346,20 +346,35 @@ func TestReviewSchema_MatchesStruct(t *testing.T) {
 		}
 	}
 
-	// source and line are omitempty, so NOT required.
-	for _, field := range []string{"source", "line"} {
+	// source, line, and category are omitempty, so NOT required.
+	for _, field := range []string{"source", "line", "category"} {
 		if itemReqSet[field] {
 			t.Errorf("findings.items: %q should not be required (omitempty)", field)
 		}
 	}
 
 	// All ReviewFinding properties should exist.
-	wantItemProps := []string{"file", "issue", "line", "severity", "source", "suggestion"}
+	wantItemProps := []string{"category", "file", "issue", "line", "severity", "source", "suggestion"}
 	for _, prop := range wantItemProps {
 		if _, ok := findings.Items.Properties[prop]; !ok {
 			t.Errorf("findings.items missing property %q", prop)
 		}
 	}
+
+	// category should have enum constraint.
+	var itemProps map[string]json.RawMessage
+	if err := json.Unmarshal(findingsRaw, &struct {
+		Items struct {
+			Properties *map[string]json.RawMessage `json:"properties"`
+		} `json:"items"`
+	}{Items: struct {
+		Properties *map[string]json.RawMessage `json:"properties"`
+	}{Properties: &itemProps}}); err != nil {
+		t.Fatalf("unmarshal item properties: %v", err)
+	}
+	assertEnum(t, itemProps["category"], "string", []string{
+		"retrieval", "convention", "logic", "test_pattern", "documentation",
+	})
 }
 
 func TestImplementSchema_NestedTypes(t *testing.T) {
