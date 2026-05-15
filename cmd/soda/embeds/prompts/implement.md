@@ -92,6 +92,9 @@ Do NOT address multiple findings in a single edit. Fix one, verify it, then move
 ### Finding {{add $idx 1}} of {{len $.ReworkFeedback.ReviewFindings}}: {{$finding.Source}}
 - [{{$finding.Severity}}] {{$finding.File}}{{if $finding.Line}}:{{$finding.Line}}{{end}} — {{$finding.Issue}}
   Suggestion: {{$finding.Suggestion}}
+{{- if $finding.Category}}
+  Category: {{$finding.Category}}
+{{- end}}
 {{- if $finding.CodeSnippet}}
   Relevant code:
 ```
