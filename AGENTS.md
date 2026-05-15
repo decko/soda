@@ -265,6 +265,11 @@ soda/
 │   └── followup.go               # FollowUpOutput, FollowUpAction
 ├── phases.yaml                    # Root pipeline config (overrides embedded)
 ├── config.example.yaml            # Example user config
+├── packaging/
+│   └── rpm/
+│       ├── soda.spec              # Full RPM spec (CGO + arapuca sandbox)
+│       ├── soda-minimal.spec      # Static RPM spec (no CGO, no sandbox)
+│       └── build-srpm.sh          # Build SRPMs with vendor tarball
 ├── go.mod
 └── go.sum
 ```
@@ -279,6 +284,7 @@ soda/
 - **Sandbox**: go-arapuca (library-based, Landlock + seccomp + cgroups)
 - **Agent**: Claude Code CLI (`claude --print --bare`)
 - **Runner abstraction**: `internal/runner/` decouples engine from Claude CLI specifics
+- **Packaging**: RPM specs for Fedora (COPR: `decko/soda`); `soda` (with sandbox) and `soda-minimal` (without)
 
 ## Claude Code CLI flags (critical)
 
@@ -449,6 +455,12 @@ Atomic writes: always write to `.tmp` then rename. Archive on re-run (`verify.js
 29. **Monitor requires `respond_to_comments` in `phases.yaml`**: the `self_user` field in `soda.yaml` enables comment classification, but active comment response also requires `respond_to_comments: true` in the monitor phase's `polling` config in `phases.yaml`.
 30. **PR reviews vs PR comments**: `gh pr review` posts to `/pulls/N/reviews`, which the monitor's GitHub poller does NOT poll. Only `/pulls/N/comments` (inline review comments) and `/issues/N/comments` (top-level conversation comments) are fetched. Post feedback as issue comments for the monitor to see it.
 31. **`ParseResponse` uses JSONL reverse line scan**: with `--output-format stream-json`, `extractJSON` scans lines from the end to find the `{"type":"result"}` envelope. This is O(n) and handles fake result strings in tool output. The legacy backward brace scan (`extractJSONByDepth`) is the fallback for non-JSONL output.
+32. **`CLOUD_ML_REGION=global` uses a different URL format**: the global Vertex endpoint is `https://aiplatform.googleapis.com/v1` (no region prefix), not `https://global-aiplatform.googleapis.com/v1`. The proxy constructs the upstream URL based on this — regional endpoints use `https://<region>-aiplatform.googleapis.com/v1`. Fixed in PR #520.
+33. **`%gobuild` and `CGO_ENABLED=0` are incompatible**: the Fedora `%gobuild` macro hardcodes `-linkmode=external` which requires CGO. For the `soda-minimal` spec (no sandbox), use raw `go build -trimpath` instead. The full `soda` spec (CGO=1) can use `%gobuild` but currently uses raw `go build` to avoid `%gometa` shell injection issues.
+34. **RPM specs use vendored builds**: `go mod vendor` + tarball (`Source1`), not `go mod download` during build. The `build-srpm.sh` script generates both the source and vendor tarballs. Version is sed'd into the spec before SRPM creation because `--define` doesn't survive COPR rebuilds.
+35. **`arapuca-devel` is in Fedora**: no need for LFS fetch or cargo build of libarapuca. Just `BuildRequires: arapuca-devel` and pkg-config handles linking. This replaced the entire LFS complexity from the original spec.
+36. **Schema changes to LLM output types are high risk**: adding fields to structs used in `--json-schema` (e.g., `ReviewFinding`) can cause parse failures if the model doesn't produce valid values. Always make new fields optional (`omitempty`), validate on the consumer side with defaults, and use "should" not "must" in prompt instructions. Monitor parse error rate for 10 sessions after deployment.
+37. **Global config path is `~/.config/soda/soda.yaml`**: renamed from `config.yaml` in #537 for consistency with the project-local `soda.yaml`. `config.DefaultPath()` returns this. The `--config` flag default shown in `--help` is evaluated at runtime per user.
 
 ## Raki evaluation framework
 
