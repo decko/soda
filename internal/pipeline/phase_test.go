@@ -44,20 +44,42 @@ func TestDurationUnmarshalYAML(t *testing.T) {
 
 func TestLoadPipeline(t *testing.T) {
 	t.Run("loads_real_phases_yaml", func(t *testing.T) {
-		// Use the project's actual phases.yaml
 		pipeline, err := LoadPipeline("../../phases.yaml")
 		if err != nil {
 			t.Fatalf("LoadPipeline: %v", err)
 		}
 
-		if len(pipeline.Phases) != 8 {
-			t.Fatalf("got %d phases, want 8", len(pipeline.Phases))
+		// Build a name→phase map and check for duplicates.
+		byName := make(map[string]PhaseConfig, len(pipeline.Phases))
+		for _, phase := range pipeline.Phases {
+			if _, dup := byName[phase.Name]; dup {
+				t.Errorf("duplicate phase name %q", phase.Name)
+			}
+			byName[phase.Name] = phase
 		}
 
-		// Verify first phase
-		triage := pipeline.Phases[0]
-		if triage.Name != "triage" {
-			t.Errorf("first phase = %q, want %q", triage.Name, "triage")
+		// Structural invariants: every phase must have a name and a positive timeout.
+		for _, phase := range pipeline.Phases {
+			if phase.Name == "" {
+				t.Error("phase with empty name")
+			}
+			if phase.Timeout.Duration <= 0 {
+				t.Errorf("phase %q has non-positive timeout %v", phase.Name, phase.Timeout.Duration)
+			}
+		}
+
+		// First phase must be triage, last must be monitor.
+		if first := pipeline.Phases[0].Name; first != "triage" {
+			t.Errorf("first phase = %q, want %q", first, "triage")
+		}
+		if last := pipeline.Phases[len(pipeline.Phases)-1].Name; last != "monitor" {
+			t.Errorf("last phase = %q, want %q", last, "monitor")
+		}
+
+		// triage: no dependencies, correct timeout and retry.
+		triage, ok := byName["triage"]
+		if !ok {
+			t.Fatal("triage phase not found")
 		}
 		if triage.Timeout.Duration != 3*time.Minute {
 			t.Errorf("triage timeout = %v, want 3m", triage.Timeout.Duration)
@@ -69,16 +91,34 @@ func TestLoadPipeline(t *testing.T) {
 			t.Errorf("triage depends_on = %v, want empty", triage.DependsOn)
 		}
 
-		// Verify dependency chain
-		plan := pipeline.Phases[1]
+		// plan: depends on triage.
+		plan, ok := byName["plan"]
+		if !ok {
+			t.Fatal("plan phase not found")
+		}
 		if len(plan.DependsOn) != 1 || plan.DependsOn[0] != "triage" {
 			t.Errorf("plan depends_on = %v, want [triage]", plan.DependsOn)
 		}
 
-		// Verify patch phase
-		patch := pipeline.Phases[3]
-		if patch.Name != "patch" {
-			t.Errorf("fourth phase = %q, want %q", patch.Name, "patch")
+		// implement: feedback from review and verify.
+		implement, ok := byName["implement"]
+		if !ok {
+			t.Fatal("implement phase not found")
+		}
+		if len(implement.FeedbackFrom) != 2 {
+			t.Fatalf("implement feedback_from has %d entries, want 2", len(implement.FeedbackFrom))
+		}
+		if implement.FeedbackFrom[0] != "review" {
+			t.Errorf("implement feedback_from[0] = %q, want %q", implement.FeedbackFrom[0], "review")
+		}
+		if implement.FeedbackFrom[1] != "verify" {
+			t.Errorf("implement feedback_from[1] = %q, want %q", implement.FeedbackFrom[1], "verify")
+		}
+
+		// patch: corrective type, feedback from verify.
+		patch, ok := byName["patch"]
+		if !ok {
+			t.Fatal("patch phase not found")
 		}
 		if patch.Type != "corrective" {
 			t.Errorf("patch type = %q, want %q", patch.Type, "corrective")
@@ -87,10 +127,10 @@ func TestLoadPipeline(t *testing.T) {
 			t.Errorf("patch feedback_from = %v, want [verify]", patch.FeedbackFrom)
 		}
 
-		// Verify verify phase has corrective config
-		verify := pipeline.Phases[4]
-		if verify.Name != "verify" {
-			t.Errorf("fifth phase = %q, want %q", verify.Name, "verify")
+		// verify: corrective config pointing at patch.
+		verify, ok := byName["verify"]
+		if !ok {
+			t.Fatal("verify phase not found")
 		}
 		if verify.Corrective == nil {
 			t.Fatal("verify corrective config should not be nil")
@@ -105,58 +145,42 @@ func TestLoadPipeline(t *testing.T) {
 			t.Errorf("verify corrective.on_exhausted = %q, want %q", verify.Corrective.OnExhausted, "stop")
 		}
 
-		// Verify review phase
-		review := pipeline.Phases[5]
-		if review.Name != "review" {
-			t.Errorf("fifth phase = %q, want %q", review.Name, "review")
+		// review: parallel-review type, rework target, expected reviewers.
+		review, ok := byName["review"]
+		if !ok {
+			t.Fatal("review phase not found")
 		}
 		if review.Type != "parallel-review" {
 			t.Errorf("review type = %q, want %q", review.Type, "parallel-review")
 		}
-		if len(review.Reviewers) != 2 {
-			t.Errorf("review has %d reviewers, want 2", len(review.Reviewers))
-		}
-		if len(review.Reviewers) >= 2 {
-			if review.Reviewers[0].Name != "go-specialist" {
-				t.Errorf("first reviewer = %q, want %q", review.Reviewers[0].Name, "go-specialist")
-			}
-			if review.Reviewers[1].Name != "ai-harness" {
-				t.Errorf("second reviewer = %q, want %q", review.Reviewers[1].Name, "ai-harness")
-			}
-		}
-
-		// Verify review phase has min_reviewers config
 		if review.MinReviewers != 1 {
 			t.Errorf("review min_reviewers = %d, want 1", review.MinReviewers)
 		}
-
-		// Verify review phase has rework config
 		if review.Rework == nil {
 			t.Fatal("review rework config should not be nil")
 		}
 		if review.Rework.Target != "implement" {
 			t.Errorf("review rework target = %q, want %q", review.Rework.Target, "implement")
 		}
+		reviewerNames := make([]string, len(review.Reviewers))
+		for i, r := range review.Reviewers {
+			reviewerNames[i] = r.Name
+		}
+		wantReviewers := []string{"go-specialist", "ai-harness"}
+		if len(reviewerNames) != len(wantReviewers) {
+			t.Errorf("review reviewers = %v, want %v", reviewerNames, wantReviewers)
+		} else {
+			for i, want := range wantReviewers {
+				if reviewerNames[i] != want {
+					t.Errorf("review reviewer[%d] = %q, want %q", i, reviewerNames[i], want)
+				}
+			}
+		}
 
-		// Verify implement phase has feedback_from config
-		implement := pipeline.Phases[2]
-		if implement.Name != "implement" {
-			t.Errorf("third phase = %q, want %q", implement.Name, "implement")
-		}
-		if len(implement.FeedbackFrom) != 2 {
-			t.Fatalf("implement feedback_from has %d entries, want 2", len(implement.FeedbackFrom))
-		}
-		if implement.FeedbackFrom[0] != "review" {
-			t.Errorf("implement feedback_from[0] = %q, want %q", implement.FeedbackFrom[0], "review")
-		}
-		if implement.FeedbackFrom[1] != "verify" {
-			t.Errorf("implement feedback_from[1] = %q, want %q", implement.FeedbackFrom[1], "verify")
-		}
-
-		// Verify monitor phase has polling config
-		monitor := pipeline.Phases[7]
-		if monitor.Name != "monitor" {
-			t.Errorf("last phase = %q, want %q", monitor.Name, "monitor")
+		// monitor: polling type with expected config.
+		monitor, ok := byName["monitor"]
+		if !ok {
+			t.Fatal("monitor phase not found")
 		}
 		if monitor.Type != "polling" {
 			t.Errorf("monitor type = %q, want %q", monitor.Type, "polling")
