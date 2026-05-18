@@ -1,3 +1,23 @@
+# raki.yaml — SODA pipeline evaluation manifest
+#
+# Raki evaluates completed SODA pipeline sessions for quality metrics:
+# first-pass success rate, rework cycles, cost efficiency, and more.
+#
+# Install:
+#   uv tool install raki
+#
+# Run (operational metrics, no API key needed):
+#   raki run -m raki.yaml
+#
+# Run with knowledge + retrieval quality metrics (requires Vertex/Anthropic):
+#   raki run -m raki.yaml --docs-path . --judge --judge-provider vertex-anthropic
+#
+# Validate this manifest:
+#   raki validate -m raki.yaml
+#
+# Sessions are read from .soda/ (gitignored). You need at least one completed
+# pipeline run before raki has anything to evaluate.
+
 sessions:
   path: .soda
 
