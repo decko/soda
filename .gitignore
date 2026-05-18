@@ -28,7 +28,6 @@ soda-system-prompt-*.md
 
 # Raki evaluation
 .raki/
-raki-*.yaml
 results/
 
 # MCP / AI tool state
