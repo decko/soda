@@ -25,3 +25,24 @@ config.yaml
 # Prompt overrides (use ~/.config/soda/prompts/ instead)
 prompts/
 soda-system-prompt-*.md
+
+# Raki evaluation
+.raki/
+raki-*.yaml
+results/
+
+# MCP / AI tool state
+.serena/
+
+# RPM build artifacts
+rpmbuild/
+
+# Local pipeline logs
+*.log
+
+# Local binaries (nightly, sandbox builds)
+/soda-nightly
+/soda-sandbox
+
+# Locally cached issue data
+.github/issues/
