@@ -16,6 +16,7 @@ Guides for people running SODA against their own projects.
 | [configuration.md](configuration.md) | `soda.yaml` and `phases.yaml` reference | available |
 | [cli-reference.md](cli-reference.md) | Full CLI command reference | planned |
 | [pipelines.md](pipelines.md) | Named pipelines, custom pipelines, conditional phases, model routing | available |
+| [running-pipelines.md](running-pipelines.md) | Background execution, parallel runs, monitoring, resuming | available |
 | [sandbox.md](sandbox.md) | OS-level isolation: setup, configuration, platform support | available |
 | [plugin.md](plugin.md) | Claude Code plugin: install, commands, pipeline-architect agent | available |
 | [troubleshooting.md](troubleshooting.md) | Top failure modes and fixes | available |
