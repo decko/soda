@@ -90,6 +90,7 @@ const (
 	EventSchemaVersionMismatch    = "schema_version_mismatch"
 	EventAPISemaphoreWait         = "api_semaphore_wait"
 	EventImplementNoChanges       = "implement_no_changes"
+	EventImplementCommitMismatch  = "implement_commit_mismatch"
 	EventTokenBudgetWarning       = "token_budget_warning"
 	EventTokenBudgetCalibration   = "token_budget_calibration"
 	EventNotifySuccess            = "notify_success"
