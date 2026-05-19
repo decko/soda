@@ -48,7 +48,11 @@ Assess this ticket and produce a structured classification:
 
 1. **Identify the target repo** — which repository should this change land in? If unclear, flag it.
 2. **Identify the code area** — which packages, modules, or directories are likely affected.
-3. **List candidate files** — specific files that will likely need changes. Read the codebase to verify.
+3. **List candidate files** — be thorough. Include:
+   - Files that will **change** (direct modifications)
+   - Files that must be **read for context** (callers, interfaces, tests, related implementations)
+   - Files in the same package that establish patterns the implementation must follow
+   Err on the side of more files rather than fewer — a missed file in triage means implement works blind.
 4. **Assess complexity** — one of `low`, `medium`, or `high`:
    - `low`: 1-3 files, single concern, no architectural decisions
    - `medium`: 4-10 files, clear feature, may touch tests
