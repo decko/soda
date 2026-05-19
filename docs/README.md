@@ -20,6 +20,7 @@ Guides for people running SODA against their own projects.
 | [sandbox.md](sandbox.md) | OS-level isolation: setup, configuration, platform support | available |
 | [plugin.md](plugin.md) | Claude Code plugin: install, commands, pipeline-architect agent | available |
 | [troubleshooting.md](troubleshooting.md) | Top failure modes and fixes | available |
+| [pipeline-metrics.md](pipeline-metrics.md) | Evaluating pipeline quality with raki: install, metrics reference, baselines | available |
 
 ## Contributor docs
 
