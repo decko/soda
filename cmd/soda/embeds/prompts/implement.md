@@ -181,19 +181,27 @@ Base: {{.BaseBranch}}
 
 ## Your Task
 
+**Before writing any code:** read the files listed under Priority Files and at
+least one existing file in each package you will touch. Your implementation must
+match their style exactly — error handling patterns, naming conventions, struct
+layout, test structure. Do not introduce new patterns when existing ones serve
+the same purpose.
+
 Implement each task from the plan, in dependency order. For each task:
 
 1. **Read the relevant files** to understand current state.
 2. **Make the changes** described in the task.
-3. **Follow repo conventions** — formatting, naming, patterns.
-4. **Write or update tests** as specified in the plan.
+3. **Match existing patterns** — use the same error wrapping, naming, and
+   interface conventions as the surrounding code.
+4. **Follow repo conventions** — formatting, naming, patterns.
+5. **Write or update tests** as specified in the plan.
 {{- if .Config.Formatter}}
-5. **Run the formatter** if configured: `{{.Config.Formatter}}`
+6. **Run the formatter** if configured: `{{.Config.Formatter}}`
 {{- end}}
 {{- if .Config.TestCommand}}
-6. **Run the tests** if configured: `{{.Config.TestCommand}}`
+7. **Run the tests** if configured: `{{.Config.TestCommand}}`
 {{- end}}
-7. **Commit** with a descriptive message referencing the ticket key.
+8. **Commit** with a descriptive message referencing the ticket key.
 
 After all tasks are complete:
 
