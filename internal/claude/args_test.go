@@ -131,3 +131,23 @@ func TestBuildArgs(t *testing.T) {
 		})
 	}
 }
+
+func TestCompareCLIVersions(t *testing.T) {
+	tests := []struct {
+		a, b string
+		want int
+	}{
+		{"2.1.81", "2.1.81", 0},  // equal versions
+		{"2.1.80", "2.1.81", -1}, // patch-level less
+		{"2.1.82", "2.1.81", 1},  // patch-level greater
+		{"2.0.100", "2.1.0", -1}, // minor boundary crossing
+		{"3.0.0", "2.99.99", 1},  // major boundary crossing
+		{"1.0.0", "2.1.81", -1},  // large version gap
+	}
+	for _, tt := range tests {
+		got := compareCLIVersions(tt.a, tt.b)
+		if got != tt.want {
+			t.Errorf("compareCLIVersions(%q, %q) = %d, want %d", tt.a, tt.b, got, tt.want)
+		}
+	}
+}
