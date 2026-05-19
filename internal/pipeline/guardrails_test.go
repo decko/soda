@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -2651,6 +2654,178 @@ func TestEngine_ImplementNoChanges_CommitsOnlyAllowed(t *testing.T) {
 
 	if err := engine2.Resume(context.Background(), "implement"); err != nil {
 		t.Fatalf("rework with commits-only should succeed, got: %v", err)
+	}
+}
+
+func TestEngine_ImplementCommitMismatch_GateFires(t *testing.T) {
+	// When implement reports commits but no actual commits exist ahead of the
+	// base branch (0 commits ahead), the gate should fire with a PhaseGateError
+	// and emit EventImplementCommitMismatch.
+	phases := []PhaseConfig{
+		{
+			Name:   "implement",
+			Prompt: "implement.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {{
+				result: &runner.RunResult{
+					Output: json.RawMessage(`{
+						"tests_passed": true,
+						"ticket_key": "TEST-1",
+						"branch": "soda/TEST-1",
+						"commits": [{"hash": "abc123", "message": "fake commit", "task_id": "T1"}],
+						"files_changed": [{"path": "handler.go", "action": "modified"}],
+						"task_results": [{"task_id": "T1", "status": "completed"}]
+					}`),
+					RawText: "Implementation done",
+					CostUSD: 0.50,
+				},
+			}},
+		},
+	}
+
+	var events []Event
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		// Use a real git repo as workDir so CommitsAheadOfBase succeeds.
+		gitDir := t.TempDir()
+		initGitRepo(t, gitDir)
+		cfg.WorkDir = gitDir
+		cfg.BaseBranch = "main"
+		cfg.OnEvent = func(ev Event) {
+			events = append(events, ev)
+		}
+	})
+
+	err := engine.Run(context.Background())
+	if err == nil {
+		t.Fatal("expected PhaseGateError for commit mismatch")
+	}
+
+	var gateErr *PhaseGateError
+	if !errors.As(err, &gateErr) {
+		t.Fatalf("expected PhaseGateError, got: %v", err)
+	}
+	if gateErr.Phase != "implement" {
+		t.Errorf("gate error phase = %q, want %q", gateErr.Phase, "implement")
+	}
+	if !strings.Contains(gateErr.Reason, "fabricated") {
+		t.Errorf("gate error reason should mention fabricated, got: %q", gateErr.Reason)
+	}
+
+	hasMismatchEvent := false
+	for _, ev := range events {
+		if ev.Kind == EventImplementCommitMismatch {
+			hasMismatchEvent = true
+			if ev.Phase != "implement" {
+				t.Errorf("mismatch event phase = %q, want %q", ev.Phase, "implement")
+			}
+		}
+	}
+	if !hasMismatchEvent {
+		t.Error("EventImplementCommitMismatch event not emitted")
+	}
+}
+
+func TestEngine_ImplementCommitMismatch_RealCommitsPass(t *testing.T) {
+	// When implement reports commits and actual commits exist ahead of the
+	// base branch (1+ commits ahead), the gate should NOT fire.
+	phases := []PhaseConfig{
+		{
+			Name:   "implement",
+			Prompt: "implement.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	gitDir := t.TempDir()
+	initGitRepo(t, gitDir)
+
+	// Create a branch with a real commit ahead of main.
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = gitDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v: %s: %v", args, out, err)
+		}
+	}
+	runGit("git", "checkout", "-b", "soda/TEST-1")
+	if err := os.WriteFile(filepath.Join(gitDir, "new.go"), []byte("package main\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	runGit("git", "add", "new.go")
+	runGit("git", "commit", "-m", "feat: real commit")
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {{
+				result: &runner.RunResult{
+					Output: json.RawMessage(`{
+						"tests_passed": true,
+						"ticket_key": "TEST-1",
+						"branch": "soda/TEST-1",
+						"commits": [{"hash": "abc123", "message": "feat: real commit", "task_id": "T1"}],
+						"files_changed": [{"path": "new.go", "action": "created"}],
+						"task_results": [{"task_id": "T1", "status": "completed"}]
+					}`),
+					RawText: "Implementation done",
+					CostUSD: 0.50,
+				},
+			}},
+		},
+	}
+
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.WorkDir = gitDir
+		cfg.BaseBranch = "main"
+	})
+
+	err := engine.Run(context.Background())
+	if err != nil {
+		t.Fatalf("expected no error when real commits exist, got: %v", err)
+	}
+}
+
+func TestEngine_ImplementCommitMismatch_NonGitWorkDir(t *testing.T) {
+	// When the workDir is not a git repo, CommitsAheadOfBase returns an error
+	// and the gate should gracefully pass (no false positives).
+	phases := []PhaseConfig{
+		{
+			Name:   "implement",
+			Prompt: "implement.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"implement": {{
+				result: &runner.RunResult{
+					Output: json.RawMessage(`{
+						"tests_passed": true,
+						"ticket_key": "TEST-1",
+						"branch": "soda/TEST-1",
+						"commits": [{"hash": "abc123", "message": "some commit", "task_id": "T1"}],
+						"files_changed": [{"path": "handler.go", "action": "modified"}],
+						"task_results": [{"task_id": "T1", "status": "completed"}]
+					}`),
+					RawText: "Implementation done",
+					CostUSD: 0.50,
+				},
+			}},
+		},
+	}
+
+	// WorkDir defaults to a plain temp dir (not a git repo) from setupEngine.
+	engine, _ := setupEngine(t, phases, mock)
+
+	err := engine.Run(context.Background())
+	if err != nil {
+		t.Fatalf("expected no error in non-git workDir, got: %v", err)
 	}
 }
 
