@@ -491,7 +491,7 @@ func (e *Engine) runParallelReview(ctx context.Context, phase PhaseConfig) error
 	})
 
 	// Domain gating.
-	return e.gatePhase(phase)
+	return e.gatePhase(ctx, phase)
 }
 
 // runReviewer executes a single specialist reviewer, sending events and results

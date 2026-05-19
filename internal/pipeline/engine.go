@@ -445,7 +445,7 @@ func (e *Engine) executePhases(ctx context.Context, phases []PhaseConfig, forceF
 
 			skipCheck := !(forceFirst && idx == 0)
 			if skipCheck && e.shouldSkip(phase) {
-				if err := e.gatePhase(phase); err != nil {
+				if err := e.gatePhase(ctx, phase); err != nil {
 					// Handle rework signal on skipped phases — can occur on
 					// Run() re-entry when a prior rework crashed mid-cycle.
 					var reworkSig *reworkSignal
@@ -930,7 +930,7 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 	})
 
 	// Domain gating.
-	if err := e.gatePhase(phase); err != nil {
+	if err := e.gatePhase(ctx, phase); err != nil {
 		var gateErr *PhaseGateError
 		if errors.As(err, &gateErr) {
 			_ = e.state.SetFailureCategory(phase.Name, "gate")

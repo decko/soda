@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -97,7 +98,7 @@ func (e *Engine) checkPhaseBudget(phase PhaseConfig) error {
 }
 
 // gatePhase checks domain-specific rules after a phase completes.
-func (e *Engine) gatePhase(phase PhaseConfig) error {
+func (e *Engine) gatePhase(ctx context.Context, phase PhaseConfig) error {
 	raw, err := e.state.ReadResult(phase.Name)
 	if err != nil {
 		// No result means no gating rules apply.
