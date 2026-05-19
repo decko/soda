@@ -212,6 +212,14 @@ After all tasks are complete:
 
 Do NOT skip tasks. Do NOT combine tasks into a single commit.
 If a task cannot be completed, explain why and move to the next.
+
+**IMPORTANT — Commit verification:** Before reporting your results, run
+`git log {{.BaseBranch}}..HEAD` and verify that your commits actually appear.
+Every commit hash you report **must** exist in the output of that command.
+If the worktree already contains files from a prior timed-out attempt, run
+`git status` to assess the state, make any necessary changes, and create fresh
+commits — do not report stale or nonexistent hashes. The pipeline will reject
+your output if reported commits do not match actual git history.
 {{- if .ReworkFeedback}}
 
 **IMPORTANT — Rework cycle:** You are re-running because reviewers or verification

@@ -1,9 +1,12 @@
 package pipeline
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/decko/soda/internal/git"
 )
 
 // checkBudget verifies the pipeline has budget remaining before running a phase.
@@ -97,7 +100,7 @@ func (e *Engine) checkPhaseBudget(phase PhaseConfig) error {
 }
 
 // gatePhase checks domain-specific rules after a phase completes.
-func (e *Engine) gatePhase(phase PhaseConfig) error {
+func (e *Engine) gatePhase(ctx context.Context, phase PhaseConfig) error {
 	raw, err := e.state.ReadResult(phase.Name)
 	if err != nil {
 		// No result means no gating rules apply.
@@ -196,6 +199,34 @@ func (e *Engine) gatePhase(phase PhaseConfig) error {
 				}
 			}
 		}
+		// Fake-commit detection: when the LLM reports commits in its JSON
+		// output but no actual commits exist ahead of the base branch, the
+		// hashes are fabricated. Gate with a clear error so the pipeline
+		// does not silently proceed with phantom work.
+		if len(result.Commits) > 0 {
+			baseBranch := e.config.BaseBranch
+			if baseBranch == "" {
+				baseBranch = "main"
+			}
+			ahead, gitErr := git.CommitsAheadOfBase(ctx, e.workDir(phase), baseBranch)
+			if gitErr == nil && ahead == 0 {
+				e.emit(Event{
+					Phase: phase.Name,
+					Kind:  EventImplementCommitMismatch,
+					Data: map[string]any{
+						"reported_commits": len(result.Commits),
+						"actual_ahead":     ahead,
+					},
+				})
+				return &PhaseGateError{
+					Phase:  phase.Name,
+					Reason: "implement reported commits but none exist ahead of base branch — likely fabricated",
+				}
+			}
+			// If the git call errors (e.g., non-git workDir, missing base ref),
+			// silently proceed to avoid false positives.
+		}
+
 		// Proceed to verify regardless — verify will catch test failures.
 
 	case "verify":
