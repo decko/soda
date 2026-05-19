@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -195,6 +196,22 @@ func DeleteRemoteBranch(ctx context.Context, repoDir, remote, branch string) err
 		return fmt.Errorf("git: delete remote branch %s/%s: %s: %w", remote, branch, strings.TrimSpace(outStr), err)
 	}
 	return nil
+}
+
+// CommitsAheadOfBase returns the number of commits on HEAD that are not
+// reachable from the given base ref. Uses "git rev-list --count base..HEAD".
+func CommitsAheadOfBase(ctx context.Context, dir, base string) (int, error) {
+	cmd := exec.CommandContext(ctx, "git", "rev-list", "--count", base+"..HEAD")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return 0, fmt.Errorf("git: rev-list --count %s..HEAD: %w", base, err)
+	}
+	count, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		return 0, fmt.Errorf("git: parse rev-list count: %w", err)
+	}
+	return count, nil
 }
 
 // Diff returns the output of "git diff <base>...HEAD" for the given

@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -512,6 +513,64 @@ func TestRebase(t *testing.T) {
 		}
 		if string(content) != "feature version" {
 			t.Errorf("shared.txt = %q, want %q (should be restored after abort)", string(content), "feature version")
+		}
+	})
+}
+
+func TestCommitsAheadOfBase(t *testing.T) {
+	t.Run("zero_commits_ahead", func(t *testing.T) {
+		repoDir := initGitRepo(t)
+
+		count, err := CommitsAheadOfBase(context.Background(), repoDir, "main")
+		if err != nil {
+			t.Fatalf("CommitsAheadOfBase: %v", err)
+		}
+		if count != 0 {
+			t.Errorf("CommitsAheadOfBase = %d, want 0", count)
+		}
+	})
+
+	t.Run("one_commit_ahead", func(t *testing.T) {
+		repoDir := initGitRepo(t)
+
+		run(t, repoDir, "git", "checkout", "-b", "feat/ahead")
+		writeFile(t, repoDir, "new.txt", "content")
+		run(t, repoDir, "git", "add", "new.txt")
+		run(t, repoDir, "git", "commit", "-m", "add new file")
+
+		count, err := CommitsAheadOfBase(context.Background(), repoDir, "main")
+		if err != nil {
+			t.Fatalf("CommitsAheadOfBase: %v", err)
+		}
+		if count != 1 {
+			t.Errorf("CommitsAheadOfBase = %d, want 1", count)
+		}
+	})
+
+	t.Run("multiple_commits_ahead", func(t *testing.T) {
+		repoDir := initGitRepo(t)
+
+		run(t, repoDir, "git", "checkout", "-b", "feat/multi")
+		for idx := 0; idx < 3; idx++ {
+			writeFile(t, repoDir, fmt.Sprintf("file%d.txt", idx), "content")
+			run(t, repoDir, "git", "add", ".")
+			run(t, repoDir, "git", "commit", "-m", fmt.Sprintf("commit %d", idx))
+		}
+
+		count, err := CommitsAheadOfBase(context.Background(), repoDir, "main")
+		if err != nil {
+			t.Fatalf("CommitsAheadOfBase: %v", err)
+		}
+		if count != 3 {
+			t.Errorf("CommitsAheadOfBase = %d, want 3", count)
+		}
+	})
+
+	t.Run("errors_outside_git_repo", func(t *testing.T) {
+		dir := t.TempDir()
+		_, err := CommitsAheadOfBase(context.Background(), dir, "main")
+		if err == nil {
+			t.Fatal("expected error outside git repo")
 		}
 	})
 }
