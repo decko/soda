@@ -250,9 +250,10 @@ func checkClaudeVersion(env *doctorEnv) checkResult {
 
 	if compareSemver(ver, claude.MaxTestedCLIVersion) > 0 {
 		return checkResult{
-			name:   "claude-version",
-			passed: true,
-			detail: fmt.Sprintf("%s ⚠ newer than tested range (%s–%s); to pin: npm install -g @anthropic-ai/claude-code@%s", out, claude.MinCLIVersion, claude.MaxTestedCLIVersion, claude.MaxTestedCLIVersion),
+			name:     "claude-version",
+			passed:   true,
+			required: true,
+			detail:   fmt.Sprintf("%s ⚠ newer than tested range (%s–%s); to pin: npm install -g @anthropic-ai/claude-code@%s", out, claude.MinCLIVersion, claude.MaxTestedCLIVersion, claude.MaxTestedCLIVersion),
 		}
 	}
 

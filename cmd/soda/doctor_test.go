@@ -326,8 +326,8 @@ func TestCheckClaudeVersion_AboveMax(t *testing.T) {
 	if !r.passed {
 		t.Error("expected claude-version check to pass (warning only) for version above max")
 	}
-	if r.required {
-		t.Error("expected claude-version check to be non-required for version above max")
+	if !r.required {
+		t.Error("expected claude-version check to be required for version above max")
 	}
 	if !strings.Contains(r.detail, "⚠") {
 		t.Errorf("expected ⚠ in detail for untested version, got: %q", r.detail)
