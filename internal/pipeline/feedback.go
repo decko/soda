@@ -248,22 +248,20 @@ func (e *Engine) extractReviewFeedback() *ReworkFeedback {
 		return severityRank(result.Findings[i].Severity) < severityRank(result.Findings[j].Severity)
 	})
 
-	// Validate and default categories: invalid or empty → "unknown".
-	for idx := range result.Findings {
-		if !validCategory(result.Findings[idx].Category) {
-			result.Findings[idx].Category = "unknown"
-		}
-	}
-
 	workDir := e.workDir(PhaseConfig{})
 	budgetRemaining := maxFeedbackContextBytes
 	rawCache := make(map[string]string) // file path → raw file content
 
-	// Only include critical and major findings, enriched with code context.
+	// Only include critical and major findings; validate category then enrich with code context.
 	for _, finding := range result.Findings {
 		sev := strings.ToLower(finding.Severity)
 		if sev != "critical" && sev != "major" {
 			continue
+		}
+
+		// Validate and default category: invalid or empty → "unknown".
+		if !validCategory(finding.Category) {
+			finding.Category = "unknown"
 		}
 
 		ef := EnrichedFinding{ReviewFinding: finding}
