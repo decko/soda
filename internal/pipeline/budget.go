@@ -43,10 +43,10 @@ type reductionStep struct {
 // the compact, high-value convention checklist available as long as possible.
 //
 // The order is phase-specific:
-//   - implement: siblings → exemplars → projectContext → extras → review comments → diff → (rework) → (artifacts) → conventions
+//   - implement: siblings → exemplars → triageFiles → projectContext → extras → review comments → diff → (rework) → (artifacts) → conventions
 //   - review:    siblings → exemplars → extras → Diff → projectContext → (rework) → (artifacts) → conventions
 //   - verify:    siblings → exemplars → extras → projectContext → diff → (rework) → (artifacts)  (no conventions — verify.md never renders RepoConventions)
-//   - patch:     diff → siblings → exemplars → extras → projectContext → (rework) → (artifacts) → conventions
+//   - patch:     diff → siblings → exemplars → triageFiles → extras → projectContext → (rework) → (artifacts) → conventions
 //
 // For unknown phases a sensible default order is used (conventions always last).
 func phaseReductionOrder(phase string) []reductionStep {
