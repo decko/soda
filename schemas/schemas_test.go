@@ -362,17 +362,15 @@ func TestReviewSchema_MatchesStruct(t *testing.T) {
 	}
 
 	// category should have enum constraint.
-	var itemProps map[string]json.RawMessage
-	if err := json.Unmarshal(findingsRaw, &struct {
+	var itemWrapper struct {
 		Items struct {
-			Properties *map[string]json.RawMessage `json:"properties"`
+			Properties map[string]json.RawMessage `json:"properties"`
 		} `json:"items"`
-	}{Items: struct {
-		Properties *map[string]json.RawMessage `json:"properties"`
-	}{Properties: &itemProps}}); err != nil {
+	}
+	if err := json.Unmarshal(findingsRaw, &itemWrapper); err != nil {
 		t.Fatalf("unmarshal item properties: %v", err)
 	}
-	assertEnum(t, itemProps["category"], "string", []string{
+	assertEnum(t, itemWrapper.Items.Properties["category"], "string", []string{
 		"retrieval", "convention", "logic", "test_pattern", "documentation",
 	})
 }
