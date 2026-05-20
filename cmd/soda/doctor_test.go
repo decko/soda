@@ -1410,7 +1410,7 @@ func TestCheckCommitSigning_GPGKeyFound(t *testing.T) {
 				return "ABCDEF1234567890", nil
 			}
 		}
-		if name == "gpg" && len(args) > 0 && args[0] == "--list-keys" {
+		if name == "gpg" && len(args) > 0 && args[0] == "--list-secret-keys" {
 			return "pub   ed25519 ABCDEF1234567890", nil
 		}
 		return "", nil
@@ -1440,7 +1440,7 @@ func TestCheckCommitSigning_GPGKeyNotFound(t *testing.T) {
 				return "ABCDEF1234567890", nil
 			}
 		}
-		if name == "gpg" && len(args) > 0 && args[0] == "--list-keys" {
+		if name == "gpg" && len(args) > 0 && args[0] == "--list-secret-keys" {
 			return "", errors.New("no such key")
 		}
 		return "", nil
@@ -1659,7 +1659,7 @@ func TestCheckCommitSigning_DefaultFormatIsGPG(t *testing.T) {
 				return "ABCDEF1234567890", nil
 			}
 		}
-		if name == "gpg" && len(args) > 0 && args[0] == "--list-keys" {
+		if name == "gpg" && len(args) > 0 && args[0] == "--list-secret-keys" {
 			return "pub   ed25519 ABCDEF1234567890", nil
 		}
 		return "", nil
