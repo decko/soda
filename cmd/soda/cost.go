@@ -14,7 +14,7 @@ import (
 
 func newCostCmd() *cobra.Command {
 	var byComplexity bool
-	var byOutcomes bool
+	var byOutcome bool
 
 	cmd := &cobra.Command{
 		Use:   "cost",
@@ -28,10 +28,10 @@ func newCostCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("cost: read ledger: %w", err)
 			}
-			if byOutcomes && byComplexity {
+			if byOutcome && byComplexity {
 				return runCostByOutcomeAndComplexity(entries)
 			}
-			if byOutcomes {
+			if byOutcome {
 				return runCostByOutcome(entries)
 			}
 			if byComplexity {
@@ -42,7 +42,7 @@ func newCostCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&byComplexity, "by-complexity", false, "Show cost breakdown grouped by triage complexity band")
-	cmd.Flags().BoolVar(&byOutcomes, "outcomes", false, "Show cost breakdown grouped by pipeline outcome")
+	cmd.Flags().BoolVar(&byOutcome, "by-outcome", false, "Show cost breakdown grouped by pipeline outcome")
 	return cmd
 }
 

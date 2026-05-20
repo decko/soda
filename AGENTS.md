@@ -697,6 +697,7 @@ If yes, include a "Docs to update" section in the issue body listing the files t
 | `soda validate` | Check config, phases, and prompts for errors without running |
 | `soda cost` | Show cumulative cost breakdown across all sessions |
 | `soda cost --by-complexity` | Show cost breakdown grouped by triage complexity band |
+| `soda cost --by-outcome` | Show cost breakdown grouped by pipeline outcome |
 | `soda plugin install [--global] [--force]` | Install the SODA Claude Code plugin |
 | `soda plugin uninstall [--global]` | Remove the SODA Claude Code plugin |
 | `soda spec <description>` | Generate a ticket specification from a short description |
