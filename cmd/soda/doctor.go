@@ -627,16 +627,16 @@ func resolveSSHKeyPath(env *doctorEnv, keyPath string) string {
 }
 
 // checkCommitSigningGPG verifies that the configured GPG signing key
-// exists in the local keyring.
+// exists in the local secret keyring.
 func checkCommitSigningGPG(env *doctorEnv, signingKey string) checkResult {
-	_, err := env.RunCmd("gpg", "--list-keys", signingKey)
+	_, err := env.RunCmd("gpg", "--list-secret-keys", signingKey)
 	if err != nil {
 		return checkResult{
 			name:     "commit-signing",
 			passed:   false,
 			required: true,
 			detail:   fmt.Sprintf("commit signing enabled (gpg) but key %s not found in keyring", signingKey),
-			fix:      "ensure your GPG key is imported: gpg --list-keys",
+			fix:      "ensure your GPG key is imported: gpg --list-secret-keys",
 		}
 	}
 	return checkResult{
