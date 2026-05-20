@@ -1097,6 +1097,43 @@ func TestCapToLine(t *testing.T) {
 	})
 }
 
+func TestValidCategory_CoversSchemaEnum(t *testing.T) {
+	// Parse ReviewSchema to extract the category enum from
+	// findings → items → properties → category → enum.
+	var parsed struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+	}
+	if err := json.Unmarshal([]byte(schemas.ReviewSchema), &parsed); err != nil {
+		t.Fatalf("unmarshal ReviewSchema: %v", err)
+	}
+
+	var findings struct {
+		Items struct {
+			Properties map[string]json.RawMessage `json:"properties"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(parsed.Properties["findings"], &findings); err != nil {
+		t.Fatalf("unmarshal findings: %v", err)
+	}
+
+	var category struct {
+		Enum []string `json:"enum"`
+	}
+	if err := json.Unmarshal(findings.Items.Properties["category"], &category); err != nil {
+		t.Fatalf("unmarshal category: %v", err)
+	}
+
+	if len(category.Enum) == 0 {
+		t.Fatal("category enum is empty — schema navigation may be broken")
+	}
+
+	for _, categoryValue := range category.Enum {
+		if !validCategory(categoryValue) {
+			t.Errorf("validCategory(%q) = false, but %q is in the ReviewSchema category enum", categoryValue, categoryValue)
+		}
+	}
+}
+
 func TestExtractSnippet(t *testing.T) {
 	content := "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n"
 
