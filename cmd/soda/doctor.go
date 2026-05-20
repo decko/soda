@@ -104,6 +104,7 @@ func runDoctor(w io.Writer, env *doctorEnv) error {
 		checkGh,
 		checkGhAuth,
 		checkBranchProtection,
+		checkCommitSigning,
 		checkNode,
 	}
 
@@ -494,6 +495,170 @@ func checkBranchProtection(env *doctorEnv) checkResult {
 		name:   "branch-protection",
 		passed: true,
 		detail: "no dismiss_stale_reviews on main",
+	}
+}
+
+// checkCommitSigning verifies that git commit signing is configured and
+// that the signing key is reachable. Supports both GPG and SSH formats.
+//
+// Not configured (commit.gpgsign != "true") → warn (optional).
+// Configured but key unreachable → fail (required).
+//
+// Skipped when git is not found or not inside a git repository.
+func checkCommitSigning(env *doctorEnv) checkResult {
+	if _, err := env.LookPath("git"); err != nil {
+		return checkResult{
+			name:    "commit-signing",
+			skipped: true,
+			detail:  "skipped (git not found)",
+		}
+	}
+
+	if _, err := env.RunCmd("git", "rev-parse", "--git-dir"); err != nil {
+		return checkResult{
+			name:    "commit-signing",
+			skipped: true,
+			detail:  "skipped (not a git repository)",
+		}
+	}
+
+	// Check whether commit signing is enabled.
+	gpgsign, err := env.RunCmd("git", "config", "commit.gpgsign")
+	if err != nil || gpgsign != "true" {
+		return checkResult{
+			name:   "commit-signing",
+			passed: false,
+			detail: "commit signing is not enabled",
+			fix:    "run: git config --global commit.gpgsign true",
+		}
+	}
+
+	// Determine signing format (default is "gpg").
+	format, _ := env.RunCmd("git", "config", "gpg.format")
+	if format == "" {
+		format = "gpg"
+	}
+
+	// Get the signing key.
+	signingKey, err := env.RunCmd("git", "config", "user.signingkey")
+	if err != nil || signingKey == "" {
+		return checkResult{
+			name:     "commit-signing",
+			passed:   false,
+			required: true,
+			detail:   fmt.Sprintf("commit signing enabled (%s) but user.signingkey is not set", format),
+			fix:      fmt.Sprintf("run: git config --global user.signingkey <your-%s-key>", format),
+		}
+	}
+
+	// Verify key reachability based on format.
+	if format == "ssh" {
+		return checkCommitSigningSSH(env, signingKey)
+	}
+	return checkCommitSigningGPG(env, signingKey)
+}
+
+// checkCommitSigningSSH verifies that the configured SSH signing key is
+// loaded in the ssh-agent. Handles both file paths and key:: inline keys.
+func checkCommitSigningSSH(env *doctorEnv, signingKey string) checkResult {
+	if _, err := env.LookPath("ssh-add"); err != nil {
+		return checkResult{
+			name:    "commit-signing",
+			passed:  true,
+			skipped: true,
+			detail:  "ssh-add not found in PATH, skipping commit-signing check",
+		}
+	}
+	// Handle key:: inline format — any loaded key is a pass.
+	if strings.HasPrefix(signingKey, "key::") {
+		out, err := env.RunCmd("ssh-add", "-l")
+		if err != nil || strings.Contains(strings.ToLower(out), "no identities") {
+			return checkResult{
+				name:     "commit-signing",
+				passed:   false,
+				required: true,
+				detail:   "commit signing enabled (ssh, inline key) but ssh-agent has no identities",
+				fix:      "run: ssh-add",
+			}
+		}
+		return checkResult{
+			name:   "commit-signing",
+			passed: true,
+			detail: "ssh signing configured (inline key, agent has keys)",
+		}
+	}
+
+	// File-based key: resolve path and match against ssh-add -l output.
+	keyPath := resolveSSHKeyPath(env, signingKey)
+
+	out, err := env.RunCmd("ssh-add", "-l")
+	if err != nil {
+		return checkResult{
+			name:     "commit-signing",
+			passed:   false,
+			required: true,
+			detail:   "commit signing enabled (ssh) but ssh-agent is not available",
+			fix:      "run: eval $(ssh-agent) && ssh-add",
+		}
+	}
+
+	// ssh-add -l outputs lines like:
+	//   256 SHA256:abc... /home/user/.ssh/id_ed25519 (ED25519)
+	// Match the resolved private key path (without .pub suffix).
+	if strings.Contains(out, keyPath) {
+		return checkResult{
+			name:   "commit-signing",
+			passed: true,
+			detail: fmt.Sprintf("ssh signing configured (key: %s)", signingKey),
+		}
+	}
+
+	return checkResult{
+		name:     "commit-signing",
+		passed:   false,
+		required: true,
+		detail:   fmt.Sprintf("commit signing enabled (ssh) but key %s not found in ssh-agent", signingKey),
+		fix:      fmt.Sprintf("run: ssh-add %s", keyPath),
+	}
+}
+
+// resolveSSHKeyPath expands ~ to the user's home directory and strips
+// the .pub suffix so the path matches ssh-add -l output (which shows
+// private key paths).
+func resolveSSHKeyPath(env *doctorEnv, keyPath string) string {
+	if strings.HasPrefix(keyPath, "~/") {
+		if home, err := env.UserHomeDir(); err == nil {
+			keyPath = filepath.Join(home, keyPath[2:])
+		}
+	}
+	return strings.TrimSuffix(keyPath, ".pub")
+}
+
+// checkCommitSigningGPG verifies that the configured GPG signing key
+// exists in the local secret keyring.
+func checkCommitSigningGPG(env *doctorEnv, signingKey string) checkResult {
+	if _, err := env.LookPath("gpg"); err != nil {
+		return checkResult{
+			name:    "commit-signing",
+			passed:  true,
+			skipped: true,
+			detail:  "gpg not found in PATH, skipping commit-signing check",
+		}
+	}
+	_, err := env.RunCmd("gpg", "--list-secret-keys", signingKey)
+	if err != nil {
+		return checkResult{
+			name:     "commit-signing",
+			passed:   false,
+			required: true,
+			detail:   fmt.Sprintf("commit signing enabled (gpg) but key %s not found in keyring", signingKey),
+			fix:      "ensure your GPG key is imported: gpg --list-secret-keys",
+		}
+	}
+	return checkResult{
+		name:   "commit-signing",
+		passed: true,
+		detail: fmt.Sprintf("gpg signing configured (key: %s)", signingKey),
 	}
 }
 
