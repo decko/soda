@@ -504,6 +504,11 @@ func TestClassifyOutcome(t *testing.T) {
 			expected: "rework_2+",
 		},
 		{
+			name:     "escalated with rework=1 stays rework_1",
+			entry:    CostEntry{Success: true, Escalated: true, ReworkCycles: 1},
+			expected: "rework_1",
+		},
+		{
 			name:     "rework overrides patch",
 			entry:    CostEntry{Success: true, ReworkCycles: 1, PatchCycles: 3},
 			expected: "rework_1",
