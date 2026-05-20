@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -367,10 +368,18 @@ func TestRetry_FailureCategoryOnExhaustion(t *testing.T) {
 		t.Fatal("expected error from exhausted retries")
 	}
 
-	ps := state.Meta().Phases["triage"]
-	if ps.FailureCategory != "transient" {
-		t.Errorf("FailureCategory = %q, want %q", ps.FailureCategory, "transient")
+	var re *RetriesExhaustedError
+	if !errors.As(err, &re) {
+		t.Fatalf("expected *RetriesExhaustedError, got %T", err)
 	}
+	if re.Category != "transient" {
+		t.Errorf("RetriesExhaustedError.Category = %q, want %q", re.Category, "transient")
+	}
+	if re.Attempts != 2 {
+		t.Errorf("RetriesExhaustedError.Attempts = %d, want 2", re.Attempts)
+	}
+
+	ps := state.Meta().Phases["triage"]
 	if ps.TransientRetries != 1 {
 		t.Errorf("TransientRetries = %d, want 1 (one successful retry before exhaustion)", ps.TransientRetries)
 	}
