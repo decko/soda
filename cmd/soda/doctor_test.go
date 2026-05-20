@@ -1672,3 +1672,69 @@ func TestCheckCommitSigning_DefaultFormatIsGPG(t *testing.T) {
 		t.Errorf("expected detail to mention gpg, got: %q", r.detail)
 	}
 }
+
+func TestCheckCommitSigning_SkippedWhenGpgMissing(t *testing.T) {
+	env := allPassEnv()
+	env.RunCmd = func(name string, args ...string) (string, error) {
+		if name == "git" && len(args) > 0 && args[0] == "rev-parse" {
+			return ".git", nil
+		}
+		if name == "git" && len(args) > 1 && args[0] == "config" {
+			switch args[1] {
+			case "commit.gpgsign":
+				return "true", nil
+			case "gpg.format":
+				return "gpg", nil
+			case "user.signingkey":
+				return "ABCDEF1234567890", nil
+			}
+		}
+		return "", nil
+	}
+	env.LookPath = func(file string) (string, error) {
+		if file == "gpg" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + file, nil
+	}
+	r := checkCommitSigning(env)
+	if !r.skipped {
+		t.Errorf("expected commit-signing to be skipped when gpg is missing, got: %+v", r)
+	}
+	if r.required {
+		t.Error("expected skipped check to not be required (fail)")
+	}
+}
+
+func TestCheckCommitSigning_SkippedWhenSSHAddMissing(t *testing.T) {
+	env := allPassEnv()
+	env.RunCmd = func(name string, args ...string) (string, error) {
+		if name == "git" && len(args) > 0 && args[0] == "rev-parse" {
+			return ".git", nil
+		}
+		if name == "git" && len(args) > 1 && args[0] == "config" {
+			switch args[1] {
+			case "commit.gpgsign":
+				return "true", nil
+			case "gpg.format":
+				return "ssh", nil
+			case "user.signingkey":
+				return "~/.ssh/id_ed25519.pub", nil
+			}
+		}
+		return "", nil
+	}
+	env.LookPath = func(file string) (string, error) {
+		if file == "ssh-add" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + file, nil
+	}
+	r := checkCommitSigning(env)
+	if !r.skipped {
+		t.Errorf("expected commit-signing to be skipped when ssh-add is missing, got: %+v", r)
+	}
+	if r.required {
+		t.Error("expected skipped check to not be required (fail)")
+	}
+}
