@@ -171,9 +171,6 @@ func runCostByComplexity(entries []pipeline.CostEntry) error {
 	// Also consider footer widths.
 	footerSessions := fmt.Sprintf("%d", totalSessions)
 	footerTotal := fmt.Sprintf("$%.2f", totalCost)
-	if len("TOTAL") > colW[0] {
-		colW[0] = len("TOTAL")
-	}
 	if len(footerSessions) > colW[1] {
 		colW[1] = len(footerSessions)
 	}
@@ -277,9 +274,6 @@ func runCostByOutcome(entries []pipeline.CostEntry) error {
 	// Consider footer widths.
 	footerSessions := fmt.Sprintf("%d", totalSessions)
 	footerTotal := fmt.Sprintf("$%.2f", totalCost)
-	if len("TOTAL") > colW[0] {
-		colW[0] = len("TOTAL")
-	}
 	if len(footerSessions) > colW[1] {
 		colW[1] = len(footerSessions)
 	}
