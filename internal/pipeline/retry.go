@@ -39,7 +39,6 @@ func (e *Engine) runWithRetry(ctx context.Context, phase PhaseConfig, opts runne
 
 		left, tracked := remaining[category]
 		if !tracked || left <= 0 {
-			_ = e.state.SetFailureCategory(phase.Name, category)
 			return nil, &RetriesExhaustedError{
 				Phase:    phase.Name,
 				Category: category,
