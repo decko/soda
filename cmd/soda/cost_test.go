@@ -319,6 +319,24 @@ func TestRunCostByOutcome_ReworkTaxAbsent(t *testing.T) {
 	}
 }
 
+func TestRunCostByOutcome_ZeroFirstPassMeanSuppressesReworkTax(t *testing.T) {
+	entries := []pipeline.CostEntry{
+		{Ticket: "T-1", Cost: 0.00, Success: true},                   // first_pass with zero cost
+		{Ticket: "T-2", Cost: 10.00, Success: true, ReworkCycles: 1}, // rework_1
+	}
+
+	output, err := captureStdout(t, func() error {
+		return runCostByOutcome(entries)
+	})
+	if err != nil {
+		t.Fatalf("runCostByOutcome error: %v", err)
+	}
+
+	if strings.Contains(output, "Rework tax:") {
+		t.Errorf("should not show rework tax when first_pass mean is zero:\n%s", output)
+	}
+}
+
 func TestRunCostByOutcomeAndComplexity_Empty(t *testing.T) {
 	output, err := captureStdout(t, func() error {
 		return runCostByOutcomeAndComplexity(nil)
