@@ -395,18 +395,16 @@ func TestRenderEventsHistory_FailureCategoryTimeoutOverride(t *testing.T) {
 		},
 	}
 
-	// The EventPhaseFailed event was emitted with failure_category="context"
-	// by emitPhaseFailed, but wrapTimeoutError later overwrites the state to
-	// "timeout". When the event carries "context", the fallback should NOT
-	// overwrite it (event-sourced value wins). But if the event doesn't carry
-	// failure_category at all, the meta fallback should fill it.
+	// The event has no failure_category; meta carries "timeout" (set by
+	// wrapTimeoutError after the event was emitted). The enrichment loop
+	// should fill it from meta.
 	events := []pipeline.Event{
 		{Phase: "implement", Kind: pipeline.EventPhaseStarted, Data: map[string]any{"generation": float64(1)}},
 		{Phase: "implement", Kind: pipeline.EventPhaseFailed, Data: map[string]any{
 			"error":       "context deadline exceeded",
 			"duration_ms": float64(60000),
 			"cost":        1.00,
-			// No failure_category in event — meta fallback should fill "timeout"
+			// No failure_category in event — meta should fill "timeout"
 		}},
 	}
 
@@ -485,5 +483,64 @@ func TestRenderEventsHistory_FailureCategoryEventPreserved(t *testing.T) {
 	count := strings.Count(output, "Failure Category:")
 	if count != 1 {
 		t.Errorf("'Failure Category:' should appear exactly once, appeared %d times\ngot:\n%s", count, output)
+	}
+}
+
+// TestRenderEventsHistory_FailureCategoryContextToTimeout verifies that when
+// the event carries failure_category="context" (set by emitPhaseFailed) but
+// meta.Phases has "timeout" (set by wrapTimeoutError after the event), the
+// meta value "timeout" takes precedence because it reflects the post-processed
+// classification.
+func TestRenderEventsHistory_FailureCategoryContextToTimeout(t *testing.T) {
+	dir := t.TempDir()
+
+	meta := &pipeline.PipelineMeta{
+		Ticket:    "TEST-CTX-TIMEOUT",
+		TotalCost: 1.50,
+		Phases: map[string]*pipeline.PhaseState{
+			"implement": {
+				Status:          pipeline.PhaseFailed,
+				Cost:            1.50,
+				FailureCategory: "timeout", // wrapTimeoutError overwrites "context" → "timeout"
+			},
+		},
+	}
+
+	// The EventPhaseFailed event carries failure_category="context" because
+	// emitPhaseFailed sees a context error. wrapTimeoutError later corrects
+	// the meta to "timeout", but the event is already written.
+	events := []pipeline.Event{
+		{Phase: "implement", Kind: pipeline.EventPhaseStarted, Data: map[string]any{"generation": float64(1)}},
+		{Phase: "implement", Kind: pipeline.EventPhaseFailed, Data: map[string]any{
+			"error":            "context deadline exceeded",
+			"duration_ms":      float64(60000),
+			"cost":             1.50,
+			"failure_category": "context", // event-sourced — should be overridden by meta
+		}},
+	}
+
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	err := renderEventsHistory(meta, events, dir, true /* detail */, "" /* phaseFilter */)
+
+	w.Close()
+	os.Stdout = old
+
+	var buf bytes.Buffer
+	_, _ = buf.ReadFrom(r)
+	output := buf.String()
+
+	if err != nil {
+		t.Fatalf("renderEventsHistory error: %v", err)
+	}
+
+	if !strings.Contains(output, "Failure Category: timeout") {
+		t.Errorf("detail output should contain 'Failure Category: timeout' (meta overrides event 'context')\ngot:\n%s", output)
+	}
+
+	if strings.Contains(output, "Failure Category: context") {
+		t.Errorf("detail output should NOT contain 'Failure Category: context' (meta should override)\ngot:\n%s", output)
 	}
 }
