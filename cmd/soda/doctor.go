@@ -561,6 +561,14 @@ func checkCommitSigning(env *doctorEnv) checkResult {
 // checkCommitSigningSSH verifies that the configured SSH signing key is
 // loaded in the ssh-agent. Handles both file paths and key:: inline keys.
 func checkCommitSigningSSH(env *doctorEnv, signingKey string) checkResult {
+	if _, err := env.LookPath("ssh-add"); err != nil {
+		return checkResult{
+			name:    "commit-signing",
+			passed:  true,
+			skipped: true,
+			detail:  "ssh-add not found in PATH, skipping commit-signing check",
+		}
+	}
 	// Handle key:: inline format — any loaded key is a pass.
 	if strings.HasPrefix(signingKey, "key::") {
 		out, err := env.RunCmd("ssh-add", "-l")
