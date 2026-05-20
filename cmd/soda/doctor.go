@@ -629,6 +629,14 @@ func resolveSSHKeyPath(env *doctorEnv, keyPath string) string {
 // checkCommitSigningGPG verifies that the configured GPG signing key
 // exists in the local secret keyring.
 func checkCommitSigningGPG(env *doctorEnv, signingKey string) checkResult {
+	if _, err := env.LookPath("gpg"); err != nil {
+		return checkResult{
+			name:    "commit-signing",
+			passed:  true,
+			skipped: true,
+			detail:  "gpg not found in PATH, skipping commit-signing check",
+		}
+	}
 	_, err := env.RunCmd("gpg", "--list-secret-keys", signingKey)
 	if err != nil {
 		return checkResult{
