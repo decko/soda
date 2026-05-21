@@ -47,6 +47,8 @@ type pipelineOpts struct {
 	transcript        string // CLI override: "tools", "full", or "off"
 	transcriptChanged bool   // true when --transcript was explicitly passed
 	force             bool   // override schema version mismatch checks
+	maxCost           float64
+	maxCostChanged    bool // true when --max-cost was explicitly passed
 }
 
 // pipelineOptsFromCmd extracts pipelineOpts from Cobra flags registered on the
@@ -61,6 +63,7 @@ func pipelineOptsFromCmd(cmd *cobra.Command, ticketKey string) pipelineOpts {
 	useTUI, _ := cmd.Flags().GetBool("tui")
 	transcript, _ := cmd.Flags().GetString("transcript")
 	force, _ := cmd.Flags().GetBool("force")
+	maxCost, _ := cmd.Flags().GetFloat64("max-cost")
 
 	return pipelineOpts{
 		ticketKey:         ticketKey,
@@ -76,6 +79,8 @@ func pipelineOptsFromCmd(cmd *cobra.Command, ticketKey string) pipelineOpts {
 		transcript:        transcript,
 		transcriptChanged: cmd.Flags().Changed("transcript"),
 		force:             force,
+		maxCost:           maxCost,
+		maxCostChanged:    cmd.Flags().Changed("max-cost"),
 	}
 }
 
@@ -106,6 +111,7 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().String("query", "", "search filter for listing tickets (picker mode)")
 	cmd.Flags().String("transcript", "", "transcript capture level: tools, full, or off (overrides config)")
 	cmd.Flags().Bool("force", false, "override schema version mismatch checks on resume")
+	cmd.Flags().Float64("max-cost", 0, "maximum cost in USD for this pipeline run (overrides config); 0 means unlimited")
 
 	return cmd
 }
@@ -396,6 +402,20 @@ func runPipeline(cfg *config.Config, opts pipelineOpts) error {
 		return fmt.Errorf("run: unknown transcript level %q (expected 'tools', 'full', or 'off')", transcriptLevel)
 	}
 
+	// Apply --max-cost override: CLI flag takes precedence over config.
+	if opts.maxCost < 0 {
+		return fmt.Errorf("run: --max-cost must be non-negative, got %.2f", opts.maxCost)
+	}
+	var emitBudgetOverride bool
+	var maxCostOriginalCfg float64
+	if opts.maxCostChanged {
+		if cfg.Limits.MaxCostPerTicket > 0 && cfg.Limits.MaxCostPerTicket != opts.maxCost {
+			maxCostOriginalCfg = cfg.Limits.MaxCostPerTicket
+			emitBudgetOverride = true
+		}
+		cfg.Limits.MaxCostPerTicket = opts.maxCost
+	}
+
 	engineCfg := pipeline.EngineConfig{
 		Pipeline:               pl,
 		Loader:                 loader,
@@ -453,6 +473,13 @@ func runPipeline(cfg *config.Config, opts pipelineOpts) error {
 	}
 
 	engine = pipeline.NewEngine(r, state, engineCfg)
+
+	if emitBudgetOverride {
+		engineCfg.OnEvent(pipeline.Event{
+			Kind: pipeline.EventBudgetOverride,
+			Data: map[string]any{"config_value": maxCostOriginalCfg, "cli_value": opts.maxCost},
+		})
+	}
 
 	// Snapshot cost before this run so the ledger records only the delta.
 	costBefore := state.Meta().TotalCost
@@ -916,6 +943,17 @@ func handleEvent(ctx context.Context, cancel context.CancelFunc, engine *pipelin
 			errMsg = e
 		}
 		prog.Message(fmt.Sprintf("  ⚠️  Notification failed: %s", errMsg))
+
+	case pipeline.EventBudgetOverride:
+		var configValue float64
+		if cv, ok := event.Data["config_value"].(float64); ok {
+			configValue = cv
+		}
+		var cliValue float64
+		if cl, ok := event.Data["cli_value"].(float64); ok {
+			cliValue = cl
+		}
+		prog.Message(fmt.Sprintf("  ⚠️  --max-cost overrides config: $%.2f → $%.2f", configValue, cliValue))
 	}
 }
 
@@ -1325,6 +1363,8 @@ func formatNextSteps(w io.Writer, meta *pipeline.PipelineMeta, phases []pipeline
 		fmt.Fprintf(w, "  Budget limit ($%.2f) reached at $%.2f in phase %q.\n", be.Limit, be.Actual, be.Phase)
 		fmt.Fprintf(w, "  • Increase the limit in soda.yaml (limits.max_cost_per_ticket) and resume:\n")
 		fmt.Fprintf(w, "    soda run %s --from %s  (resume with higher budget)\n", ticket, be.Phase)
+		fmt.Fprintf(w, "  • Override the budget inline:\n")
+		fmt.Fprintf(w, "    soda run %s --from %s --max-cost %.2f\n", ticket, be.Phase, be.Limit*2)
 
 	case isTransientError(runErr):
 		fmt.Fprintf(w, "  A transient error occurred (network, rate-limit, or timeout).\n")

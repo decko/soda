@@ -13,6 +13,7 @@ import (
 	"github.com/decko/soda/internal/config"
 	"github.com/decko/soda/internal/pipeline"
 	"github.com/decko/soda/internal/progress"
+	"github.com/spf13/cobra"
 )
 
 func TestResolveLastPhase(t *testing.T) {
@@ -642,6 +643,15 @@ func TestPrintSummaryBudgetExceeded(t *testing.T) {
 	if !strings.Contains(output, "resume with higher budget") {
 		t.Error("expected parenthetical explaining --from suggestion")
 	}
+	if !strings.Contains(output, "--max-cost") {
+		t.Error("expected --max-cost suggestion in budget-exceeded next steps")
+	}
+	if !strings.Contains(output, "Override the budget inline") {
+		t.Error("expected 'Override the budget inline' suggestion")
+	}
+	if !strings.Contains(output, "--max-cost 10.00") {
+		t.Error("expected --max-cost with 2× limit (10.00) in suggestion")
+	}
 }
 
 func TestPrintSummaryPhaseBudgetExceeded(t *testing.T) {
@@ -1159,6 +1169,94 @@ func TestHandleEvent_SchemaVersionMismatchMissingVersion(t *testing.T) {
 	output := buf.String()
 	if !strings.Contains(output, "no schema version") {
 		t.Errorf("expected 'no schema version' in output, got %q", output)
+	}
+}
+
+func TestNewRunCmd_MaxCostFlag(t *testing.T) {
+	cmd := newRunCmd()
+	flag := cmd.Flags().Lookup("max-cost")
+	if flag == nil {
+		t.Fatal("--max-cost flag should be registered on run command")
+	}
+	if flag.DefValue != "0" {
+		t.Errorf("--max-cost default = %q, want %q", flag.DefValue, "0")
+	}
+}
+
+func TestPipelineOptsFromCmd_MaxCostSet(t *testing.T) {
+	cmd := newRunCmd()
+	cmd.SetArgs([]string{"TICKET-1", "--max-cost", "15.50"})
+	// Parse flags without executing RunE.
+	cmd.RunE = func(cmd *cobra.Command, args []string) error { return nil }
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	opts := pipelineOptsFromCmd(cmd, "TICKET-1")
+	if opts.maxCost != 15.5 {
+		t.Errorf("maxCost = %f, want 15.5", opts.maxCost)
+	}
+	if !opts.maxCostChanged {
+		t.Error("maxCostChanged should be true when --max-cost is set")
+	}
+}
+
+func TestPipelineOptsFromCmd_MaxCostNotSet(t *testing.T) {
+	cmd := newRunCmd()
+	cmd.SetArgs([]string{"TICKET-1"})
+	cmd.RunE = func(cmd *cobra.Command, args []string) error { return nil }
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	opts := pipelineOptsFromCmd(cmd, "TICKET-1")
+	if opts.maxCost != 0 {
+		t.Errorf("maxCost = %f, want 0", opts.maxCost)
+	}
+	if opts.maxCostChanged {
+		t.Error("maxCostChanged should be false when --max-cost is not set")
+	}
+}
+
+func TestPipelineOptsFromCmd_MaxCostZero(t *testing.T) {
+	cmd := newRunCmd()
+	cmd.SetArgs([]string{"TICKET-1", "--max-cost", "0"})
+	cmd.RunE = func(cmd *cobra.Command, args []string) error { return nil }
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	opts := pipelineOptsFromCmd(cmd, "TICKET-1")
+	if opts.maxCost != 0 {
+		t.Errorf("maxCost = %f, want 0", opts.maxCost)
+	}
+	if !opts.maxCostChanged {
+		t.Error("maxCostChanged should be true when --max-cost 0 is explicitly passed")
+	}
+}
+
+func TestHandleEvent_BudgetOverride(t *testing.T) {
+	dir := t.TempDir()
+	state, _ := pipeline.LoadOrCreate(dir, "T-1")
+
+	var buf bytes.Buffer
+	prog := progress.New(&buf, false)
+
+	event := pipeline.Event{
+		Kind: pipeline.EventBudgetOverride,
+		Data: map[string]any{
+			"config_value": 25.0,
+			"cli_value":    10.0,
+		},
+	}
+	handleEvent(context.Background(), nil, nil, state, prog, event)
+
+	output := buf.String()
+	if !strings.Contains(output, "--max-cost") {
+		t.Errorf("expected '--max-cost' in output, got %q", output)
+	}
+	if !strings.Contains(output, "25.00") {
+		t.Errorf("expected '25.00' (config value) in output, got %q", output)
+	}
+	if !strings.Contains(output, "10.00") {
+		t.Errorf("expected '10.00' (CLI value) in output, got %q", output)
 	}
 }
 

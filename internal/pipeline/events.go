@@ -105,6 +105,7 @@ const (
 	EventPhaseTimeoutResolved     = "phase_timeout_resolved"
 	EventPhaseModelResolved       = "phase_model_resolved"
 	EventModelFallback            = "model_fallback"
+	EventBudgetOverride           = "budget_override"
 )
 
 // FormatEvent formats an event as a compact, human-readable line:
