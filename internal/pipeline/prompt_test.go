@@ -1502,6 +1502,37 @@ Context: {{.}}
 		}
 	})
 
+	t.Run("omits_category_when_unknown", func(t *testing.T) {
+		tmplBytes, err := os.ReadFile(filepath.Join("..", "..", "cmd", "soda", "embeds", "prompts", "implement.md"))
+		if err != nil {
+			t.Skipf("skipping: cannot read embedded implement.md: %v", err)
+		}
+		tmpl := string(tmplBytes)
+
+		data := PromptData{
+			Ticket:       TicketData{Key: "TEST-532", Summary: "unknown category suppression"},
+			WorktreePath: "/tmp/wt",
+			Branch:       "soda/TEST-532",
+			BaseBranch:   "main",
+			Config:       PromptConfigData{Formatter: "gofmt -w .", TestCommand: "go test ./..."},
+			ReworkFeedback: &ReworkFeedback{
+				Source:  "review",
+				Verdict: "rework",
+				ReviewFindings: []EnrichedFinding{
+					{ReviewFinding: schemas.ReviewFinding{Severity: "critical", File: "x.go", Line: 1, Issue: "bug", Suggestion: "fix", Source: "go-specialist", Category: "unknown"}},
+				},
+			},
+		}
+
+		result, err := RenderPrompt(tmpl, data)
+		if err != nil {
+			t.Fatalf("RenderPrompt: %v", err)
+		}
+		if strings.Contains(result, "Category:") {
+			t.Errorf("implement prompt should NOT contain 'Category:' when category is 'unknown';\ngot: %s", result)
+		}
+	})
+
 	t.Run("omits_sibling_context_when_empty", func(t *testing.T) {
 		tmplBytes, err := os.ReadFile(filepath.Join("..", "..", "cmd", "soda", "embeds", "prompts", "implement.md"))
 		if err != nil {
