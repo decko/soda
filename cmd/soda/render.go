@@ -154,6 +154,11 @@ func createTicketSource(cfg *config.Config) (ticket.Source, error) {
 			Repo:          cfg.GitHub.Repo,
 			FetchComments: cfg.GitHub.FetchComments,
 		})
+	case "gitlab":
+		return ticket.NewGitLabSource(ticket.GitLabConfig{
+			Project:       cfg.GitLab.Project,
+			FetchComments: cfg.GitLab.FetchComments,
+		})
 	default:
 		return nil, fmt.Errorf("unsupported ticket source: %q", cfg.TicketSource)
 	}
