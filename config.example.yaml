@@ -17,6 +17,18 @@ github:
     start_marker: "<!-- plan:start -->"
     end_marker: "<!-- plan:end -->"
 
+# GitLab configuration (uncomment to use GitLab instead)
+# ticket_source: gitlab
+# gitlab:
+#   project: mygroup/my-service
+#   fetch_comments: true
+#   spec:
+#     start_marker: "<!-- spec:start -->"
+#     end_marker: "<!-- spec:end -->"
+#   plan:
+#     start_marker: "<!-- plan:start -->"
+#     end_marker: "<!-- plan:end -->"
+
 # Jira configuration (uncomment to use Jira instead)
 # jira:
 #   command: wtmcp
