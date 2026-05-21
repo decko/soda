@@ -176,7 +176,7 @@ the primary code-generation step.
 |-------|-------|
 | **Type** | normal (forward) |
 | **Tools** | `Read`, `Write`, `Edit`, `Glob`, `Grep`, `Bash` (full access) |
-| **Timeout** | 25m |
+| **Timeout** | 15m |
 | **Model** | `claude-opus-4-6` (per-phase override in default pipeline) |
 | **Retry** | transient: 2, parse: 1, semantic: 0 |
 | **Depends on** | plan |
