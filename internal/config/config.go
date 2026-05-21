@@ -20,6 +20,7 @@ type Config struct {
 	TicketSource        string              `yaml:"ticket_source"`
 	Jira                JiraConfig          `yaml:"jira"`
 	GitHub              GitHubTicketConfig  `yaml:"github"`
+	GitLab              GitLabTicketConfig  `yaml:"gitlab,omitempty"`
 	Mode                string              `yaml:"mode"`
 	Model               string              `yaml:"model"`
 	Auth                AuthConfig          `yaml:"auth"`
@@ -116,6 +117,14 @@ type JiraExtractionConfig struct {
 type GitHubTicketConfig struct {
 	Owner         string             `yaml:"owner"`
 	Repo          string             `yaml:"repo"`
+	FetchComments bool               `yaml:"fetch_comments"`
+	Spec          ExtractionStrategy `yaml:"spec"`
+	Plan          ExtractionStrategy `yaml:"plan"`
+}
+
+// GitLabTicketConfig holds GitLab Issues ticket source settings.
+type GitLabTicketConfig struct {
+	Project       string             `yaml:"project"`
 	FetchComments bool               `yaml:"fetch_comments"`
 	Spec          ExtractionStrategy `yaml:"spec"`
 	Plan          ExtractionStrategy `yaml:"plan"`
