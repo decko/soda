@@ -14,6 +14,7 @@ Guides for people running SODA against their own projects.
 | [quickstart.md](quickstart.md) | Install, configure, and run your first ticket end-to-end | available |
 | [install.md](install.md) | All installation methods (binary, Go install, source) | available |
 | [configuration.md](configuration.md) | `soda.yaml` and `phases.yaml` reference | available |
+| [phases.md](phases.md) | Phase reference: purpose, behavior, cost, failure modes per phase | available |
 | [cli-reference.md](cli-reference.md) | Full CLI command reference | planned |
 | [pipelines.md](pipelines.md) | Named pipelines, custom pipelines, conditional phases, model routing | available |
 | [running-pipelines.md](running-pipelines.md) | Background execution, parallel runs, monitoring, resuming | available |

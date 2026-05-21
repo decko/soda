@@ -301,6 +301,9 @@ phases:
 | `parallel-review` | Runs multiple reviewers in parallel; results are merged into a single output |
 | `polling` | Long-running polling loop (used for the monitor phase) |
 
+For per-phase details — purpose, structured output fields, cost data, and
+failure modes — see [docs/phases.md](phases.md).
+
 ### Rework routing
 
 Use rework routing to close the review → implement loop. When a phase returns a

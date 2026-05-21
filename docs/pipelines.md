@@ -379,4 +379,6 @@ before the current working directory.
 
 For the full `phases.yaml` field reference including rework routing, corrective
 routing, parallel review, and polling configuration, see
-[docs/configuration.md](configuration.md#phasesyaml-reference).
+[docs/configuration.md](configuration.md#phasesyaml-reference). For per-phase
+details — purpose, structured output, cost data, and failure modes — see
+[docs/phases.md](phases.md).
