@@ -557,7 +557,7 @@ is something to respond to.
 | `escalate_after` | 30m | Switch to `max_interval` after this duration |
 | `max_duration` | 4h | Total wall-clock limit for the monitor phase |
 | `max_response_rounds` | 3 | Max Claude sessions (fix + reply combined) |
-| `respond_to_comments` | true | Enable comment classification and response |
+| `respond_to_comments` | false | Enable comment classification and response |
 | `auto_merge` | false | Auto-merge when CI green and approved |
 
 **Polling cycle:**
