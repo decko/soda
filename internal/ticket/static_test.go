@@ -81,8 +81,11 @@ func TestStaticSource_EmptyKey(t *testing.T) {
 
 func TestStaticSource_FetchReturnsCopy(t *testing.T) {
 	src, err := NewStaticSource(Ticket{
-		Key:     "DEMO-1",
-		Summary: "Original summary",
+		Key:                "DEMO-1",
+		Summary:            "Original summary",
+		Labels:             []string{"bug", "demo"},
+		AcceptanceCriteria: []string{"test passes"},
+		RawFields:          map[string]any{"custom": "value"},
 	})
 	if err != nil {
 		t.Fatalf("NewStaticSource: %v", err)
@@ -95,15 +98,27 @@ func TestStaticSource_FetchReturnsCopy(t *testing.T) {
 		t.Fatalf("Fetch: %v", err)
 	}
 
-	// Mutate the returned ticket.
+	// Mutate scalar and reference-type fields on the returned ticket.
 	ticket1.Summary = "Mutated"
+	ticket1.Labels[0] = "mutated-label"
+	ticket1.AcceptanceCriteria[0] = "mutated-criteria"
+	ticket1.RawFields["custom"] = "mutated"
 
-	// Second fetch should still return the original.
+	// Second fetch should still return the original values.
 	ticket2, err := src.Fetch(ctx, "DEMO-1")
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
 	if ticket2.Summary != "Original summary" {
 		t.Errorf("Summary = %q, want %q (mutation leaked)", ticket2.Summary, "Original summary")
+	}
+	if ticket2.Labels[0] != "bug" {
+		t.Errorf("Labels[0] = %q, want %q (mutation leaked)", ticket2.Labels[0], "bug")
+	}
+	if ticket2.AcceptanceCriteria[0] != "test passes" {
+		t.Errorf("AcceptanceCriteria[0] = %q, want %q (mutation leaked)", ticket2.AcceptanceCriteria[0], "test passes")
+	}
+	if ticket2.RawFields["custom"] != "value" {
+		t.Errorf("RawFields[custom] = %v, want %q (mutation leaked)", ticket2.RawFields["custom"], "value")
 	}
 }

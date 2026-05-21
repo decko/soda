@@ -3,6 +3,8 @@ package ticket
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 )
 
 // StaticSource serves a single pre-baked ticket without any external
@@ -27,15 +29,28 @@ func (s *StaticSource) Fetch(_ context.Context, key string) (*Ticket, error) {
 	if key != s.ticket.Key {
 		return nil, fmt.Errorf("ticket: static source has no ticket with key %q", key)
 	}
-	// Return a copy to prevent mutation.
+	// Return a deep copy to prevent mutation of slice/map fields.
 	t := s.ticket
+	t.Labels = slices.Clone(s.ticket.Labels)
+	t.AcceptanceCriteria = slices.Clone(s.ticket.AcceptanceCriteria)
+	t.Comments = slices.Clone(s.ticket.Comments)
+	if s.ticket.RawFields != nil {
+		t.RawFields = maps.Clone(s.ticket.RawFields)
+	}
 	return &t, nil
 }
 
 // List returns a single-element slice containing the pre-baked ticket.
 // The query parameter is ignored.
 func (s *StaticSource) List(_ context.Context, _ string) ([]Ticket, error) {
-	return []Ticket{s.ticket}, nil
+	t := s.ticket
+	t.Labels = slices.Clone(s.ticket.Labels)
+	t.AcceptanceCriteria = slices.Clone(s.ticket.AcceptanceCriteria)
+	t.Comments = slices.Clone(s.ticket.Comments)
+	if s.ticket.RawFields != nil {
+		t.RawFields = maps.Clone(s.ticket.RawFields)
+	}
+	return []Ticket{t}, nil
 }
 
 // Verify StaticSource satisfies Source interface at compile time.
