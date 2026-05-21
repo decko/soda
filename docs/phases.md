@@ -206,7 +206,7 @@ the primary code-generation step.
 
 **Failure modes:**
 
-- **Timeout** — 25 minutes exceeded. The most common failure for high-complexity
+- **Timeout** — 15 minutes exceeded. The most common failure for high-complexity
   tickets (7+ tasks). Consider raising the timeout or splitting the ticket.
 - **Semantic retry disabled** (`semantic: 0`) — the engine does not retry
   semantic failures for implement. If the output is structurally valid but the
