@@ -177,7 +177,7 @@ the primary code-generation step.
 | **Type** | normal (forward) |
 | **Tools** | `Read`, `Write`, `Edit`, `Glob`, `Grep`, `Bash` (full access) |
 | **Timeout** | 15m |
-| **Model** | `claude-opus-4-6` (per-phase override in default pipeline) |
+| **Model** | global (from `soda.yaml`) |
 | **Retry** | transient: 2, parse: 1, semantic: 0 |
 | **Depends on** | plan |
 | **Feedback from** | review, verify |
