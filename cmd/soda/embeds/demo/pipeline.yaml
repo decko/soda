@@ -1,0 +1,77 @@
+# SODA Demo Pipeline
+#
+# A minimal 4-phase pipeline for the guided first-run experience.
+# Fixes a trivial HTTP handler bug in an embedded Go project.
+
+phases:
+  - name: triage
+    prompt: prompts/triage.md
+    schema: |
+      {"type":"object","properties":{"ticket_key":{"type":"string"},"repo":{"type":"string"},"code_area":{"type":"string"},"files":{"type":"array","items":{"type":"string"}},"complexity":{"type":"string","enum":["low","medium","high"]},"approach":{"type":"string"},"risks":{"type":"array","items":{"type":"string"}},"automatable":{"type":"string","enum":["yes","no","partial"]},"block_reason":{"type":"string"},"skip_plan":{"type":"boolean","default":false}},"required":["ticket_key","repo","code_area","files","complexity","approach","risks","automatable"]}
+    tools:
+      - Read
+      - Glob
+      - Grep
+      - Bash(git:*)
+      - Bash(ls:*)
+    timeout: 1m
+    retry:
+      transient: 1
+      parse: 1
+      semantic: 0
+    depends_on: []
+
+  - name: plan
+    prompt: prompts/plan.md
+    schema: |
+      {"type":"object","properties":{"ticket_key":{"type":"string"},"approach":{"type":"string"},"tasks":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"description":{"type":"string"},"files":{"type":"array","items":{"type":"string"}},"done_when":{"type":"string"},"depends_on":{"type":"array","items":{"type":"string"}}},"required":["id","description","files","done_when"]}},"verification":{"type":"object","properties":{"commands":{"type":"array","items":{"type":"string"}},"manual_steps":{"type":"array","items":{"type":"string"}}},"required":["commands"]},"deviations":{"type":"array","items":{"type":"string"}}},"required":["ticket_key","approach","tasks","verification"]}
+    tools:
+      - Read
+      - Glob
+      - Grep
+      - Bash(git:*)
+      - Bash(ls:*)
+    timeout: 3m
+    retry:
+      transient: 1
+      parse: 1
+      semantic: 0
+    depends_on:
+      - triage
+
+  - name: implement
+    prompt: prompts/implement.md
+    schema: |
+      {"type":"object","properties":{"ticket_key":{"type":"string"},"branch":{"type":"string"},"commits":{"type":"array","items":{"type":"object","properties":{"hash":{"type":"string"},"message":{"type":"string"},"task_id":{"type":"string"}},"required":["hash","message","task_id"]}},"files_changed":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"action":{"type":"string"}},"required":["path","action"]}},"task_results":{"type":"array","items":{"type":"object","properties":{"task_id":{"type":"string"},"status":{"type":"string"},"reason":{"type":"string"}},"required":["task_id","status"]}},"tests_passed":{"type":"boolean"},"test_output":{"type":"string"},"deviations":{"type":"array","items":{"type":"string"}}},"required":["ticket_key","branch","commits","files_changed","task_results","tests_passed"]}
+    tools:
+      - Read
+      - Write
+      - Edit
+      - Glob
+      - Grep
+      - Bash
+    timeout: 5m
+    retry:
+      transient: 1
+      parse: 1
+      semantic: 0
+    depends_on:
+      - plan
+
+  - name: verify
+    prompt: prompts/verify.md
+    schema: |
+      {"type":"object","properties":{"ticket_key":{"type":"string"},"verdict":{"type":"string"},"criteria_results":{"type":"array","items":{"type":"object","properties":{"criterion":{"type":"string"},"passed":{"type":"boolean"},"evidence":{"type":"string"}},"required":["criterion","passed","evidence"]}},"command_results":{"type":"array","items":{"type":"object","properties":{"command":{"type":"string"},"exit_code":{"type":"integer"},"output":{"type":"string"},"passed":{"type":"boolean"}},"required":["command","exit_code","output","passed"]}},"code_issues":{"type":"array","items":{"type":"object","properties":{"file":{"type":"string"},"line":{"type":"integer"},"severity":{"type":"string"},"issue":{"type":"string"},"suggested_fix":{"type":"string"}},"required":["file","severity","issue"]}},"fixes_required":{"type":"array","items":{"type":"string"}}},"required":["ticket_key","verdict","criteria_results","command_results"]}
+    tools:
+      - Read
+      - Glob
+      - Grep
+      - Bash
+    timeout: 3m
+    retry:
+      transient: 1
+      parse: 1
+      semantic: 0
+    depends_on:
+      - plan
+      - implement
