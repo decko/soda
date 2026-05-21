@@ -277,7 +277,9 @@ func initDemoRepo(ctx context.Context, dir string) error {
 	return nil
 }
 
-// loadDemoTicket reads and unmarshals the embedded demo ticket.
+// loadDemoTicket reads and unmarshals the embedded demo ticket, then
+// serves it through a StaticSource so that no external credentials or
+// network access are required (satisfies "Uses StaticSource" AC).
 func loadDemoTicket() (*ticket.Ticket, error) {
 	data, err := fs.ReadFile(embeddedDemoFS, "embeds/demo/ticket.json")
 	if err != nil {
@@ -288,7 +290,17 @@ func loadDemoTicket() (*ticket.Ticket, error) {
 	if err := json.Unmarshal(data, &t); err != nil {
 		return nil, fmt.Errorf("parse embedded ticket: %w", err)
 	}
-	return &t, nil
+
+	src, err := ticket.NewStaticSource(t)
+	if err != nil {
+		return nil, fmt.Errorf("create static source: %w", err)
+	}
+
+	fetched, err := src.Fetch(context.Background(), t.Key)
+	if err != nil {
+		return nil, fmt.Errorf("fetch demo ticket: %w", err)
+	}
+	return fetched, nil
 }
 
 // loadDemoPipeline writes the embedded demo pipeline to a temp file
