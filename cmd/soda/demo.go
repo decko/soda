@@ -327,6 +327,10 @@ func buildDemoConfig(tmpDir string) *config.Config {
 	return &config.Config{
 		Model:    "claude-sonnet-4-20250514",
 		StateDir: filepath.Join(tmpDir, ".soda"),
+		Repos: []config.RepoConfig{{
+			Formatter:   "gofmt -w .",
+			TestCommand: "go test ./...",
+		}},
 		Limits: config.LimitsConfig{
 			MaxCostPerTicket: 3.00,
 			MaxCostPerPhase:  1.50,

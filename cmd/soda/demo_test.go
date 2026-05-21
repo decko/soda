@@ -132,6 +132,18 @@ func TestBuildDemoConfig(t *testing.T) {
 	if cfg.StateDir != expectedStateDir {
 		t.Errorf("StateDir = %q, want %q", cfg.StateDir, expectedStateDir)
 	}
+
+	// Repos must be populated so dry-run picks up Formatter/TestCommand
+	// via buildPromptConfig(cfg).
+	if len(cfg.Repos) != 1 {
+		t.Fatalf("Repos len = %d, want 1", len(cfg.Repos))
+	}
+	if cfg.Repos[0].Formatter != "gofmt -w ." {
+		t.Errorf("Repos[0].Formatter = %q, want %q", cfg.Repos[0].Formatter, "gofmt -w .")
+	}
+	if cfg.Repos[0].TestCommand != "go test ./..." {
+		t.Errorf("Repos[0].TestCommand = %q, want %q", cfg.Repos[0].TestCommand, "go test ./...")
+	}
 }
 
 func TestWriteDemoFiles(t *testing.T) {
