@@ -1,0 +1,12 @@
+{
+  "key": "DEMO-1",
+  "summary": "Fix HTTP handler returning 500 instead of 200",
+  "description": "The handler function in main.go returns http.StatusInternalServerError (500) instead of http.StatusOK (200). The test TestHandler in main_test.go asserts a 200 status code, so the test fails. Fix the handler to return the correct status code.",
+  "type": "bug",
+  "priority": "high",
+  "status": "Open",
+  "labels": ["bug", "demo"],
+  "acceptance_criteria": [
+    "TestHandler passes with go test ./..."
+  ]
+}
