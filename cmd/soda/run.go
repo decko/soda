@@ -943,6 +943,17 @@ func handleEvent(ctx context.Context, cancel context.CancelFunc, engine *pipelin
 			errMsg = e
 		}
 		prog.Message(fmt.Sprintf("  ⚠️  Notification failed: %s", errMsg))
+
+	case pipeline.EventBudgetOverride:
+		var configValue float64
+		if cv, ok := event.Data["config_value"].(float64); ok {
+			configValue = cv
+		}
+		var cliValue float64
+		if cl, ok := event.Data["cli_value"].(float64); ok {
+			cliValue = cl
+		}
+		prog.Message(fmt.Sprintf("  ⚠️  --max-cost overrides config: $%.2f → $%.2f", configValue, cliValue))
 	}
 }
 
@@ -1352,6 +1363,8 @@ func formatNextSteps(w io.Writer, meta *pipeline.PipelineMeta, phases []pipeline
 		fmt.Fprintf(w, "  Budget limit ($%.2f) reached at $%.2f in phase %q.\n", be.Limit, be.Actual, be.Phase)
 		fmt.Fprintf(w, "  • Increase the limit in soda.yaml (limits.max_cost_per_ticket) and resume:\n")
 		fmt.Fprintf(w, "    soda run %s --from %s  (resume with higher budget)\n", ticket, be.Phase)
+		fmt.Fprintf(w, "  • Override the budget inline:\n")
+		fmt.Fprintf(w, "    soda run %s --from %s --max-cost %.2f\n", ticket, be.Phase, be.Limit*2)
 
 	case isTransientError(runErr):
 		fmt.Fprintf(w, "  A transient error occurred (network, rate-limit, or timeout).\n")
