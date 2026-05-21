@@ -602,19 +602,23 @@ func TestConfigFromDetected_GitLab(t *testing.T) {
 
 	cfg := configFromDetected(info)
 
-	// GitLab forge should still use github ticket source (gitlab not yet supported).
-	if cfg.TicketSource != "github" {
-		t.Errorf("TicketSource = %q, want %q", cfg.TicketSource, "github")
+	// GitLab forge should use gitlab ticket source.
+	if cfg.TicketSource != "gitlab" {
+		t.Errorf("TicketSource = %q, want %q", cfg.TicketSource, "gitlab")
 	}
 
-	// GitHub ticket config should be populated with detected owner/repo so
-	// that the config is internally consistent (ticket source points at the
-	// same repo as cfg.Repos[0]).
-	if cfg.GitHub.Owner != "team" {
-		t.Errorf("GitHub.Owner = %q, want %q", cfg.GitHub.Owner, "team")
+	// GitLab ticket config should be populated with detected project.
+	if cfg.GitLab.Project != "team/backend" {
+		t.Errorf("GitLab.Project = %q, want %q", cfg.GitLab.Project, "team/backend")
 	}
-	if cfg.GitHub.Repo != "backend" {
-		t.Errorf("GitHub.Repo = %q, want %q", cfg.GitHub.Repo, "backend")
+	if !cfg.GitLab.FetchComments {
+		t.Error("GitLab.FetchComments = false, want true")
+	}
+	if cfg.GitLab.Spec.StartMarker != "<!-- spec:start -->" {
+		t.Errorf("GitLab.Spec.StartMarker = %q, want %q", cfg.GitLab.Spec.StartMarker, "<!-- spec:start -->")
+	}
+	if cfg.GitLab.Plan.StartMarker != "<!-- plan:start -->" {
+		t.Errorf("GitLab.Plan.StartMarker = %q, want %q", cfg.GitLab.Plan.StartMarker, "<!-- plan:start -->")
 	}
 
 	if len(cfg.Repos) != 1 {

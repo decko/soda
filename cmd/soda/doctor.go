@@ -47,6 +47,13 @@ func (e *doctorEnv) isGitHubSource() bool {
 	return e.ParsedConfig != nil && e.ParsedConfig.TicketSource == "github"
 }
 
+// isGitLabSource reports whether the parsed config sets ticket_source to "gitlab".
+// Returns false when ParsedConfig is nil (config missing or unparseable),
+// making glab checks default to optional — a safe fallback.
+func (e *doctorEnv) isGitLabSource() bool {
+	return e.ParsedConfig != nil && e.ParsedConfig.TicketSource == "gitlab"
+}
+
 // defaultDoctorEnv returns a doctorEnv wired to the real OS.
 func defaultDoctorEnv() *doctorEnv {
 	return &doctorEnv{
@@ -103,6 +110,8 @@ func runDoctor(w io.Writer, env *doctorEnv) error {
 		checkClaudeAuth,
 		checkGh,
 		checkGhAuth,
+		checkGlab,
+		checkGlabAuth,
 		checkBranchProtection,
 		checkCommitSigning,
 		checkNode,
@@ -425,6 +434,62 @@ func checkGhAuth(env *doctorEnv) checkResult {
 	}
 	return checkResult{
 		name:     "gh-auth",
+		passed:   true,
+		required: required,
+		detail:   "authenticated",
+	}
+}
+
+// checkGlab verifies that the GitLab CLI (glab) is available in PATH.
+// Required when ticket_source is "gitlab", optional otherwise.
+func checkGlab(env *doctorEnv) checkResult {
+	required := env.isGitLabSource()
+	path, err := env.LookPath("glab")
+	if err != nil {
+		detail := "not found in PATH (optional, needed for GitLab ticket source)"
+		if required {
+			detail = "not found in PATH (required by ticket_source: gitlab)"
+		}
+		return checkResult{
+			name:     "glab",
+			passed:   false,
+			required: required,
+			detail:   detail,
+			fix:      "install glab: https://gitlab.com/gitlab-org/cli",
+		}
+	}
+	return checkResult{
+		name:     "glab",
+		passed:   true,
+		required: required,
+		detail:   path,
+	}
+}
+
+// checkGlabAuth verifies that the GitLab CLI is authenticated.
+// Required when ticket_source is "gitlab", optional otherwise.
+// Skipped when glab is not installed.
+func checkGlabAuth(env *doctorEnv) checkResult {
+	if _, err := env.LookPath("glab"); err != nil {
+		return checkResult{
+			name:    "glab-auth",
+			skipped: true,
+			detail:  "skipped (glab not found)",
+		}
+	}
+	required := env.isGitLabSource()
+	_, err := env.RunCmd("glab", "auth", "status")
+	if err != nil {
+		return checkResult{
+			name:     "glab-auth",
+			passed:   false,
+			required: required,
+			detail:   "glab is not authenticated",
+			fix:      "run: glab auth login",
+		}
+	}
+	return checkResult{
+		name:     "glab-auth",
 		passed:   true,
 		required: required,
 		detail:   "authenticated",

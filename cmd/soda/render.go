@@ -154,6 +154,11 @@ func createTicketSource(cfg *config.Config) (ticket.Source, error) {
 			Repo:          cfg.GitHub.Repo,
 			FetchComments: cfg.GitHub.FetchComments,
 		})
+	case "gitlab":
+		return ticket.NewGitLabSource(ticket.GitLabConfig{
+			Project:       cfg.GitLab.Project,
+			FetchComments: cfg.GitLab.FetchComments,
+		})
 	default:
 		return nil, fmt.Errorf("unsupported ticket source: %q", cfg.TicketSource)
 	}
@@ -185,6 +190,8 @@ func extractArtifacts(cfg *config.Config, t *ticket.Ticket) {
 		extractors = buildGitHubExtractors(cfg)
 	case "jira":
 		extractors = buildJiraExtractors(cfg)
+	case "gitlab":
+		extractors = buildGitLabExtractors(cfg)
 	}
 
 	for _, ext := range extractors {
@@ -196,6 +203,30 @@ func extractArtifacts(cfg *config.Config, t *ticket.Ticket) {
 func buildGitHubExtractors(cfg *config.Config) []ticket.ArtifactExtractor {
 	spec := cfg.GitHub.Spec
 	plan := cfg.GitHub.Plan
+
+	if spec.StartMarker == "" && spec.EndMarker == "" &&
+		plan.StartMarker == "" && plan.EndMarker == "" {
+		return nil
+	}
+
+	return []ticket.ArtifactExtractor{
+		&ticket.CommentMarkerExtractor{
+			Spec: ticket.MarkerPair{
+				StartMarker: spec.StartMarker,
+				EndMarker:   spec.EndMarker,
+			},
+			Plan: ticket.MarkerPair{
+				StartMarker: plan.StartMarker,
+				EndMarker:   plan.EndMarker,
+			},
+		},
+	}
+}
+
+// buildGitLabExtractors returns extractors for GitLab comment markers.
+func buildGitLabExtractors(cfg *config.Config) []ticket.ArtifactExtractor {
+	spec := cfg.GitLab.Spec
+	plan := cfg.GitLab.Plan
 
 	if spec.StartMarker == "" && spec.EndMarker == "" &&
 		plan.StartMarker == "" && plan.EndMarker == "" {

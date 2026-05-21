@@ -1,0 +1,24 @@
+[
+  {
+    "iid": 42,
+    "title": "Add GitLab Issues ticket source",
+    "description": "Implement a GitLab Issues source.\n\n## Acceptance Criteria\n- Fetch retrieves a single issue\n- List returns open issues",
+    "state": "opened",
+    "labels": ["enhancement"],
+    "assignees": [
+      {"username": "ddebrito"}
+    ],
+    "author": {"username": "ddebrito"},
+    "web_url": "https://gitlab.com/group/project/-/issues/42"
+  },
+  {
+    "iid": 43,
+    "title": "Fix CI pipeline timeout",
+    "description": "The CI pipeline is timing out on large repos.",
+    "state": "opened",
+    "labels": ["bug"],
+    "assignees": [],
+    "author": {"username": "alice"},
+    "web_url": "https://gitlab.com/group/project/-/issues/43"
+  }
+]

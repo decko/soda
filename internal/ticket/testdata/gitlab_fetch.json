@@ -1,0 +1,12 @@
+{
+  "iid": 42,
+  "title": "Add GitLab Issues ticket source",
+  "description": "Implement a GitLab Issues source.\n\n## Acceptance Criteria\n- [ ] Fetch retrieves a single issue\n- [ ] List returns open issues\n- [ ] Labels are mapped correctly",
+  "state": "opened",
+  "labels": ["enhancement", "ticket"],
+  "assignees": [
+    {"username": "ddebrito"}
+  ],
+  "author": {"username": "ddebrito"},
+  "web_url": "https://gitlab.com/group/project/-/issues/42"
+}

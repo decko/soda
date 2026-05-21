@@ -1738,3 +1738,240 @@ func TestCheckCommitSigning_SkippedWhenSSHAddMissing(t *testing.T) {
 		t.Error("expected skipped check to not be required (fail)")
 	}
 }
+
+// --- isGitLabSource tests ---
+
+func TestIsGitLabSource_NilConfig(t *testing.T) {
+	env := &doctorEnv{}
+	if env.isGitLabSource() {
+		t.Error("expected false when ParsedConfig is nil")
+	}
+}
+
+func TestIsGitLabSource_GitLab(t *testing.T) {
+	env := &doctorEnv{ParsedConfig: &config.Config{TicketSource: "gitlab"}}
+	if !env.isGitLabSource() {
+		t.Error("expected true when ticket_source is gitlab")
+	}
+}
+
+func TestIsGitLabSource_GitHub(t *testing.T) {
+	env := &doctorEnv{ParsedConfig: &config.Config{TicketSource: "github"}}
+	if env.isGitLabSource() {
+		t.Error("expected false when ticket_source is github")
+	}
+}
+
+func TestIsGitLabSource_Empty(t *testing.T) {
+	env := &doctorEnv{ParsedConfig: &config.Config{TicketSource: ""}}
+	if env.isGitLabSource() {
+		t.Error("expected false when ticket_source is empty")
+	}
+}
+
+// --- checkGlab tests ---
+
+func TestCheckGlab_Found(t *testing.T) {
+	env := allPassEnv()
+	r := checkGlab(env)
+	if !r.passed {
+		t.Error("expected glab check to pass")
+	}
+}
+
+func TestCheckGlab_NotFound(t *testing.T) {
+	env := allPassEnv()
+	env.LookPath = func(file string) (string, error) {
+		if file == "glab" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + file, nil
+	}
+	r := checkGlab(env)
+	if r.passed {
+		t.Error("expected glab check to fail")
+	}
+	if !strings.Contains(r.detail, "optional") {
+		t.Errorf("expected detail to mention optional, got: %q", r.detail)
+	}
+	if r.required {
+		t.Error("expected glab check to be optional (required=false)")
+	}
+}
+
+func TestCheckGlab_RequiredWhenGitLabSource(t *testing.T) {
+	env := allPassEnv()
+	env.ParsedConfig = &config.Config{TicketSource: "gitlab"}
+	env.LookPath = func(file string) (string, error) {
+		if file == "glab" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + file, nil
+	}
+	r := checkGlab(env)
+	if r.passed {
+		t.Error("expected glab check to fail")
+	}
+	if !r.required {
+		t.Error("expected glab check to be required when ticket_source is gitlab")
+	}
+	if !strings.Contains(r.detail, "required") {
+		t.Errorf("expected detail to mention required, got: %q", r.detail)
+	}
+}
+
+func TestCheckGlab_OptionalWhenGitHubSource(t *testing.T) {
+	env := allPassEnv()
+	env.ParsedConfig = &config.Config{TicketSource: "github"}
+	env.LookPath = func(file string) (string, error) {
+		if file == "glab" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + file, nil
+	}
+	r := checkGlab(env)
+	if r.required {
+		t.Error("expected glab check to be optional when ticket_source is github")
+	}
+	if !strings.Contains(r.detail, "optional") {
+		t.Errorf("expected detail to mention optional, got: %q", r.detail)
+	}
+}
+
+// --- checkGlabAuth tests ---
+
+func TestCheckGlabAuth_Authenticated(t *testing.T) {
+	env := allPassEnv()
+	r := checkGlabAuth(env)
+	if !r.passed {
+		t.Error("expected glab-auth check to pass")
+	}
+}
+
+func TestCheckGlabAuth_NotAuthenticated(t *testing.T) {
+	env := allPassEnv()
+	env.RunCmd = func(name string, args ...string) (string, error) {
+		if name == "glab" && len(args) > 0 && args[0] == "auth" {
+			return "", errors.New("not logged in")
+		}
+		if name == "claude" && len(args) > 0 && args[0] == "--version" {
+			return fmt.Sprintf("claude %s", claude.MinCLIVersion), nil
+		}
+		if name == "git" {
+			return ".git", nil
+		}
+		return "", nil
+	}
+	r := checkGlabAuth(env)
+	if r.passed {
+		t.Error("expected glab-auth check to fail")
+	}
+	if !strings.Contains(r.fix, "glab auth login") {
+		t.Errorf("expected fix to suggest glab auth login, got: %q", r.fix)
+	}
+}
+
+func TestCheckGlabAuth_SkippedWhenGlabMissing(t *testing.T) {
+	env := allPassEnv()
+	env.LookPath = func(file string) (string, error) {
+		if file == "glab" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + file, nil
+	}
+	r := checkGlabAuth(env)
+	if !r.skipped {
+		t.Error("expected glab-auth check to be skipped when glab is missing")
+	}
+}
+
+func TestCheckGlabAuth_RequiredWhenGitLabSource(t *testing.T) {
+	env := allPassEnv()
+	env.ParsedConfig = &config.Config{TicketSource: "gitlab"}
+	env.RunCmd = func(name string, args ...string) (string, error) {
+		if name == "glab" && len(args) > 0 && args[0] == "auth" {
+			return "", errors.New("not logged in")
+		}
+		if name == "claude" && len(args) > 0 && args[0] == "--version" {
+			return fmt.Sprintf("claude %s", claude.MinCLIVersion), nil
+		}
+		if name == "git" {
+			return ".git", nil
+		}
+		return "", nil
+	}
+	r := checkGlabAuth(env)
+	if r.passed {
+		t.Error("expected glab-auth check to fail")
+	}
+	if !r.required {
+		t.Error("expected glab-auth check to be required when ticket_source is gitlab")
+	}
+}
+
+func TestCheckGlabAuth_OptionalWhenGitHubSource(t *testing.T) {
+	env := allPassEnv()
+	env.ParsedConfig = &config.Config{TicketSource: "github"}
+	env.RunCmd = func(name string, args ...string) (string, error) {
+		if name == "glab" && len(args) > 0 && args[0] == "auth" {
+			return "", errors.New("not logged in")
+		}
+		if name == "claude" && len(args) > 0 && args[0] == "--version" {
+			return fmt.Sprintf("claude %s", claude.MinCLIVersion), nil
+		}
+		if name == "git" {
+			return ".git", nil
+		}
+		return "", nil
+	}
+	r := checkGlabAuth(env)
+	if r.required {
+		t.Error("expected glab-auth check to be optional when ticket_source is github")
+	}
+}
+
+// --- runDoctor integration: glab required with gitlab source ---
+
+func TestRunDoctor_GlabRequiredWhenGitLabSource(t *testing.T) {
+	env := allPassEnv()
+	env.LoadConfig = func(path string) (*config.Config, error) {
+		return &config.Config{TicketSource: "gitlab"}, nil
+	}
+	env.LookPath = func(file string) (string, error) {
+		if file == "glab" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + file, nil
+	}
+	var buf bytes.Buffer
+	err := runDoctor(&buf, env)
+	if err == nil {
+		t.Fatal("expected error when glab is missing and ticket_source is gitlab")
+	}
+	out := buf.String()
+	if !strings.Contains(out, "✗ glab:") {
+		t.Errorf("expected ✗ marker for glab, got:\n%s", out)
+	}
+}
+
+func TestRunDoctor_GlabOptionalWhenGitHubSource(t *testing.T) {
+	env := allPassEnv()
+	env.LoadConfig = func(path string) (*config.Config, error) {
+		return &config.Config{TicketSource: "github"}, nil
+	}
+	env.LookPath = func(file string) (string, error) {
+		if file == "glab" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + file, nil
+	}
+	var buf bytes.Buffer
+	err := runDoctor(&buf, env)
+	if err != nil {
+		t.Fatalf("expected no error when glab is missing and ticket_source is github, got: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "⚠ glab:") {
+		t.Errorf("expected ⚠ marker for glab, got:\n%s", out)
+	}
+}

@@ -86,9 +86,6 @@ func runInit(w io.Writer, stdin io.Reader, isTTY bool, opts initOptions) error {
 	}
 	if info != nil {
 		cfg = configFromDetected(info)
-		if info.Forge == "gitlab" {
-			fmt.Fprintln(os.Stderr, colorMsg("33", "Warning: GitLab detected but only GitHub ticket source is currently supported. Edit ticket_source in the generated config if needed."))
-		}
 	}
 
 	data, err := config.Marshal(cfg)
@@ -288,11 +285,17 @@ func configFromDetected(info *detect.ProjectInfo) *config.Config {
 		cfg.GitHub.Owner = info.Owner
 		cfg.GitHub.Repo = info.Repo
 	case "gitlab":
-		// GitLab ticket source is not yet supported; default to github as a
-		// placeholder. runInit emits a user-visible warning about this mismatch.
-		cfg.TicketSource = "github"
-		cfg.GitHub.Owner = info.Owner
-		cfg.GitHub.Repo = info.Repo
+		cfg.TicketSource = "gitlab"
+		cfg.GitLab.Project = info.Owner + "/" + info.Repo
+		cfg.GitLab.FetchComments = true
+		cfg.GitLab.Spec = config.ExtractionStrategy{
+			StartMarker: "<!-- spec:start -->",
+			EndMarker:   "<!-- spec:end -->",
+		}
+		cfg.GitLab.Plan = config.ExtractionStrategy{
+			StartMarker: "<!-- plan:start -->",
+			EndMarker:   "<!-- plan:end -->",
+		}
 	}
 
 	// Context files
