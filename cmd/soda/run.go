@@ -402,6 +402,20 @@ func runPipeline(cfg *config.Config, opts pipelineOpts) error {
 		return fmt.Errorf("run: unknown transcript level %q (expected 'tools', 'full', or 'off')", transcriptLevel)
 	}
 
+	// Apply --max-cost override: CLI flag takes precedence over config.
+	if opts.maxCost < 0 {
+		return fmt.Errorf("run: --max-cost must be non-negative, got %.2f", opts.maxCost)
+	}
+	var emitBudgetOverride bool
+	var maxCostOriginalCfg float64
+	if opts.maxCostChanged {
+		if cfg.Limits.MaxCostPerTicket > 0 && cfg.Limits.MaxCostPerTicket != opts.maxCost {
+			maxCostOriginalCfg = cfg.Limits.MaxCostPerTicket
+			emitBudgetOverride = true
+		}
+		cfg.Limits.MaxCostPerTicket = opts.maxCost
+	}
+
 	engineCfg := pipeline.EngineConfig{
 		Pipeline:               pl,
 		Loader:                 loader,
@@ -459,6 +473,13 @@ func runPipeline(cfg *config.Config, opts pipelineOpts) error {
 	}
 
 	engine = pipeline.NewEngine(r, state, engineCfg)
+
+	if emitBudgetOverride {
+		engineCfg.OnEvent(pipeline.Event{
+			Kind: pipeline.EventBudgetOverride,
+			Data: map[string]any{"config_value": maxCostOriginalCfg, "cli_value": opts.maxCost},
+		})
+	}
 
 	// Snapshot cost before this run so the ledger records only the delta.
 	costBefore := state.Meta().TotalCost
