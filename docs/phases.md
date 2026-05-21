@@ -361,7 +361,7 @@ concurrently and their findings are merged into a single output.
 | **Type** | `parallel-review` |
 | **Tools** | `Read`, `Glob`, `Grep`, `Bash` (no write access) |
 | **Timeout** | 12m |
-| **Model** | `claude-opus-4-6` (per-phase override in default pipeline) |
+| **Model** | global (from `soda.yaml`) |
 | **Retry** | transient: 2, parse: 1, semantic: 1 |
 | **Depends on** | plan, implement, verify |
 | **Feedback from** | *(none)* |
