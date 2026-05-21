@@ -258,7 +258,7 @@ func initDemoRepo(ctx context.Context, dir string) error {
 	commands := []struct {
 		args []string
 	}{
-		{[]string{"git", "init"}},
+		{[]string{"git", "init", "-b", "main"}},
 		{[]string{"git", "config", "user.email", "demo@soda.dev"}},
 		{[]string{"git", "config", "user.name", "soda-demo"}},
 		{[]string{"git", "add", "."}},

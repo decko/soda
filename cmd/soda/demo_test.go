@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -188,6 +189,18 @@ func TestInitDemoRepo(t *testing.T) {
 	}
 	if !info.IsDir() {
 		t.Error(".git is not a directory")
+	}
+
+	// Verify branch is "main" (matches BaseBranch in engine config).
+	branchCmd := exec.CommandContext(ctx, "git", "branch", "--show-current")
+	branchCmd.Dir = destDir
+	branchOut, branchErr := branchCmd.Output()
+	if branchErr != nil {
+		t.Fatalf("git branch: %v", branchErr)
+	}
+	branch := strings.TrimSpace(string(branchOut))
+	if branch != "main" {
+		t.Errorf("branch = %q, want %q", branch, "main")
 	}
 }
 
