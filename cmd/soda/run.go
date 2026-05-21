@@ -47,6 +47,8 @@ type pipelineOpts struct {
 	transcript        string // CLI override: "tools", "full", or "off"
 	transcriptChanged bool   // true when --transcript was explicitly passed
 	force             bool   // override schema version mismatch checks
+	maxCost           float64
+	maxCostChanged    bool // true when --max-cost was explicitly passed
 }
 
 // pipelineOptsFromCmd extracts pipelineOpts from Cobra flags registered on the
@@ -61,6 +63,7 @@ func pipelineOptsFromCmd(cmd *cobra.Command, ticketKey string) pipelineOpts {
 	useTUI, _ := cmd.Flags().GetBool("tui")
 	transcript, _ := cmd.Flags().GetString("transcript")
 	force, _ := cmd.Flags().GetBool("force")
+	maxCost, _ := cmd.Flags().GetFloat64("max-cost")
 
 	return pipelineOpts{
 		ticketKey:         ticketKey,
@@ -76,6 +79,8 @@ func pipelineOptsFromCmd(cmd *cobra.Command, ticketKey string) pipelineOpts {
 		transcript:        transcript,
 		transcriptChanged: cmd.Flags().Changed("transcript"),
 		force:             force,
+		maxCost:           maxCost,
+		maxCostChanged:    cmd.Flags().Changed("max-cost"),
 	}
 }
 
@@ -106,6 +111,7 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().String("query", "", "search filter for listing tickets (picker mode)")
 	cmd.Flags().String("transcript", "", "transcript capture level: tools, full, or off (overrides config)")
 	cmd.Flags().Bool("force", false, "override schema version mismatch checks on resume")
+	cmd.Flags().Float64("max-cost", 0, "maximum cost in USD for this pipeline run (overrides config); 0 means unlimited")
 
 	return cmd
 }
