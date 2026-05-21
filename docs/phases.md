@@ -176,8 +176,8 @@ the primary code-generation step.
 |-------|-------|
 | **Type** | normal (forward) |
 | **Tools** | `Read`, `Write`, `Edit`, `Glob`, `Grep`, `Bash` (full access) |
-| **Timeout** | 15m |
-| **Model** | global (from `soda.yaml`) |
+| **Timeout** | 25m |
+| **Model** | `claude-opus-4-6` (per-phase override in default pipeline) |
 | **Retry** | transient: 2, parse: 1, semantic: 0 |
 | **Depends on** | plan |
 | **Feedback from** | review, verify |
@@ -206,7 +206,7 @@ the primary code-generation step.
 
 **Failure modes:**
 
-- **Timeout** — 15 minutes exceeded. The most common failure for high-complexity
+- **Timeout** — 25 minutes exceeded. The most common failure for high-complexity
   tickets (7+ tasks). Consider raising the timeout or splitting the ticket.
 - **Semantic retry disabled** (`semantic: 0`) — the engine does not retry
   semantic failures for implement. If the output is structurally valid but the
@@ -361,7 +361,7 @@ concurrently and their findings are merged into a single output.
 | **Type** | `parallel-review` |
 | **Tools** | `Read`, `Glob`, `Grep`, `Bash` (no write access) |
 | **Timeout** | 12m |
-| **Model** | global (from `soda.yaml`) |
+| **Model** | `claude-opus-4-6` (per-phase override in default pipeline) |
 | **Retry** | transient: 2, parse: 1, semantic: 1 |
 | **Depends on** | plan, implement, verify |
 | **Feedback from** | *(none)* |
@@ -557,7 +557,7 @@ is something to respond to.
 | `escalate_after` | 30m | Switch to `max_interval` after this duration |
 | `max_duration` | 4h | Total wall-clock limit for the monitor phase |
 | `max_response_rounds` | 3 | Max Claude sessions (fix + reply combined) |
-| `respond_to_comments` | false | Enable comment classification and response |
+| `respond_to_comments` | true | Enable comment classification and response |
 | `auto_merge` | false | Auto-merge when CI green and approved |
 
 **Polling cycle:**
