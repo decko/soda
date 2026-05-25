@@ -653,6 +653,27 @@ func checkCommitSigningSSH(env *doctorEnv, signingKey string) checkResult {
 		}
 	}
 
+	// Handle bare inline public key (e.g. "ssh-ed25519 AAAA... comment").
+	// These look like file paths to the existing logic but are actually
+	// public key literals. Match type+blob against ssh-add -L output.
+	if isInlinePublicKey(signingKey) {
+		out, err := env.RunCmd("ssh-add", "-L")
+		if err == nil && sshBareKeyFoundInAgentOutput(signingKey, out) {
+			return checkResult{
+				name:   "commit-signing",
+				passed: true,
+				detail: "ssh signing configured (inline public key, agent has matching key)",
+			}
+		}
+		return checkResult{
+			name:     "commit-signing",
+			passed:   false,
+			required: true,
+			detail:   "commit signing enabled (ssh, inline public key) but key not found in ssh-agent",
+			fix:      "run: ssh-add",
+		}
+	}
+
 	// File-based key: resolve path and match against ssh-add -l output.
 	keyPath := resolveSSHKeyPath(env, signingKey)
 
@@ -697,6 +718,42 @@ func resolveSSHKeyPath(env *doctorEnv, keyPath string) string {
 		}
 	}
 	return strings.TrimSuffix(keyPath, ".pub")
+}
+
+// isInlinePublicKey reports whether signingKey looks like a bare inline
+// SSH public key (e.g. "ssh-ed25519 AAAA... comment") as opposed to a
+// file path, key:: prefixed key, or GPG key ID.
+func isInlinePublicKey(signingKey string) bool {
+	for _, prefix := range []string{"ssh-", "ecdsa-", "sk-"} {
+		if strings.HasPrefix(signingKey, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// sshBareKeyFoundInAgentOutput compares the type and blob fields of
+// signingKey against each line of agentOutput (from ssh-add -L).
+// The comment field (third+ field) is ignored so that keys match
+// regardless of the label stored in the agent vs. git config.
+func sshBareKeyFoundInAgentOutput(signingKey, agentOutput string) bool {
+	keyFields := strings.Fields(signingKey)
+	if len(keyFields) < 2 {
+		return false
+	}
+	keyType := keyFields[0]
+	keyBlob := keyFields[1]
+
+	for _, line := range strings.Split(agentOutput, "\n") {
+		lineFields := strings.Fields(line)
+		if len(lineFields) < 2 {
+			continue
+		}
+		if lineFields[0] == keyType && lineFields[1] == keyBlob {
+			return true
+		}
+	}
+	return false
 }
 
 // checkCommitSigningGPG verifies that the configured GPG signing key
