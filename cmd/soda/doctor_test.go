@@ -1975,3 +1975,221 @@ func TestRunDoctor_GlabOptionalWhenGitHubSource(t *testing.T) {
 		t.Errorf("expected ⚠ marker for glab, got:\n%s", out)
 	}
 }
+
+// --- isInlinePublicKey tests ---
+
+func TestIsInlinePublicKey(t *testing.T) {
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		// Positive cases: bare inline public keys.
+		{"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... user@host", true},
+		{"ssh-rsa AAAAB3NzaC1yc2EAAA... user@host", true},
+		{"ssh-dss AAAAB3NzaC1kc3MAAA... user@host", true},
+		{"ecdsa-sha2-nistp256 AAAAE2VjZHNh... user@host", true},
+		{"sk-ssh-ed25519@openssh.com AAAAGnNr... user@host", true},
+		{"sk-ecdsa-sha2-nistp256@openssh.com AAAA... user@host", true},
+
+		// Negative cases.
+		{"~/.ssh/id_ed25519.pub", false},
+		{"/home/user/.ssh/id_ed25519", false},
+		{"key::ssh-ed25519 AAAA...", false},
+		{"ABCDEF1234567890", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		got := isInlinePublicKey(tt.input)
+		if got != tt.want {
+			t.Errorf("isInlinePublicKey(%q) = %v, want %v", tt.input, got, tt.want)
+		}
+	}
+}
+
+// --- sshBareKeyFoundInAgentOutput tests ---
+
+func TestSSHBareKeyFoundInAgentOutput(t *testing.T) {
+	tests := []struct {
+		name        string
+		signingKey  string
+		agentOutput string
+		want        bool
+	}{
+		{
+			name:        "exact match with same comment",
+			signingKey:  "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI user@host",
+			agentOutput: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI user@host",
+			want:        true,
+		},
+		{
+			name:        "match with different comment",
+			signingKey:  "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI My Key",
+			agentOutput: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI agent-loaded-comment",
+			want:        true,
+		},
+		{
+			name:        "match among multiple agent lines",
+			signingKey:  "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI user@host",
+			agentOutput: "ssh-rsa AAAAB3Nza... other@host\nssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI loaded@host",
+			want:        true,
+		},
+		{
+			name:        "different blob",
+			signingKey:  "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI user@host",
+			agentOutput: "ssh-ed25519 BBBBC3NzaC1lZDI1NTE5BBBBB other@host",
+			want:        false,
+		},
+		{
+			name:        "different type",
+			signingKey:  "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI user@host",
+			agentOutput: "ssh-rsa AAAAC3NzaC1lZDI1NTE5AAAAI user@host",
+			want:        false,
+		},
+		{
+			name:        "empty agent output",
+			signingKey:  "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI user@host",
+			agentOutput: "",
+			want:        false,
+		},
+		{
+			name:        "signing key missing blob",
+			signingKey:  "ssh-ed25519",
+			agentOutput: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI user@host",
+			want:        false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sshBareKeyFoundInAgentOutput(tt.signingKey, tt.agentOutput)
+			if got != tt.want {
+				t.Errorf("sshBareKeyFoundInAgentOutput(%q, %q) = %v, want %v",
+					tt.signingKey, tt.agentOutput, got, tt.want)
+			}
+		})
+	}
+}
+
+// --- checkCommitSigning bare inline key tests ---
+
+func TestCheckCommitSigning_SSHBareInlineKeyLoaded(t *testing.T) {
+	env := allPassEnv()
+	env.RunCmd = func(name string, args ...string) (string, error) {
+		if name == "git" && len(args) > 0 && args[0] == "rev-parse" {
+			return ".git", nil
+		}
+		if name == "git" && len(args) > 1 && args[0] == "config" {
+			switch args[1] {
+			case "commit.gpgsign":
+				return "true", nil
+			case "gpg.format":
+				return "ssh", nil
+			case "user.signingkey":
+				return "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI My Key", nil
+			}
+		}
+		if name == "ssh-add" && len(args) > 0 && args[0] == "-L" {
+			return "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI agent-comment", nil
+		}
+		return "", nil
+	}
+	r := checkCommitSigning(env)
+	if !r.passed {
+		t.Errorf("expected commit-signing to pass with bare inline SSH key, got: %+v", r)
+	}
+	if !strings.Contains(r.detail, "inline") {
+		t.Errorf("expected detail to mention inline, got: %q", r.detail)
+	}
+}
+
+func TestCheckCommitSigning_SSHBareInlineKeyNotLoaded(t *testing.T) {
+	env := allPassEnv()
+	env.RunCmd = func(name string, args ...string) (string, error) {
+		if name == "git" && len(args) > 0 && args[0] == "rev-parse" {
+			return ".git", nil
+		}
+		if name == "git" && len(args) > 1 && args[0] == "config" {
+			switch args[1] {
+			case "commit.gpgsign":
+				return "true", nil
+			case "gpg.format":
+				return "ssh", nil
+			case "user.signingkey":
+				return "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI My Key", nil
+			}
+		}
+		if name == "ssh-add" && len(args) > 0 && args[0] == "-L" {
+			return "ssh-rsa BBBBB3NzaC1yc2EAAA other@host", nil
+		}
+		return "", nil
+	}
+	r := checkCommitSigning(env)
+	if r.passed {
+		t.Error("expected commit-signing to fail when bare inline SSH key is not loaded in agent")
+	}
+	if !r.required {
+		t.Error("expected commit-signing to be required (fail) when key is unreachable")
+	}
+	if r.fix == "" {
+		t.Error("expected fix suggestion")
+	}
+}
+
+func TestCheckCommitSigning_SSHBareInlineKeyECDSA(t *testing.T) {
+	env := allPassEnv()
+	env.RunCmd = func(name string, args ...string) (string, error) {
+		if name == "git" && len(args) > 0 && args[0] == "rev-parse" {
+			return ".git", nil
+		}
+		if name == "git" && len(args) > 1 && args[0] == "config" {
+			switch args[1] {
+			case "commit.gpgsign":
+				return "true", nil
+			case "gpg.format":
+				return "ssh", nil
+			case "user.signingkey":
+				return "ecdsa-sha2-nistp256 AAAAE2VjZHNh user@host", nil
+			}
+		}
+		if name == "ssh-add" && len(args) > 0 && args[0] == "-L" {
+			return "ecdsa-sha2-nistp256 AAAAE2VjZHNh loaded@host", nil
+		}
+		return "", nil
+	}
+	r := checkCommitSigning(env)
+	if !r.passed {
+		t.Errorf("expected commit-signing to pass with bare inline ECDSA key, got: %+v", r)
+	}
+	if !strings.Contains(r.detail, "inline") {
+		t.Errorf("expected detail to mention inline, got: %q", r.detail)
+	}
+}
+
+func TestCheckCommitSigning_SSHBareInlineKeySK(t *testing.T) {
+	env := allPassEnv()
+	env.RunCmd = func(name string, args ...string) (string, error) {
+		if name == "git" && len(args) > 0 && args[0] == "rev-parse" {
+			return ".git", nil
+		}
+		if name == "git" && len(args) > 1 && args[0] == "config" {
+			switch args[1] {
+			case "commit.gpgsign":
+				return "true", nil
+			case "gpg.format":
+				return "ssh", nil
+			case "user.signingkey":
+				return "sk-ssh-ed25519@openssh.com AAAAGnNr user@host", nil
+			}
+		}
+		if name == "ssh-add" && len(args) > 0 && args[0] == "-L" {
+			return "sk-ssh-ed25519@openssh.com AAAAGnNr loaded@host", nil
+		}
+		return "", nil
+	}
+	r := checkCommitSigning(env)
+	if !r.passed {
+		t.Errorf("expected commit-signing to pass with bare inline SK key, got: %+v", r)
+	}
+	if !strings.Contains(r.detail, "inline") {
+		t.Errorf("expected detail to mention inline, got: %q", r.detail)
+	}
+}
