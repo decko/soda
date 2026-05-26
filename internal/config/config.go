@@ -26,8 +26,9 @@ type Config struct {
 	Auth                AuthConfig          `yaml:"auth"`
 	Sandbox             SandboxConfig       `yaml:"sandbox"`
 	Limits              LimitsConfig        `yaml:"limits"`
-	PhasesPath          string              `yaml:"phases_path"`  // explicit path to pipeline YAML; overrides CWD discovery
-	PromptsPath         string              `yaml:"prompts_path"` // base directory for prompt templates; overrides CWD discovery
+	PhasesPath          string              `yaml:"phases_path"`    // explicit path to pipeline YAML; overrides CWD discovery
+	PipelinesPath       string              `yaml:"pipelines_path"` // directory for named pipeline YAML files (e.g. ".pipelines/"); checked before CWD discovery
+	PromptsPath         string              `yaml:"prompts_path"`   // base directory for prompt templates; overrides CWD discovery
 	WorktreeDir         string              `yaml:"worktree_dir"`
 	StateDir            string              `yaml:"state_dir"`
 	Context             []string            `yaml:"context"`
