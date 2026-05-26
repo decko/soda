@@ -88,6 +88,7 @@ const (
 	EventPhaseCostsReset          = "phase_costs_reset"
 	EventBinaryVersionMismatch    = "binary_version_mismatch"
 	EventSchemaVersionMismatch    = "schema_version_mismatch"
+	EventPromptVersionMismatch    = "prompt_version_mismatch"
 	EventAPISemaphoreWait         = "api_semaphore_wait"
 	EventImplementNoChanges       = "implement_no_changes"
 	EventImplementCommitMismatch  = "implement_commit_mismatch"
