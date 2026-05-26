@@ -59,6 +59,68 @@ func PipelineNameFromFile(filename string) string {
 	return ""
 }
 
+// PipelineNameFromDirFile extracts the pipeline name from a filename
+// using the flat .pipelines/ directory convention. Files named
+// "default.yaml" return "default"; other ".yaml" files return the stem
+// (e.g. "fast.yaml" → "fast"). Files matching the "phases" prefix
+// convention (phases.yaml, phases-*.yaml) are ignored to avoid
+// ambiguity with the CWD convention. Non-.yaml files return "".
+func PipelineNameFromDirFile(filename string) string {
+	base := filepath.Base(filename)
+	if !strings.HasSuffix(base, ".yaml") {
+		return ""
+	}
+	// Reject files that match the phases-* convention to avoid double-counting.
+	if base == "phases.yaml" || strings.HasPrefix(base, "phases-") {
+		return ""
+	}
+	name := strings.TrimSuffix(base, ".yaml")
+	if name == "" {
+		return ""
+	}
+	return name
+}
+
+// DiscoverPipelinesInDir scans a single directory for pipeline
+// configuration files using the flat naming convention (e.g.
+// ".pipelines/fast.yaml"). Each discovered file is tagged with the
+// given source label. The returned slice is sorted alphabetically by
+// name, with "default" always first.
+func DiscoverPipelinesInDir(dir string, source string) []PipelineInfo {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+
+	var pipelines []PipelineInfo
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := PipelineNameFromDirFile(entry.Name())
+		if name == "" {
+			continue
+		}
+		pipelines = append(pipelines, PipelineInfo{
+			Name:   name,
+			Path:   filepath.Join(dir, entry.Name()),
+			Source: source,
+		})
+	}
+
+	sort.Slice(pipelines, func(i, j int) bool {
+		if pipelines[i].Name == "default" {
+			return true
+		}
+		if pipelines[j].Name == "default" {
+			return false
+		}
+		return pipelines[i].Name < pipelines[j].Name
+	})
+
+	return pipelines
+}
+
 // DiscoverPipelines scans directories for pipeline configuration files.
 // It looks for phases.yaml (name="default") and phases-<name>.yaml patterns.
 // Each directory is labeled with the corresponding source tag. Directories

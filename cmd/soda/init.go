@@ -88,6 +88,10 @@ func runInit(w io.Writer, stdin io.Reader, isTTY bool, opts initOptions) error {
 		cfg = configFromDetected(info)
 	}
 
+	// Set pipelines_path so generated configs use the .pipelines/ convention
+	// by default. The directory is created after writing the config file.
+	cfg.PipelinesPath = ".pipelines/"
+
 	data, err := config.Marshal(cfg)
 	if err != nil {
 		return fmt.Errorf("init: %w", err)
@@ -147,6 +151,13 @@ func runInit(w io.Writer, stdin io.Reader, isTTY bool, opts initOptions) error {
 			return err
 		}
 	}
+
+	// Create .pipelines/ directory alongside the config.
+	pipelinesDir := filepath.Join(filepath.Dir(destPath), ".pipelines")
+	if err := os.MkdirAll(pipelinesDir, 0755); err != nil {
+		return fmt.Errorf("init: create pipelines directory %s: %w", pipelinesDir, err)
+	}
+	fmt.Fprintln(w, colorMsg("32", fmt.Sprintf("Created %s", pipelinesDir)))
 
 	// Ensure .soda and .worktrees are in .gitignore unless --no-gitignore.
 	if !opts.NoGitignore {

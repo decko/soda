@@ -74,8 +74,11 @@ func runValidate(w io.Writer, errW io.Writer, cfg *config.Config, pipelineName s
 	// Stage 1: Config is already loaded (loadConfig succeeded).
 	fmt.Fprintln(w, "✓ config: valid")
 
+	// Stage 1.5: Pipelines path
+	validatePipelinesPath(w, result, cfg)
+
 	// Stage 2: Phases
-	pl := validatePhases(w, result, pipelineName)
+	pl := validatePhases(w, result, cfg, pipelineName)
 
 	// Stage 3: Prompts (only if phases loaded)
 	if pl != nil {
@@ -117,9 +120,29 @@ func runValidate(w io.Writer, errW io.Writer, cfg *config.Config, pipelineName s
 	return nil
 }
 
+// validatePipelinesPath checks whether the configured pipelines_path directory
+// exists on disk. Reports an error when the path is configured but the directory
+// is missing, and an OK/not-configured status otherwise.
+func validatePipelinesPath(w io.Writer, result *validationResult, cfg *config.Config) {
+	if cfg.PipelinesPath == "" {
+		fmt.Fprintln(w, "✓ pipelines_path: not configured")
+		return
+	}
+	info, err := os.Stat(cfg.PipelinesPath)
+	if err != nil {
+		result.addError("pipelines_path: directory %q not found", cfg.PipelinesPath)
+		return
+	}
+	if !info.IsDir() {
+		result.addError("pipelines_path: %q is not a directory", cfg.PipelinesPath)
+		return
+	}
+	fmt.Fprintf(w, "✓ pipelines_path: %s\n", cfg.PipelinesPath)
+}
+
 // validatePhases loads and validates the pipeline config (cross-references, structure).
-func validatePhases(w io.Writer, result *validationResult, pipelineName string) *pipeline.PhasePipeline {
-	phasesPath, cleanup, err := resolvePhasesPath(pipelineName, "")
+func validatePhases(w io.Writer, result *validationResult, cfg *config.Config, pipelineName string) *pipeline.PhasePipeline {
+	phasesPath, cleanup, err := resolvePhasesPath(pipelineName, cfg.PhasesPath, cfg.PipelinesPath)
 	if err != nil {
 		result.addError("phases: %v", err)
 		return nil
@@ -394,7 +417,7 @@ func validateNotifyScript(result *validationResult, prefix string, sc *config.Sc
 // _schema_version field, and compares it against the current schema hash.
 func runValidateSession(w io.Writer, cfg *config.Config, ticketKey string, pipelineName string) error {
 	// Load pipeline.
-	phasesPath, cleanup, err := resolvePhasesPath(pipelineName, cfg.PhasesPath)
+	phasesPath, cleanup, err := resolvePhasesPath(pipelineName, cfg.PhasesPath, cfg.PipelinesPath)
 	if err != nil {
 		return fmt.Errorf("validate session: %w", err)
 	}

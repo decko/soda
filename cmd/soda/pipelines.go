@@ -32,9 +32,38 @@ Use "soda pipelines new" to scaffold a new custom pipeline.`,
 }
 
 func runPipelines(cmd *cobra.Command) error {
+	// Soft-load config to discover pipelines_path; ignore errors
+	// (e.g. missing config) — the rest of the discovery still works.
+	var pipelinesPath string
+	cfg, cfgErr := loadConfig(cmd)
+	if cfgErr == nil && cfg.PipelinesPath != "" {
+		pipelinesPath = cfg.PipelinesPath
+	}
+
 	dirs, sources := discoverDirs()
 
 	pipelines := pipeline.DiscoverPipelines(dirs, sources)
+
+	// Prepend pipelines from the configured pipelines_path directory.
+	// .pipelines/ entries take priority over CWD entries (matching
+	// resolvePhasesPath step 0), so filter CWD/user entries that
+	// would be shadowed by the pipelines directory.
+	if pipelinesPath != "" {
+		dirPipelines := pipeline.DiscoverPipelinesInDir(pipelinesPath, "pipelines-dir")
+		if len(dirPipelines) > 0 {
+			dirNames := make(map[string]bool, len(dirPipelines))
+			for _, dp := range dirPipelines {
+				dirNames[dp.Name] = true
+			}
+			var filtered []pipeline.PipelineInfo
+			for _, p := range pipelines {
+				if !dirNames[p.Name] {
+					filtered = append(filtered, p)
+				}
+			}
+			pipelines = append(dirPipelines, filtered...)
+		}
+	}
 
 	// Always include embedded pipelines if not already discovered on disk.
 	discovered := make(map[string]bool, len(pipelines))

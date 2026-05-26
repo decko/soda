@@ -144,7 +144,7 @@ func TestRunPipelines_LocalOverrideHidesEmbedded(t *testing.T) {
 
 func TestResolvePhasesPath_EmbeddedQuickFix(t *testing.T) {
 	t.Chdir(t.TempDir())
-	path, cleanup, err := resolvePhasesPath("quick-fix", "")
+	path, cleanup, err := resolvePhasesPath("quick-fix", "", "")
 	if err != nil {
 		t.Fatalf("resolvePhasesPath(quick-fix) failed: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestResolvePhasesPath_EmbeddedQuickFix(t *testing.T) {
 
 func TestResolvePhasesPath_EmbeddedDocsOnly(t *testing.T) {
 	t.Chdir(t.TempDir())
-	path, cleanup, err := resolvePhasesPath("docs-only", "")
+	path, cleanup, err := resolvePhasesPath("docs-only", "", "")
 	if err != nil {
 		t.Fatalf("resolvePhasesPath(docs-only) failed: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestResolvePhasesPath_EmbeddedDocsOnly(t *testing.T) {
 
 func TestResolvePhasesPath_UnknownPipeline(t *testing.T) {
 	t.Chdir(t.TempDir())
-	_, _, err := resolvePhasesPath("nonexistent-pipeline", "")
+	_, _, err := resolvePhasesPath("nonexistent-pipeline", "", "")
 	if err == nil {
 		t.Fatal("expected error for unknown pipeline, got nil")
 	}
@@ -214,7 +214,7 @@ func TestResolvePhasesPath_DependsOnValidation(t *testing.T) {
 	// validation (which happens inside LoadPipeline).
 	for _, name := range []string{"quick-fix", "docs-only"} {
 		t.Run(name, func(t *testing.T) {
-			path, cleanup, err := resolvePhasesPath(name, "")
+			path, cleanup, err := resolvePhasesPath(name, "", "")
 			if err != nil {
 				t.Fatalf("resolvePhasesPath(%s) failed: %v", name, err)
 			}
@@ -240,7 +240,7 @@ func TestKnownEmbeddedPipelines_AllDiscoverable(t *testing.T) {
 
 	for _, name := range names {
 		t.Run(name, func(t *testing.T) {
-			path, cleanup, err := resolvePhasesPath(name, "")
+			path, cleanup, err := resolvePhasesPath(name, "", "")
 			if err != nil {
 				t.Fatalf("resolvePhasesPath(%s) failed: %v", name, err)
 			}
@@ -251,6 +251,208 @@ func TestKnownEmbeddedPipelines_AllDiscoverable(t *testing.T) {
 				t.Fatalf("resolvePhasesPath(%s) returned empty path", name)
 			}
 		})
+	}
+}
+
+func TestRunPipelines_PipelinesDirDiscovery(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
+	// Create a soda.yaml with pipelines_path set.
+	cfgContent := "ticket_source: github\npipelines_path: .pipelines/\n"
+	cfgPath := filepath.Join(tmpDir, "soda.yaml")
+	if err := os.WriteFile(cfgPath, []byte(cfgContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create .pipelines/ with a named pipeline.
+	pipelinesDir := filepath.Join(tmpDir, ".pipelines")
+	if err := os.MkdirAll(pipelinesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	phases := "phases:\n  - name: triage\n    prompt: prompts/triage.md\n    timeout: 1m\n"
+	if err := os.WriteFile(filepath.Join(pipelinesDir, "my-custom.yaml"), []byte(phases), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	rootCmd := newRootCmd()
+	rootCmd.SetArgs([]string{"pipelines", "--config", cfgPath})
+	var buf bytes.Buffer
+	rootCmd.SetOut(&buf)
+
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("pipelines command failed: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "my-custom") {
+		t.Errorf("expected my-custom pipeline in output, got:\n%s", output)
+	}
+	if !strings.Contains(output, "pipelines-dir") {
+		t.Errorf("expected pipelines-dir source in output, got:\n%s", output)
+	}
+}
+
+func TestRunPipelines_PipelinesDirNoPipelinesPath(t *testing.T) {
+	// When no pipelines_path is configured, only CWD and embedded pipelines
+	// should appear.
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
+	cmd := newPipelinesCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("pipelines command failed: %v", err)
+	}
+
+	output := buf.String()
+	// Should NOT contain pipelines-dir source.
+	if strings.Contains(output, "pipelines-dir") {
+		t.Errorf("expected no pipelines-dir source without config, got:\n%s", output)
+	}
+	// Should still show embedded default.
+	if !strings.Contains(output, "default") {
+		t.Errorf("expected default pipeline in output, got:\n%s", output)
+	}
+}
+
+func TestRunPipelines_PipelinesDirDoesNotDuplicate(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
+	// Create a soda.yaml with pipelines_path set.
+	cfgContent := "ticket_source: github\npipelines_path: .pipelines/\n"
+	cfgPath := filepath.Join(tmpDir, "soda.yaml")
+	if err := os.WriteFile(cfgPath, []byte(cfgContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create .pipelines/ with a pipeline that also exists in CWD.
+	pipelinesDir := filepath.Join(tmpDir, ".pipelines")
+	if err := os.MkdirAll(pipelinesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	phases := "phases:\n  - name: triage\n    prompt: prompts/triage.md\n    timeout: 1m\n"
+	// Put a "fast" pipeline in both .pipelines/ and CWD (phases-fast.yaml).
+	if err := os.WriteFile(filepath.Join(pipelinesDir, "fast.yaml"), []byte(phases), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "phases-fast.yaml"), []byte(phases), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	rootCmd := newRootCmd()
+	rootCmd.SetArgs([]string{"pipelines", "--config", cfgPath})
+	var buf bytes.Buffer
+	rootCmd.SetOut(&buf)
+
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("pipelines command failed: %v", err)
+	}
+
+	output := buf.String()
+	// "fast" should appear exactly once.
+	fastCount := 0
+	for _, line := range strings.Split(output, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "fast") {
+			fastCount++
+			// The .pipelines/ version should win, showing "pipelines-dir"
+			// source (matching resolvePhasesPath priority).
+			if !strings.Contains(line, "pipelines-dir") {
+				t.Errorf("expected 'pipelines-dir' source for fast, got: %s", line)
+			}
+		}
+	}
+	if fastCount != 1 {
+		t.Errorf("expected exactly 1 'fast' pipeline row, got %d:\n%s", fastCount, output)
+	}
+}
+
+func TestResolvePhasesPath_PipelinesPathDefault(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
+	// Create .pipelines/default.yaml
+	pipelinesDir := filepath.Join(tmpDir, ".pipelines")
+	if err := os.MkdirAll(pipelinesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	phases := "phases:\n  - name: triage\n    prompt: prompts/triage.md\n    timeout: 1m\n"
+	if err := os.WriteFile(filepath.Join(pipelinesDir, "default.yaml"), []byte(phases), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	path, cleanup, err := resolvePhasesPath("", "", pipelinesDir)
+	if err != nil {
+		t.Fatalf("resolvePhasesPath with pipelinesPath failed: %v", err)
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+
+	wantPath := filepath.Join(pipelinesDir, "default.yaml")
+	if path != wantPath {
+		t.Errorf("path = %q, want %q", path, wantPath)
+	}
+}
+
+func TestResolvePhasesPath_PipelinesPathNamed(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
+	// Create .pipelines/fast.yaml
+	pipelinesDir := filepath.Join(tmpDir, ".pipelines")
+	if err := os.MkdirAll(pipelinesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	phases := "phases:\n  - name: implement\n    prompt: prompts/implement.md\n    timeout: 15m\n"
+	if err := os.WriteFile(filepath.Join(pipelinesDir, "fast.yaml"), []byte(phases), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	path, cleanup, err := resolvePhasesPath("fast", "", pipelinesDir)
+	if err != nil {
+		t.Fatalf("resolvePhasesPath with pipelinesPath named failed: %v", err)
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+
+	wantPath := filepath.Join(pipelinesDir, "fast.yaml")
+	if path != wantPath {
+		t.Errorf("path = %q, want %q", path, wantPath)
+	}
+}
+
+func TestResolvePhasesPath_PipelinesPathFallsThrough(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
+	// Create .pipelines/ dir but without the requested pipeline.
+	pipelinesDir := filepath.Join(tmpDir, ".pipelines")
+	if err := os.MkdirAll(pipelinesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create phases.yaml in CWD — should fall through to CWD resolution.
+	phases := "phases:\n  - name: triage\n    prompt: prompts/triage.md\n    timeout: 1m\n"
+	if err := os.WriteFile(filepath.Join(tmpDir, "phases.yaml"), []byte(phases), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	path, cleanup, err := resolvePhasesPath("", "", pipelinesDir)
+	if err != nil {
+		t.Fatalf("resolvePhasesPath should fall through: %v", err)
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+
+	// Should resolve to the CWD phases.yaml, not the pipelines dir.
+	if !strings.HasSuffix(path, "phases.yaml") {
+		t.Errorf("path = %q, want CWD phases.yaml", path)
 	}
 }
 
