@@ -80,6 +80,99 @@ func TestPipelineNameFromFile(t *testing.T) {
 	}
 }
 
+func TestPipelineNameFromDirFile(t *testing.T) {
+	tests := []struct {
+		filename string
+		want     string
+	}{
+		{"default.yaml", "default"},
+		{"fast.yaml", "fast"},
+		{"ci-lite.yaml", "ci-lite"},
+		{"docs-only.yaml", "docs-only"},
+		// phases-* convention files are rejected.
+		{"phases.yaml", ""},
+		{"phases-fast.yaml", ""},
+		// Non-yaml files are rejected.
+		{"fast.yml", ""},
+		{"README.md", ""},
+		// Edge cases.
+		{".yaml", ""},
+		{"dir/nested.yaml", "nested"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.filename, func(t *testing.T) {
+			got := PipelineNameFromDirFile(tt.filename)
+			if got != tt.want {
+				t.Errorf("PipelineNameFromDirFile(%q) = %q, want %q", tt.filename, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDiscoverPipelinesInDir(t *testing.T) {
+	t.Run("discovers_flat_named_files", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, filepath.Join(dir, "default.yaml"), minimalPhasesYAML)
+		writeFile(t, filepath.Join(dir, "fast.yaml"), minimalPhasesYAML)
+		writeFile(t, filepath.Join(dir, "ci.yaml"), minimalPhasesYAML)
+		writeFile(t, filepath.Join(dir, "README.md"), "# docs")
+
+		pipelines := DiscoverPipelinesInDir(dir, "pipelines-dir")
+
+		if len(pipelines) != 3 {
+			t.Fatalf("got %d pipelines, want 3", len(pipelines))
+		}
+
+		// default should be first.
+		if pipelines[0].Name != "default" {
+			t.Errorf("first pipeline = %q, want %q", pipelines[0].Name, "default")
+		}
+		if pipelines[0].Source != "pipelines-dir" {
+			t.Errorf("first pipeline source = %q, want %q", pipelines[0].Source, "pipelines-dir")
+		}
+
+		// ci and fast should follow alphabetically.
+		if pipelines[1].Name != "ci" {
+			t.Errorf("second pipeline = %q, want %q", pipelines[1].Name, "ci")
+		}
+		if pipelines[2].Name != "fast" {
+			t.Errorf("third pipeline = %q, want %q", pipelines[2].Name, "fast")
+		}
+	})
+
+	t.Run("ignores_phases_convention_files", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, filepath.Join(dir, "phases.yaml"), minimalPhasesYAML)
+		writeFile(t, filepath.Join(dir, "phases-fast.yaml"), minimalPhasesYAML)
+		writeFile(t, filepath.Join(dir, "custom.yaml"), minimalPhasesYAML)
+
+		pipelines := DiscoverPipelinesInDir(dir, "pipelines-dir")
+
+		if len(pipelines) != 1 {
+			t.Fatalf("got %d pipelines, want 1", len(pipelines))
+		}
+		if pipelines[0].Name != "custom" {
+			t.Errorf("pipeline name = %q, want %q", pipelines[0].Name, "custom")
+		}
+	})
+
+	t.Run("empty_directory", func(t *testing.T) {
+		dir := t.TempDir()
+		pipelines := DiscoverPipelinesInDir(dir, "pipelines-dir")
+		if len(pipelines) != 0 {
+			t.Errorf("got %d pipelines, want 0", len(pipelines))
+		}
+	})
+
+	t.Run("nonexistent_directory", func(t *testing.T) {
+		pipelines := DiscoverPipelinesInDir("/nonexistent-dir-xyz", "pipelines-dir")
+		if pipelines != nil {
+			t.Errorf("expected nil for nonexistent dir, got %v", pipelines)
+		}
+	})
+}
+
 func TestDiscoverPipelines(t *testing.T) {
 	t.Run("discovers_default_and_named", func(t *testing.T) {
 		dir := t.TempDir()
