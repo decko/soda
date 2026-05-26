@@ -277,10 +277,6 @@ func buildPiArgs(opts RunOpts, defaultModel string) []string {
 		"--output-format", "stream-json",
 	}
 
-	if opts.OutputSchema != "" {
-		args = append(args, "--json-schema", opts.OutputSchema)
-	}
-
 	// Prefer per-invocation model over runner-level default.
 	effectiveModel := defaultModel
 	if opts.Model != "" {

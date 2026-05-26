@@ -58,10 +58,6 @@ func (a *PiAdapter) BuildArgs(opts runner.RunOpts, tmpDir string) ([]string, err
 		"--output-format", "stream-json",
 	}
 
-	if opts.OutputSchema != "" {
-		args = append(args, "--json-schema", opts.OutputSchema)
-	}
-
 	if opts.Model != "" {
 		args = append(args, "--model", opts.Model)
 	}

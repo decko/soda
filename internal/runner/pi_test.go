@@ -300,7 +300,12 @@ func TestBuildPiArgs(t *testing.T) {
 
 		// Model should be per-invocation override.
 		assertContainsArg(t, args, "--model", "pi-model-1")
-		assertContainsArg(t, args, "--json-schema", `{"type":"object"}`)
+		// Pi has no --json-schema flag; schema validation is done in software.
+		for idx, arg := range args {
+			if arg == "--json-schema" {
+				t.Errorf("args must not contain --json-schema (at index %d)", idx)
+			}
+		}
 		// Tools should be mapped.
 		assertContainsArg(t, args, "--allowed-tools", "read_file")
 		assertContainsArg(t, args, "--allowed-tools", "bash(git:*)")
