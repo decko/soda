@@ -48,6 +48,14 @@ func NewPiRunner(binary, model, workDir string) (*PiRunner, error) {
 
 // Run maps runner.RunOpts to Pi CLI arguments, invokes the CLI, and maps the result back.
 func (r *PiRunner) Run(ctx context.Context, opts RunOpts) (*RunResult, error) {
+	// Validate WorkDir — must be present and absolute.
+	if opts.WorkDir == "" {
+		return nil, fmt.Errorf("pi runner: WorkDir is required")
+	}
+	if !filepath.IsAbs(opts.WorkDir) {
+		return nil, fmt.Errorf("pi runner: WorkDir must be absolute: %s", opts.WorkDir)
+	}
+
 	// Validate output schema.
 	if opts.OutputSchema != "" {
 		if len(opts.OutputSchema) > 256*1024 {
