@@ -60,11 +60,11 @@ func (r *PiRunner) Run(ctx context.Context, opts RunOpts) (*RunResult, error) {
 
 	// Write system prompt to workspace-level .pi/SYSTEM.md.
 	if opts.SystemPrompt != "" {
-		promptPath, err := writePiSystemPrompt(opts.WorkDir, opts.SystemPrompt)
+		cleanup, err := writePiSystemPrompt(opts.WorkDir, opts.SystemPrompt)
 		if err != nil {
 			return nil, fmt.Errorf("pi runner: write system prompt: %w", err)
 		}
-		defer os.Remove(promptPath)
+		defer cleanup()
 	}
 
 	args := buildPiArgs(opts, r.model)
@@ -296,26 +296,54 @@ func buildPiArgs(opts RunOpts, defaultModel string) []string {
 
 // writePiSystemPrompt writes the system prompt to {workDir}/.pi/SYSTEM.md
 // per Pi's workspace-level system prompt convention.
-func writePiSystemPrompt(workDir, content string) (string, error) {
+//
+// If an existing SYSTEM.md is present it is backed up and restored by the
+// returned cleanup function. If no prior file existed, cleanup removes the
+// file (and the .pi/ directory if we created it).
+func writePiSystemPrompt(workDir, content string) (cleanup func(), err error) {
 	if workDir == "" {
 		workDir = os.TempDir()
 	}
 	abs, err := filepath.Abs(workDir)
 	if err != nil {
-		return "", fmt.Errorf("pi: resolve workdir: %w", err)
+		return nil, fmt.Errorf("pi: resolve workdir: %w", err)
 	}
 
 	piDir := filepath.Join(abs, ".pi")
-	if err := os.MkdirAll(piDir, 0o755); err != nil {
-		return "", fmt.Errorf("pi: create .pi directory: %w", err)
-	}
-
 	promptPath := filepath.Join(piDir, "SYSTEM.md")
-	if err := os.WriteFile(promptPath, []byte(content), 0o644); err != nil {
-		return "", fmt.Errorf("pi: write SYSTEM.md: %w", err)
+
+	// Track whether the .pi directory already existed so we can clean up
+	// if we created it.
+	_, statErr := os.Stat(piDir)
+	piDirExisted := statErr == nil
+
+	if err := os.MkdirAll(piDir, 0o755); err != nil {
+		return nil, fmt.Errorf("pi: create .pi directory: %w", err)
 	}
 
-	return promptPath, nil
+	// Back up existing SYSTEM.md so we can restore it on cleanup.
+	existing, readErr := os.ReadFile(promptPath)
+	hadExisting := readErr == nil
+
+	if err := os.WriteFile(promptPath, []byte(content), 0o644); err != nil {
+		return nil, fmt.Errorf("pi: write SYSTEM.md: %w", err)
+	}
+
+	cleanup = func() {
+		if hadExisting {
+			// Restore the original file.
+			_ = os.WriteFile(promptPath, existing, 0o644)
+		} else {
+			// Remove the file we created.
+			_ = os.Remove(promptPath)
+			// Remove the directory only if we created it AND it is now empty.
+			if !piDirExisted {
+				_ = os.Remove(piDir) // fails silently if non-empty
+			}
+		}
+	}
+
+	return cleanup, nil
 }
 
 // classifyPiExitError categorizes a Pi process exit failure.

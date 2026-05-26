@@ -403,21 +403,77 @@ func TestWritePiSystemPrompt(t *testing.T) {
 		dir := t.TempDir()
 		content := "You are a helpful assistant."
 
-		path, err := writePiSystemPrompt(dir, content)
+		cleanup, err := writePiSystemPrompt(dir, content)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
+		defer cleanup()
 
-		if !strings.HasSuffix(path, ".pi/SYSTEM.md") {
-			t.Errorf("path = %q, want suffix .pi/SYSTEM.md", path)
-		}
-
-		got, readErr := os.ReadFile(path)
+		promptPath := filepath.Join(dir, ".pi", "SYSTEM.md")
+		got, readErr := os.ReadFile(promptPath)
 		if readErr != nil {
 			t.Fatalf("failed to read file: %v", readErr)
 		}
 		if string(got) != content {
 			t.Errorf("content = %q, want %q", string(got), content)
+		}
+	})
+
+	t.Run("restores_existing_file_on_cleanup", func(t *testing.T) {
+		dir := t.TempDir()
+		piDir := filepath.Join(dir, ".pi")
+		if err := os.MkdirAll(piDir, 0o755); err != nil {
+			t.Fatalf("create .pi dir: %v", err)
+		}
+		promptPath := filepath.Join(piDir, "SYSTEM.md")
+		original := "user-owned content"
+		if err := os.WriteFile(promptPath, []byte(original), 0o644); err != nil {
+			t.Fatalf("write original: %v", err)
+		}
+
+		cleanup, err := writePiSystemPrompt(dir, "soda override")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		// During run, file should have soda content.
+		got, _ := os.ReadFile(promptPath)
+		if string(got) != "soda override" {
+			t.Errorf("during run: content = %q, want %q", string(got), "soda override")
+		}
+
+		cleanup()
+
+		// After cleanup, original content should be restored.
+		got, _ = os.ReadFile(promptPath)
+		if string(got) != original {
+			t.Errorf("after cleanup: content = %q, want %q", string(got), original)
+		}
+	})
+
+	t.Run("removes_file_and_dir_when_none_existed", func(t *testing.T) {
+		dir := t.TempDir()
+		piDir := filepath.Join(dir, ".pi")
+
+		cleanup, err := writePiSystemPrompt(dir, "test content")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		// File should exist during run.
+		promptPath := filepath.Join(piDir, "SYSTEM.md")
+		if _, statErr := os.Stat(promptPath); statErr != nil {
+			t.Fatalf("SYSTEM.md should exist during run: %v", statErr)
+		}
+
+		cleanup()
+
+		// After cleanup, both file and directory should be gone.
+		if _, statErr := os.Stat(promptPath); statErr == nil {
+			t.Error("SYSTEM.md should be removed after cleanup")
+		}
+		if _, statErr := os.Stat(piDir); statErr == nil {
+			t.Error(".pi directory should be removed after cleanup when we created it")
 		}
 	})
 }
