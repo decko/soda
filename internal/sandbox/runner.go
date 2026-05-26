@@ -5,15 +5,12 @@ package sandbox
 import (
 	"bytes"
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"sync"
 
-	"github.com/decko/soda/internal/claude"
 	"github.com/decko/soda/internal/proxy"
 	"github.com/decko/soda/internal/runner"
 	arapuca "github.com/sergio-correia/go-arapuca"
@@ -25,10 +22,9 @@ const maxStdoutBytes = 50 * 1024 * 1024
 
 // Runner implements runner.Runner using go-arapuca for OS-level sandboxing.
 type Runner struct {
-	sandbox    *arapuca.Sandbox
-	config     Config
-	claudeBin  string   // resolved absolute path to claude binary
-	claudeRead []string // read paths needed for claude binary + node
+	sandbox *arapuca.Sandbox
+	config  Config
+	adapter AgentAdapter
 }
 
 // compile-time interface check
@@ -42,17 +38,16 @@ func New(config Config) (*Runner, error) {
 		return nil, fmt.Errorf("sandbox: create: %w", err)
 	}
 
-	claudeBin, claudeRead, err := resolveClaudePaths(config.ClaudeBinary)
+	adapter, err := NewClaudeAdapter(config.ClaudeBinary)
 	if err != nil {
 		sb.Close()
 		return nil, err
 	}
 
 	return &Runner{
-		sandbox:    sb,
-		config:     config,
-		claudeBin:  claudeBin,
-		claudeRead: claudeRead,
+		sandbox: sb,
+		config:  config,
+		adapter: adapter,
 	}, nil
 }
 
@@ -72,7 +67,7 @@ func (r *Runner) Run(ctx context.Context, opts runner.RunOpts) (*runner.RunResul
 		return nil, fmt.Errorf("sandbox: WorkDir must be absolute: %s", opts.WorkDir)
 	}
 
-	// Create sandbox temp dir first — used for system prompt file and HOME/TMPDIR.
+	// Create sandbox temp dir first — used for temp files and HOME/TMPDIR.
 	tmpPhase := sanitizePhase(opts.Phase)
 	tmpDir, err := arapuca.MakeTmpDir(tmpPhase)
 	if err != nil {
@@ -80,99 +75,21 @@ func (r *Runner) Run(ctx context.Context, opts runner.RunOpts) (*runner.RunResul
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// Write system prompt to temp file in tmpDir (not WorkDir) so it's not
-	// visible to Claude Code's Read tool browsing the workspace.
-	var sysPromptPath string
-	if opts.SystemPrompt != "" {
-		tmpFile, err := os.CreateTemp(tmpDir, ".soda-prompt-*.md")
-		if err != nil {
-			return nil, fmt.Errorf("sandbox: create system prompt file: %w", err)
-		}
-		sysPromptPath = tmpFile.Name()
-		if _, err := tmpFile.WriteString(opts.SystemPrompt); err != nil {
-			tmpFile.Close()
-			os.Remove(sysPromptPath)
-			return nil, fmt.Errorf("sandbox: write system prompt: %w", err)
-		}
-		tmpFile.Close()
-		// No need for deferred Remove — tmpDir cleanup handles it.
+	// Build agent CLI args (writes temp files into tmpDir).
+	args, err := r.adapter.BuildArgs(opts, tmpDir)
+	if err != nil {
+		return nil, err
 	}
 
-	// When ApiKeyHelper is set, write a settings JSON file in tmpDir so
-	// Claude Code picks up the apiKeyHelper configuration. Also add the
-	// helper script's parent directory to extra read paths so the sandbox
-	// allows the CLI to execute it.
-	var settingsPath string
-	var extraReadForHelper []string
-	if opts.ApiKeyHelper != "" {
-		if !filepath.IsAbs(opts.ApiKeyHelper) {
-			return nil, fmt.Errorf("sandbox: ApiKeyHelper must be an absolute path, got %q", opts.ApiKeyHelper)
-		}
-
-		settingsData, jsonErr := json.Marshal(map[string]string{
-			"apiKeyHelper": opts.ApiKeyHelper,
-		})
-		if jsonErr != nil {
-			return nil, fmt.Errorf("sandbox: marshal settings JSON: %w", jsonErr)
-		}
-		sf, sfErr := os.CreateTemp(tmpDir, ".soda-settings-*.json")
-		if sfErr != nil {
-			return nil, fmt.Errorf("sandbox: create settings file: %w", sfErr)
-		}
-		settingsPath = sf.Name()
-		if _, wErr := sf.Write(settingsData); wErr != nil {
-			sf.Close()
-			return nil, fmt.Errorf("sandbox: write settings file: %w", wErr)
-		}
-		sf.Close()
-
-		// Allow the sandbox to read the helper script's parent directory.
-		extraReadForHelper = append(extraReadForHelper, filepath.Dir(opts.ApiKeyHelper))
-	}
-
-	// Build Claude CLI args via exported BuildArgs.
-	var budgetPtr *float64
-	if opts.MaxBudgetUSD > 0 {
-		budgetPtr = &opts.MaxBudgetUSD
-	}
-	claudeOpts := claude.RunOpts{
-		SystemPromptPath: sysPromptPath,
-		SettingsPath:     settingsPath,
-		OutputSchema:     opts.OutputSchema,
-		AllowedTools:     opts.AllowedTools,
-		MaxBudgetUSD:     budgetPtr,
-		Timeout:          opts.Timeout,
-		TranscriptLevel:  opts.TranscriptLevel,
-	}
-	args := claude.BuildArgs(claudeOpts, opts.Model)
-
-	// Append user prompt as positional arg (stdin workaround — see issue #2 Fix 4).
-	args = append(args, "-p", opts.UserPrompt)
-
-	// Build sandbox profile. Include helper script's parent dir in extra read paths.
-	// Copy the slice to avoid mutating r.config.ExtraReadPaths across calls.
+	// Collect agent-specific extra paths and merge with config paths.
+	// Copy the config slices to avoid mutating r.config across calls.
+	adapterRead, adapterWrite := r.adapter.ExtraPaths(opts)
 	combinedExtraRead := append([]string{}, r.config.ExtraReadPaths...)
-	combinedExtraRead = append(combinedExtraRead, extraReadForHelper...)
+	combinedExtraRead = append(combinedExtraRead, adapterRead...)
+	combinedExtraWrite := append([]string{}, r.config.ExtraWritePaths...)
+	combinedExtraWrite = append(combinedExtraWrite, adapterWrite...)
 
-	// Vertex mode: Claude Code reads ~/.claude/claude.settings for Vertex
-	// env vars (project, region) and validates model availability against
-	// the Vertex model catalog using ADC. Since HOME is overridden to
-	// tmpDir inside the sandbox, both paths are unreachable without
-	// explicit read access. The proxy handles inference auth, but the
-	// model catalog pre-check and settings need filesystem access.
-	if os.Getenv("CLAUDE_CODE_USE_VERTEX") != "" {
-		if home, err := os.UserHomeDir(); err == nil {
-			gcloudDir := filepath.Join(home, ".config", "gcloud")
-			if _, err := os.Stat(gcloudDir); err == nil {
-				combinedExtraRead = append(combinedExtraRead, gcloudDir)
-			}
-			claudeDir := filepath.Join(home, ".claude")
-			if _, err := os.Stat(claudeDir); err == nil {
-				combinedExtraRead = append(combinedExtraRead, claudeDir)
-			}
-		}
-	}
-	sp := buildSandboxPaths(opts.WorkDir, tmpDir, r.claudeRead, combinedExtraRead, r.config.ExtraWritePaths)
+	sp := buildSandboxPaths(opts.WorkDir, tmpDir, combinedExtraRead, combinedExtraWrite)
 
 	useNetNS := r.config.UseNetNS
 	var llmProxy *proxy.Proxy
@@ -273,7 +190,7 @@ func (r *Runner) Run(ctx context.Context, opts runner.RunOpts) (*runner.RunResul
 	// Build env vars for the sandboxed process. go-arapuca v0.1.1+ passes
 	// these directly to the subprocess via Config.Env, avoiding the racy
 	// setEnvForLaunch pattern that mutated the host process env.
-	envSlice := claudeEnv(tmpDir, opts, r.claudeBin, proxyBaseURL)
+	envSlice := r.adapter.BuildEnv(opts, tmpDir, proxyBaseURL)
 	envMap := make(map[string]string, len(envSlice))
 	for _, entry := range envSlice {
 		k, v, _ := parseEnvEntry(entry)
@@ -281,7 +198,7 @@ func (r *Runner) Run(ctx context.Context, opts runner.RunOpts) (*runner.RunResul
 	}
 	cfg.Env = envMap
 
-	proc, launchErr := r.sandbox.Launch(ctx, cfg, r.claudeBin, args, nil)
+	proc, launchErr := r.sandbox.Launch(ctx, cfg, r.adapter.Binary(), args, nil)
 
 	if launchErr != nil {
 		return nil, fmt.Errorf("sandbox: launch: %w", launchErr)
@@ -354,10 +271,9 @@ func (r *Runner) Run(ctx context.Context, opts runner.RunOpts) (*runner.RunResul
 	if exitCode != 0 {
 		// Try parsing stdout even with non-zero exit (CLI may exit non-zero with valid output).
 		if stdout.Len() > 0 {
-			result, parseErr := claude.ParseResponse(stdout.Bytes())
+			result, parseErr := r.adapter.ParseOutput(stdout.Bytes(), opts)
 			if parseErr == nil {
-				transcript := claude.FilterTranscript(stdout.Bytes(), opts.TranscriptLevel)
-				return mapResult(result, transcript), nil
+				return result, nil
 			}
 		}
 		return nil, mapSandboxError(&ExitError{
@@ -367,29 +283,7 @@ func (r *Runner) Run(ctx context.Context, opts runner.RunOpts) (*runner.RunResul
 	}
 
 	// Parse response.
-	result, err := claude.ParseResponse(stdout.Bytes())
-	if err != nil {
-		return nil, mapClaudeParseError(err)
-	}
-
-	transcript := claude.FilterTranscript(stdout.Bytes(), opts.TranscriptLevel)
-	return mapResult(result, transcript), nil
-}
-
-// mapResult converts a claude.RunResult to a runner.RunResult.
-// transcript is computed post-run by FilterTranscript on buffered stdout.
-func mapResult(cr *claude.RunResult, transcript []claude.TranscriptEntry) *runner.RunResult {
-	return &runner.RunResult{
-		Output:        cr.Output,
-		RawText:       cr.Result,
-		CostUSD:       cr.CostUSD,
-		TokensIn:      cr.Tokens.InputTokens,
-		TokensOut:     cr.Tokens.OutputTokens,
-		CacheTokensIn: cr.Tokens.CacheCreationInputTokens + cr.Tokens.CacheReadInputTokens,
-		DurationMs:    cr.Duration.Milliseconds(),
-		Turns:         cr.Turns,
-		Transcript:    transcript,
-	}
+	return r.adapter.ParseOutput(stdout.Bytes(), opts)
 }
 
 // mapSandboxError wraps ExitError into runner.TransientError so the pipeline
@@ -413,19 +307,4 @@ func mapSandboxError(exitErr *ExitError) error {
 		Reason: "exit_code",
 		Err:    exitErr,
 	}
-}
-
-// mapClaudeParseError wraps claude parse/semantic errors from ParseResponse
-// into runner error types. Falls back to runner.ParseError for unrecognized
-// error types.
-func mapClaudeParseError(err error) error {
-	var pe *claude.ParseError
-	if errors.As(err, &pe) {
-		return &runner.ParseError{Err: pe.Err}
-	}
-	var se *claude.SemanticError
-	if errors.As(err, &se) {
-		return &runner.SemanticError{Message: se.Message}
-	}
-	return &runner.ParseError{Err: fmt.Errorf("sandbox: %w", err)}
 }

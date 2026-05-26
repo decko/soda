@@ -13,11 +13,11 @@ type sandboxPaths struct {
 }
 
 // buildSandboxPaths assembles the sandbox read/write path lists from the
-// worktree directory, temp directory, claude binary read paths, and any
-// extra paths from the Config. The result is used to populate arapuca.Profile.
-func buildSandboxPaths(workDir, tmpDir string, claudeRead, extraRead, extraWrite []string) sandboxPaths {
+// worktree directory, temp directory, and any extra paths (agent-specific
+// read paths merged into extraRead by the caller). The result is used to
+// populate arapuca.Profile.
+func buildSandboxPaths(workDir, tmpDir string, extraRead, extraWrite []string) sandboxPaths {
 	readPaths := systemReadPaths()
-	readPaths = append(readPaths, claudeRead...)
 	readPaths = append(readPaths, workDir)
 	readPaths = append(readPaths, extraRead...)
 
