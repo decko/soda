@@ -61,8 +61,9 @@ phases:
 soda run 42 --pipeline my-pipeline
 ```
 
-SODA resolves `phases-my-pipeline.yaml` from the current directory first,
-then `~/.config/soda/phases-my-pipeline.yaml`, then embedded defaults.
+SODA resolves the pipeline by checking `.pipelines/my-pipeline.yaml` first (if
+`pipelines_path` is configured), then `phases-my-pipeline.yaml` in the current
+directory, then `~/.config/soda/phases-my-pipeline.yaml`, then embedded defaults.
 
 ---
 
@@ -367,15 +368,23 @@ project and run immediately with `soda run <ticket> --pipeline <name>`.
 
 ## Discovery order
 
-SODA resolves named pipelines (`phases-<name>.yaml`) in this order (first found
-wins):
+SODA resolves named pipelines in this order (first found wins):
 
-1. Current working directory (`./phases-<name>.yaml`)
-2. User config directory (`~/.config/soda/phases-<name>.yaml`)
-3. Embedded defaults (compiled into the binary)
+1. `pipelines_path` directory (`.pipelines/<name>.yaml` — flat naming)
+2. `phases_path` from `soda.yaml` (default pipeline only)
+3. Current working directory (`./phases-<name>.yaml`)
+4. User config directory (`~/.config/soda/phases-<name>.yaml`)
+5. Embedded defaults (compiled into the binary)
 
-The default pipeline (`phases.yaml`) also checks `phases_path` in `soda.yaml`
-before the current working directory.
+The `pipelines_path` directory uses flat naming: `fast.yaml`, `docs-only.yaml`,
+`default.yaml`. The CWD and user config directory use the `phases-<name>.yaml`
+convention.
+
+> **Migration note:** Projects using `phases-<name>.yaml` in the working
+> directory continue to work unchanged. The `.pipelines/` directory is an
+> optional higher-priority location — run `soda init` to scaffold it, then move
+> your pipeline files into `.pipelines/` using flat names (e.g.
+> `phases-fast.yaml` → `.pipelines/fast.yaml`).
 
 For the full `phases.yaml` field reference including rework routing, corrective
 routing, parallel review, and polling configuration, see
