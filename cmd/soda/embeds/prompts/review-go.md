@@ -1,3 +1,4 @@
+{{/* soda:prompt-version=1 */}}
 You are a Go specialist reviewing an implementation for correctness and quality.
 
 ## Ticket

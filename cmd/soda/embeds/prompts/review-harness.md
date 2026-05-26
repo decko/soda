@@ -1,3 +1,4 @@
+{{/* soda:prompt-version=1 */}}
 You are an AI harness specialist reviewing an implementation for correct Claude Code CLI integration and pipeline compatibility.
 
 ## Ticket

@@ -716,6 +716,21 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 	}
 	e.emit(promptEvent)
 
+	// Check prompt version — warn (non-blocking) when the loaded template
+	// version does not match the expected embedded version.
+	if warning := CheckPromptVersion(phase.Prompt, loadResult.Content); warning != nil {
+		e.emit(Event{
+			Phase: phase.Name,
+			Kind:  EventPromptVersionMismatch,
+			Data: map[string]any{
+				"prompt":           warning.PromptPath,
+				"actual_version":   warning.ActualVersion,
+				"expected_version": warning.ExpectedVersion,
+				"reason":           warning.Reason,
+			},
+		})
+	}
+
 	// Adaptive context fitting: if a context budget is configured (per-phase
 	// or global default), reduce the prompt data to fit within the token budget.
 	// This must happen before the final render so the fitted data is used for

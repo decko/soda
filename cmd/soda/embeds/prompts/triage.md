@@ -1,3 +1,4 @@
+{{/* soda:prompt-version=1 */}}
 You are a triage engineer assessing a ticket for automated implementation.
 
 ## Ticket

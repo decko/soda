@@ -7264,3 +7264,188 @@ func TestEngine_ModelUsedClearedOnRerun(t *testing.T) {
 		t.Errorf("Generation after resume = %d, want 2", ps.Generation)
 	}
 }
+
+func TestEngine_PromptVersionMismatch_Emits_Warning(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "prompts/triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
+					RawText: "Triage done",
+					CostUSD: 0.01,
+				},
+			}},
+		},
+	}
+
+	// Create a prompt dir with a template that has NO version header.
+	// Since the prompt path matches "prompts/triage.md" (a known embedded
+	// prompt), the engine should emit EventPromptVersionMismatch.
+	promptDir := t.TempDir()
+	promptSubdir := filepath.Join(promptDir, "prompts")
+	if err := os.MkdirAll(promptSubdir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	content := "You are a triage engineer.\nTicket: {{.Ticket.Key}}\n"
+	if err := os.WriteFile(filepath.Join(promptSubdir, "triage.md"), []byte(content), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	var events []Event
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.Loader = NewPromptLoader(promptDir)
+		cfg.OnEvent = func(ev Event) {
+			events = append(events, ev)
+		}
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Should have a prompt_version_mismatch event.
+	var versionEvent *Event
+	for idx := range events {
+		if events[idx].Kind == EventPromptVersionMismatch {
+			versionEvent = &events[idx]
+			break
+		}
+	}
+	if versionEvent == nil {
+		t.Fatal("expected prompt_version_mismatch event for triage phase")
+	}
+	if versionEvent.Phase != "triage" {
+		t.Errorf("event phase = %q, want triage", versionEvent.Phase)
+	}
+	if expected, ok := versionEvent.Data["expected_version"]; !ok || expected != 1 {
+		t.Errorf("expected_version = %v, want 1", expected)
+	}
+}
+
+func TestEngine_PromptVersionMatch_NoWarning(t *testing.T) {
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "prompts/triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
+					RawText: "Triage done",
+					CostUSD: 0.01,
+				},
+			}},
+		},
+	}
+
+	// Create a prompt with the correct version header.
+	promptDir := t.TempDir()
+	promptSubdir := filepath.Join(promptDir, "prompts")
+	if err := os.MkdirAll(promptSubdir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	content := "{{/* soda:prompt-version=1 */}}\nYou are a triage engineer.\nTicket: {{.Ticket.Key}}\n"
+	if err := os.WriteFile(filepath.Join(promptSubdir, "triage.md"), []byte(content), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	var events []Event
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.Loader = NewPromptLoader(promptDir)
+		cfg.OnEvent = func(ev Event) {
+			events = append(events, ev)
+		}
+	})
+
+	if err := engine.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Should NOT have a prompt_version_mismatch event.
+	for _, ev := range events {
+		if ev.Kind == EventPromptVersionMismatch {
+			t.Errorf("unexpected prompt_version_mismatch event: %+v", ev)
+		}
+	}
+}
+
+func TestEngine_PromptVersionMismatch_NonBlocking(t *testing.T) {
+	// Verify that a version mismatch does NOT block pipeline execution.
+	phases := []PhaseConfig{
+		{
+			Name:   "triage",
+			Prompt: "prompts/triage.md",
+			Retry:  RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+		{
+			Name:      "plan",
+			Prompt:    "prompts/plan.md",
+			DependsOn: []string{"triage"},
+			Retry:     RetryConfig{Transient: 1, Parse: 1, Semantic: 1},
+		},
+	}
+
+	mock := &flexMockRunner{
+		responses: map[string][]flexResponse{
+			"triage": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"automatable":"yes"}`),
+					RawText: "Triage done",
+					CostUSD: 0.01,
+				},
+			}},
+			"plan": {{
+				result: &runner.RunResult{
+					Output:  json.RawMessage(`{"ticket_key":"TEST-1","tasks":[{"id":"T1","title":"task","files":["a.go"],"depends_on":[]}]}`),
+					RawText: "Plan done",
+					CostUSD: 0.01,
+				},
+			}},
+		},
+	}
+
+	// Both prompts lack version headers — mismatches should warn but not block.
+	promptDir := t.TempDir()
+	promptSubdir := filepath.Join(promptDir, "prompts")
+	if err := os.MkdirAll(promptSubdir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	for _, name := range []string{"triage.md", "plan.md"} {
+		content := fmt.Sprintf("Phase prompt for %s\nTicket: {{.Ticket.Key}}\n", name)
+		if err := os.WriteFile(filepath.Join(promptSubdir, name), []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+
+	var mismatchCount int
+	engine, _ := setupEngine(t, phases, mock, func(cfg *EngineConfig) {
+		cfg.Loader = NewPromptLoader(promptDir)
+		cfg.OnEvent = func(ev Event) {
+			if ev.Kind == EventPromptVersionMismatch {
+				mismatchCount++
+			}
+		}
+	})
+
+	err := engine.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run should succeed despite version mismatches: %v", err)
+	}
+
+	if mismatchCount != 2 {
+		t.Errorf("expected 2 prompt_version_mismatch events, got %d", mismatchCount)
+	}
+}

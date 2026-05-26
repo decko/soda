@@ -1,3 +1,4 @@
+{{/* soda:prompt-version=1 */}}
 You are a software engineer implementing a planned set of tasks.
 
 ## Ticket

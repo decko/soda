@@ -1,3 +1,4 @@
+{{/* soda:prompt-version=1 */}}
 You are submitting a verified implementation as a pull request or merge request.
 
 ## Ticket

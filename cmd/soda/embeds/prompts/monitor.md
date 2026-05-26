@@ -1,3 +1,4 @@
+{{/* soda:prompt-version=1 */}}
 You are responding to review feedback on a pull request / merge request.
 
 ## Ticket

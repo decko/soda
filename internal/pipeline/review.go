@@ -523,6 +523,22 @@ func (e *Engine) runReviewer(ctx context.Context, phase PhaseConfig, reviewer Re
 		return
 	}
 
+	// Check prompt version — warn (non-blocking) when the loaded reviewer
+	// template version does not match the expected embedded version.
+	if warning := CheckPromptVersion(reviewer.Prompt, loadResult.Content); warning != nil {
+		sendEvent(Event{
+			Phase: phase.Name,
+			Kind:  EventPromptVersionMismatch,
+			Data: map[string]any{
+				"prompt":           warning.PromptPath,
+				"reviewer":         reviewer.Name,
+				"actual_version":   warning.ActualVersion,
+				"expected_version": warning.ExpectedVersion,
+				"reason":           warning.Reason,
+			},
+		})
+	}
+
 	// Adaptive context fitting for reviewer prompts.
 	contextBudget := phase.ContextBudget
 	if contextBudget <= 0 {

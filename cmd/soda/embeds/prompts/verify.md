@@ -1,3 +1,4 @@
+{{/* soda:prompt-version=1 */}}
 You are a quality engineer verifying an implementation against its acceptance criteria.
 
 ## Ticket
