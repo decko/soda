@@ -254,6 +254,117 @@ func TestKnownEmbeddedPipelines_AllDiscoverable(t *testing.T) {
 	}
 }
 
+func TestRunPipelines_PipelinesDirDiscovery(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
+	// Create a soda.yaml with pipelines_path set.
+	cfgContent := "ticket_source: github\npipelines_path: .pipelines/\n"
+	cfgPath := filepath.Join(tmpDir, "soda.yaml")
+	if err := os.WriteFile(cfgPath, []byte(cfgContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create .pipelines/ with a named pipeline.
+	pipelinesDir := filepath.Join(tmpDir, ".pipelines")
+	if err := os.MkdirAll(pipelinesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	phases := "phases:\n  - name: triage\n    prompt: prompts/triage.md\n    timeout: 1m\n"
+	if err := os.WriteFile(filepath.Join(pipelinesDir, "my-custom.yaml"), []byte(phases), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	rootCmd := newRootCmd()
+	rootCmd.SetArgs([]string{"pipelines", "--config", cfgPath})
+	var buf bytes.Buffer
+	rootCmd.SetOut(&buf)
+
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("pipelines command failed: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "my-custom") {
+		t.Errorf("expected my-custom pipeline in output, got:\n%s", output)
+	}
+	if !strings.Contains(output, "pipelines-dir") {
+		t.Errorf("expected pipelines-dir source in output, got:\n%s", output)
+	}
+}
+
+func TestRunPipelines_PipelinesDirNoPipelinesPath(t *testing.T) {
+	// When no pipelines_path is configured, only CWD and embedded pipelines
+	// should appear.
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
+	cmd := newPipelinesCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("pipelines command failed: %v", err)
+	}
+
+	output := buf.String()
+	// Should NOT contain pipelines-dir source.
+	if strings.Contains(output, "pipelines-dir") {
+		t.Errorf("expected no pipelines-dir source without config, got:\n%s", output)
+	}
+	// Should still show embedded default.
+	if !strings.Contains(output, "default") {
+		t.Errorf("expected default pipeline in output, got:\n%s", output)
+	}
+}
+
+func TestRunPipelines_PipelinesDirDoesNotDuplicate(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
+	// Create a soda.yaml with pipelines_path set.
+	cfgContent := "ticket_source: github\npipelines_path: .pipelines/\n"
+	cfgPath := filepath.Join(tmpDir, "soda.yaml")
+	if err := os.WriteFile(cfgPath, []byte(cfgContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create .pipelines/ with a pipeline that also exists in CWD.
+	pipelinesDir := filepath.Join(tmpDir, ".pipelines")
+	if err := os.MkdirAll(pipelinesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	phases := "phases:\n  - name: triage\n    prompt: prompts/triage.md\n    timeout: 1m\n"
+	// Put a "fast" pipeline in both .pipelines/ and CWD (phases-fast.yaml).
+	if err := os.WriteFile(filepath.Join(pipelinesDir, "fast.yaml"), []byte(phases), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "phases-fast.yaml"), []byte(phases), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	rootCmd := newRootCmd()
+	rootCmd.SetArgs([]string{"pipelines", "--config", cfgPath})
+	var buf bytes.Buffer
+	rootCmd.SetOut(&buf)
+
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("pipelines command failed: %v", err)
+	}
+
+	output := buf.String()
+	// "fast" should appear exactly once.
+	fastCount := 0
+	for _, line := range strings.Split(output, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "fast") {
+			fastCount++
+		}
+	}
+	if fastCount != 1 {
+		t.Errorf("expected exactly 1 'fast' pipeline row, got %d:\n%s", fastCount, output)
+	}
+}
+
 func TestResolvePhasesPath_PipelinesPathDefault(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
