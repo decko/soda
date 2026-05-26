@@ -45,22 +45,23 @@ func runPipelines(cmd *cobra.Command) error {
 	pipelines := pipeline.DiscoverPipelines(dirs, sources)
 
 	// Prepend pipelines from the configured pipelines_path directory.
+	// .pipelines/ entries take priority over CWD entries (matching
+	// resolvePhasesPath step 0), so filter CWD/user entries that
+	// would be shadowed by the pipelines directory.
 	if pipelinesPath != "" {
 		dirPipelines := pipeline.DiscoverPipelinesInDir(pipelinesPath, "pipelines-dir")
 		if len(dirPipelines) > 0 {
-			// Build a set of already-discovered names to avoid duplicates.
-			discovered := make(map[string]bool, len(pipelines))
-			for _, p := range pipelines {
-				discovered[p.Name] = true
-			}
-			var toAdd []pipeline.PipelineInfo
+			dirNames := make(map[string]bool, len(dirPipelines))
 			for _, dp := range dirPipelines {
-				if !discovered[dp.Name] {
-					toAdd = append(toAdd, dp)
-					discovered[dp.Name] = true
+				dirNames[dp.Name] = true
+			}
+			var filtered []pipeline.PipelineInfo
+			for _, p := range pipelines {
+				if !dirNames[p.Name] {
+					filtered = append(filtered, p)
 				}
 			}
-			pipelines = append(toAdd, pipelines...)
+			pipelines = append(dirPipelines, filtered...)
 		}
 	}
 

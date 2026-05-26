@@ -358,6 +358,11 @@ func TestRunPipelines_PipelinesDirDoesNotDuplicate(t *testing.T) {
 	for _, line := range strings.Split(output, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "fast") {
 			fastCount++
+			// The .pipelines/ version should win, showing "pipelines-dir"
+			// source (matching resolvePhasesPath priority).
+			if !strings.Contains(line, "pipelines-dir") {
+				t.Errorf("expected 'pipelines-dir' source for fast, got: %s", line)
+			}
 		}
 	}
 	if fastCount != 1 {
