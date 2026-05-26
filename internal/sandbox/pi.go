@@ -105,7 +105,7 @@ func (a *PiAdapter) ParseOutput(stdout []byte, opts runner.RunOpts) (*runner.Run
 	}
 
 	// Validate output against schema if provided.
-	if opts.OutputSchema != "" && len(result.Output) > 0 {
+	if opts.OutputSchema != "" {
 		if valErr := runner.ValidatePiOutput(result.Output, opts.OutputSchema); valErr != nil {
 			return nil, mapPiParseError(valErr)
 		}
