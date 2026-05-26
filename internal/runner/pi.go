@@ -16,9 +16,8 @@ import (
 
 // PiRunner implements Runner by invoking the Pi coding agent CLI.
 type PiRunner struct {
-	binary  string // resolved absolute path to pi binary
-	model   string
-	workDir string
+	binary string // resolved absolute path to pi binary
+	model  string
 }
 
 // compile-time interface check
@@ -35,14 +34,9 @@ func NewPiRunner(binary, model, workDir string) (*PiRunner, error) {
 		return nil, fmt.Errorf("pi binary not found: %w", err)
 	}
 
-	if !filepath.IsAbs(workDir) {
-		return nil, fmt.Errorf("workDir must be absolute: %s", workDir)
-	}
-
 	return &PiRunner{
-		binary:  resolved,
-		model:   model,
-		workDir: workDir,
+		binary: resolved,
+		model:  model,
 	}, nil
 }
 
