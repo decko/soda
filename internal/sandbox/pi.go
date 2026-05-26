@@ -37,12 +37,23 @@ func (a *PiAdapter) Binary() string {
 	return a.binary
 }
 
-// BuildArgs writes temporary files (system prompt) into tmpDir
+// BuildArgs writes temporary files (system prompt) into the workspace directory
 // and returns the CLI argument list for a Pi invocation.
+//
+// Pi discovers system prompts from cwd-relative .pi/SYSTEM.md; the sandbox
+// process runs with WorkDir as its working directory, so the prompt must live
+// there. When opts.WorkDir is empty (unit tests calling BuildArgs directly),
+// tmpDir is used as a safe fallback.
 func (a *PiAdapter) BuildArgs(opts runner.RunOpts, tmpDir string) ([]string, error) {
-	// Write system prompt to {tmpDir}/.pi/SYSTEM.md to avoid polluting the worktree.
+	// Write system prompt to {workDir}/.pi/SYSTEM.md so Pi can discover it
+	// relative to its working directory. Fall back to tmpDir when WorkDir is
+	// unset (direct unit-test calls that do not exercise the full runner path).
 	if opts.SystemPrompt != "" {
-		piDir := filepath.Join(tmpDir, ".pi")
+		promptDir := opts.WorkDir
+		if promptDir == "" {
+			promptDir = tmpDir
+		}
+		piDir := filepath.Join(promptDir, ".pi")
 		if err := os.MkdirAll(piDir, 0o755); err != nil {
 			return nil, fmt.Errorf("sandbox: create .pi directory: %w", err)
 		}
@@ -50,7 +61,6 @@ func (a *PiAdapter) BuildArgs(opts runner.RunOpts, tmpDir string) ([]string, err
 		if err := os.WriteFile(promptPath, []byte(opts.SystemPrompt), 0o644); err != nil {
 			return nil, fmt.Errorf("sandbox: write pi system prompt: %w", err)
 		}
-		// No need for deferred Remove — tmpDir cleanup handles it.
 	}
 
 	args := []string{
