@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"fmt"
+	"reflect"
 	"regexp"
 	"strconv"
 )
@@ -50,16 +51,33 @@ func EmbeddedPromptVersion(promptPath string) int {
 	return embeddedPromptVersions[promptPath]
 }
 
-// ScanPromptDataFields extracts top-level PromptData field names referenced
-// in a template. It scans for patterns like {{.FieldName}} or
-// {{- if .FieldName}} where FieldName starts with an uppercase letter.
-// Returns a deduplicated sorted slice.
+// promptDataFields is the set of top-level field names on PromptData,
+// populated at init time via reflect. Used by ScanPromptDataFields to
+// filter out false positives from range-variable dot accesses (e.g.
+// $finding.Severity) and rebound-dot accesses inside range blocks
+// (e.g. .Cycle inside {{range .ReworkFeedback.PriorCycles}}).
+var promptDataFields map[string]bool
+
+func init() {
+	promptDataFields = make(map[string]bool)
+	typ := reflect.TypeOf(PromptData{})
+	for idx := 0; idx < typ.NumField(); idx++ {
+		promptDataFields[typ.Field(idx).Name] = true
+	}
+}
+
+// promptFieldRe captures the first uppercase identifier after a dot inside
+// {{ ... }} template actions. This is a coarse pass; results are filtered
+// against the actual PromptData struct fields to eliminate sub-struct
+// field accesses ($var.Field, rebound-dot .Field inside range blocks).
 var promptFieldRe = regexp.MustCompile(`\{\{[^}]*?\.([A-Z][a-zA-Z0-9]*)`)
 
 // ScanPromptDataFields extracts top-level PromptData field names referenced
 // in a Go template string. It scans raw text for patterns like {{.Field}} or
 // {{- if .Field.Sub}}, capturing the first uppercase identifier after a dot
-// inside {{ }}, which naturally yields PromptData fields.
+// inside {{ }}, then filters matches against the actual PromptData struct
+// fields to exclude sub-struct field accesses (e.g. $finding.Severity,
+// .Cycle inside a range block). Returns a deduplicated slice.
 func ScanPromptDataFields(tmpl string) []string {
 	matches := promptFieldRe.FindAllStringSubmatch(tmpl, -1)
 	seen := make(map[string]bool)
@@ -69,6 +87,9 @@ func ScanPromptDataFields(tmpl string) []string {
 			continue
 		}
 		field := match[1]
+		if !promptDataFields[field] {
+			continue
+		}
 		if !seen[field] {
 			seen[field] = true
 			fields = append(fields, field)
