@@ -1,0 +1,426 @@
+package runner
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+	"testing"
+)
+
+var _ Runner = (*PiRunner)(nil) // compile-time interface check
+
+func TestParsePiStream(t *testing.T) {
+	t.Run("parses_assistant_and_result_events", func(t *testing.T) {
+		stream := strings.Join([]string{
+			`{"type":"assistant","content":"Hello "}`,
+			`{"type":"assistant","content":"world"}`,
+			`{"type":"tool_use","tool":"bash","tool_id":"t1"}`,
+			`{"type":"message_end","usage":{"input_tokens":100,"output_tokens":50},"cost_usd":0.005}`,
+			`{"type":"result","result":{"answer":"42"}}`,
+		}, "\n")
+
+		result, err := ParsePiStream([]byte(stream), nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if result.RawText != "Hello world" {
+			t.Errorf("RawText = %q, want %q", result.RawText, "Hello world")
+		}
+		if result.TokensIn != 100 {
+			t.Errorf("TokensIn = %d, want 100", result.TokensIn)
+		}
+		if result.TokensOut != 50 {
+			t.Errorf("TokensOut = %d, want 50", result.TokensOut)
+		}
+		if result.CostUSD != 0.005 {
+			t.Errorf("CostUSD = %f, want 0.005", result.CostUSD)
+		}
+		if result.Turns != 1 {
+			t.Errorf("Turns = %d, want 1", result.Turns)
+		}
+		if string(result.Output) != `{"answer":"42"}` {
+			t.Errorf("Output = %s, want %s", string(result.Output), `{"answer":"42"}`)
+		}
+	})
+
+	t.Run("accumulates_multiple_message_end_costs", func(t *testing.T) {
+		stream := strings.Join([]string{
+			`{"type":"message_end","usage":{"input_tokens":50,"output_tokens":25},"cost_usd":0.003}`,
+			`{"type":"message_end","usage":{"input_tokens":75,"output_tokens":30},"cost_usd":0.004}`,
+			`{"type":"result","result":{"ok":true}}`,
+		}, "\n")
+
+		result, err := ParsePiStream([]byte(stream), nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if result.TokensIn != 125 {
+			t.Errorf("TokensIn = %d, want 125", result.TokensIn)
+		}
+		if result.TokensOut != 55 {
+			t.Errorf("TokensOut = %d, want 55", result.TokensOut)
+		}
+		wantCost := 0.007
+		if result.CostUSD < wantCost-0.0001 || result.CostUSD > wantCost+0.0001 {
+			t.Errorf("CostUSD = %f, want %f", result.CostUSD, wantCost)
+		}
+	})
+
+	t.Run("returns_semantic_error_on_result_error", func(t *testing.T) {
+		stream := `{"type":"result","subtype":"error","error":"something went wrong"}`
+
+		_, err := ParsePiStream([]byte(stream), nil)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+
+		var se *SemanticError
+		if !errors.As(err, &se) {
+			t.Fatalf("expected SemanticError, got %T: %v", err, err)
+		}
+		if se.Message != "something went wrong" {
+			t.Errorf("Message = %q, want %q", se.Message, "something went wrong")
+		}
+	})
+
+	t.Run("returns_transient_error_on_error_event", func(t *testing.T) {
+		stream := `{"type":"error","error":"rate limit exceeded 429"}`
+
+		_, err := ParsePiStream([]byte(stream), nil)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+
+		var te *TransientError
+		if !errors.As(err, &te) {
+			t.Fatalf("expected TransientError, got %T: %v", err, err)
+		}
+		if te.Reason != "rate_limit" {
+			t.Errorf("Reason = %q, want %q", te.Reason, "rate_limit")
+		}
+	})
+
+	t.Run("calls_onChunk_for_assistant_content", func(t *testing.T) {
+		stream := strings.Join([]string{
+			`{"type":"assistant","content":"chunk1"}`,
+			`{"type":"assistant","content":"chunk2"}`,
+			`{"type":"result","result":{}}`,
+		}, "\n")
+
+		var chunks []string
+		onChunk := func(text string) {
+			chunks = append(chunks, text)
+		}
+
+		_, err := ParsePiStream([]byte(stream), onChunk)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if len(chunks) != 2 {
+			t.Fatalf("got %d chunks, want 2", len(chunks))
+		}
+		if chunks[0] != "chunk1" || chunks[1] != "chunk2" {
+			t.Errorf("chunks = %v, want [chunk1, chunk2]", chunks)
+		}
+	})
+
+	t.Run("skips_non_json_lines", func(t *testing.T) {
+		stream := strings.Join([]string{
+			"debug: starting up",
+			`{"type":"result","result":{"ok":true}}`,
+			"",
+		}, "\n")
+
+		result, err := ParsePiStream([]byte(stream), nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if string(result.Output) != `{"ok":true}` {
+			t.Errorf("Output = %s, want %s", string(result.Output), `{"ok":true}`)
+		}
+	})
+
+	t.Run("empty_stream_returns_empty_result", func(t *testing.T) {
+		result, err := ParsePiStream([]byte(""), nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if result.RawText != "" {
+			t.Errorf("RawText = %q, want empty", result.RawText)
+		}
+		if result.Output != nil {
+			t.Errorf("Output = %s, want nil", string(result.Output))
+		}
+	})
+
+	t.Run("null_result_treated_as_nil", func(t *testing.T) {
+		stream := `{"type":"result","result":null}`
+		result, err := ParsePiStream([]byte(stream), nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.Output != nil {
+			t.Errorf("Output = %s, want nil", string(result.Output))
+		}
+	})
+}
+
+func TestValidatePiOutput(t *testing.T) {
+	t.Run("passes_with_all_required_fields", func(t *testing.T) {
+		output := json.RawMessage(`{"ticket_key":"TEST-1","verdict":"PASS"}`)
+		schema := `{"required":["ticket_key","verdict"]}`
+
+		err := ValidatePiOutput(output, schema)
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("fails_with_missing_required_field", func(t *testing.T) {
+		output := json.RawMessage(`{"ticket_key":"TEST-1"}`)
+		schema := `{"required":["ticket_key","verdict"]}`
+
+		err := ValidatePiOutput(output, schema)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+
+		var pe *ParseError
+		if !errors.As(err, &pe) {
+			t.Fatalf("expected ParseError, got %T: %v", err, err)
+		}
+		if !strings.Contains(pe.Error(), "verdict") {
+			t.Errorf("error should mention missing field 'verdict', got: %v", pe)
+		}
+	})
+
+	t.Run("passes_with_empty_schema", func(t *testing.T) {
+		output := json.RawMessage(`{"anything":"goes"}`)
+		err := ValidatePiOutput(output, "")
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("passes_with_no_required_fields_in_schema", func(t *testing.T) {
+		output := json.RawMessage(`{"anything":"goes"}`)
+		schema := `{"type":"object","properties":{}}`
+		err := ValidatePiOutput(output, schema)
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("fails_with_empty_output", func(t *testing.T) {
+		err := ValidatePiOutput(nil, `{"required":["key"]}`)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+
+		var pe *ParseError
+		if !errors.As(err, &pe) {
+			t.Fatalf("expected ParseError, got %T: %v", err, err)
+		}
+	})
+
+	t.Run("passes_with_invalid_schema_json", func(t *testing.T) {
+		output := json.RawMessage(`{"key":"val"}`)
+		err := ValidatePiOutput(output, "not valid json")
+		if err != nil {
+			t.Errorf("invalid schema should not block output: %v", err)
+		}
+	})
+}
+
+func TestMapPiToolName(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"Read", "read_file"},
+		{"Write", "write_file"},
+		{"Edit", "edit_file"},
+		{"Glob", "glob"},
+		{"Grep", "grep"},
+		{"Bash", "bash"},
+		{"Search", "search"},
+		{"Bash(git:*)", "bash(git:*)"},
+		{"UnknownTool", "UnknownTool"},
+		{"custom_tool", "custom_tool"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := MapPiToolName(tt.input)
+			if got != tt.want {
+				t.Errorf("MapPiToolName(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestClassifyPiError(t *testing.T) {
+	tests := []struct {
+		msg    string
+		reason string
+	}{
+		{"rate limit exceeded", "rate_limit"},
+		{"HTTP 429 Too Many Requests", "rate_limit"},
+		{"request timeout", "timeout"},
+		{"server overloaded 503", "overloaded"},
+		{"connection refused", "connection"},
+		{"something unknown happened", "unknown"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.reason, func(t *testing.T) {
+			got := classifyPiError(tt.msg)
+			if got != tt.reason {
+				t.Errorf("classifyPiError(%q) = %q, want %q", tt.msg, got, tt.reason)
+			}
+		})
+	}
+}
+
+func TestBuildPiArgs(t *testing.T) {
+	t.Run("basic_args", func(t *testing.T) {
+		opts := RunOpts{
+			Model:        "pi-model-1",
+			OutputSchema: `{"type":"object"}`,
+			AllowedTools: []string{"Read", "Bash(git:*)"},
+		}
+		args := buildPiArgs(opts, "default-model")
+
+		// Model should be per-invocation override.
+		assertContainsArg(t, args, "--model", "pi-model-1")
+		assertContainsArg(t, args, "--json-schema", `{"type":"object"}`)
+		// Tools should be mapped.
+		assertContainsArg(t, args, "--allowed-tools", "read_file")
+		assertContainsArg(t, args, "--allowed-tools", "bash(git:*)")
+	})
+
+	t.Run("default_model_when_not_overridden", func(t *testing.T) {
+		opts := RunOpts{}
+		args := buildPiArgs(opts, "default-model")
+		assertContainsArg(t, args, "--model", "default-model")
+	})
+
+	t.Run("no_model_when_both_empty", func(t *testing.T) {
+		opts := RunOpts{}
+		args := buildPiArgs(opts, "")
+		for _, arg := range args {
+			if arg == "--model" {
+				t.Error("should not include --model when both are empty")
+			}
+		}
+	})
+}
+
+func TestPiLimitedBuffer(t *testing.T) {
+	t.Run("truncates_at_limit", func(t *testing.T) {
+		lb := &piLimitedBuffer{max: 10}
+		lb.Write([]byte("hello"))
+		lb.Write([]byte("world!"))
+
+		if lb.Len() != 10 {
+			t.Errorf("Len() = %d, want 10", lb.Len())
+		}
+		if !lb.overflow {
+			t.Error("expected overflow to be true")
+		}
+		if string(lb.Bytes()) != "helloworld" {
+			t.Errorf("Bytes() = %q, want %q", string(lb.Bytes()), "helloworld")
+		}
+	})
+
+	t.Run("write_returns_full_length", func(t *testing.T) {
+		lb := &piLimitedBuffer{max: 5}
+		n, err := lb.Write([]byte("hello world"))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if n != 11 {
+			t.Errorf("Write returned %d, want 11", n)
+		}
+		// Second write after overflow still returns full length.
+		n, err = lb.Write([]byte("more data"))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if n != 9 {
+			t.Errorf("Write returned %d, want 9", n)
+		}
+	})
+}
+
+func TestClassifyPiExitError(t *testing.T) {
+	t.Run("rate_limit_in_stderr", func(t *testing.T) {
+		err := classifyPiExitError(
+			fmt.Errorf("exit status 1"),
+			[]byte("Error: rate limit exceeded"),
+		)
+		var te *TransientError
+		if !errors.As(err, &te) {
+			t.Fatalf("expected TransientError, got %T: %v", err, err)
+		}
+		if te.Reason != "rate_limit" {
+			t.Errorf("Reason = %q, want %q", te.Reason, "rate_limit")
+		}
+	})
+
+	t.Run("unknown_stderr", func(t *testing.T) {
+		err := classifyPiExitError(
+			fmt.Errorf("exit status 1"),
+			[]byte("something else happened"),
+		)
+		var te *TransientError
+		if !errors.As(err, &te) {
+			t.Fatalf("expected TransientError, got %T: %v", err, err)
+		}
+		if te.Reason != "unknown" {
+			t.Errorf("Reason = %q, want %q", te.Reason, "unknown")
+		}
+	})
+}
+
+func TestWritePiSystemPrompt(t *testing.T) {
+	t.Run("writes_to_pi_directory", func(t *testing.T) {
+		dir := t.TempDir()
+		content := "You are a helpful assistant."
+
+		path, err := writePiSystemPrompt(dir, content)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if !strings.HasSuffix(path, ".pi/SYSTEM.md") {
+			t.Errorf("path = %q, want suffix .pi/SYSTEM.md", path)
+		}
+
+		got, readErr := os.ReadFile(path)
+		if readErr != nil {
+			t.Fatalf("failed to read file: %v", readErr)
+		}
+		if string(got) != content {
+			t.Errorf("content = %q, want %q", string(got), content)
+		}
+	})
+}
+
+// assertContainsArg checks that args contains a flag followed by a specific value.
+func assertContainsArg(t *testing.T, args []string, flag, value string) {
+	t.Helper()
+	for idx, arg := range args {
+		if arg == flag && idx+1 < len(args) && args[idx+1] == value {
+			return
+		}
+	}
+	t.Errorf("args %v does not contain %s %s", args, flag, value)
+}
