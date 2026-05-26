@@ -23,10 +23,11 @@ type Config struct {
 	GitLab              GitLabTicketConfig  `yaml:"gitlab,omitempty"`
 	Mode                string              `yaml:"mode"`
 	Model               string              `yaml:"model"`
-	Runner              string              `yaml:"runner,omitempty"` // "claude" (default) or "pi"
+	Runner              string              `yaml:"runner,omitempty"` // "claude" (default), "pi", or "opencode"
 	Auth                AuthConfig          `yaml:"auth"`
 	Sandbox             SandboxConfig       `yaml:"sandbox"`
 	Pi                  PiConfig            `yaml:"pi,omitempty"`
+	Opencode            OpencodeConfig      `yaml:"opencode,omitempty"`
 	Limits              LimitsConfig        `yaml:"limits"`
 	PhasesPath          string              `yaml:"phases_path"`    // explicit path to pipeline YAML; overrides CWD discovery
 	PipelinesPath       string              `yaml:"pipelines_path"` // directory for named pipeline YAML files (e.g. ".pipelines/"); checked before CWD discovery
@@ -46,6 +47,12 @@ type Config struct {
 type PiConfig struct {
 	Binary string `yaml:"binary,omitempty"` // path to pi binary; empty = exec.LookPath("pi")
 	Model  string `yaml:"model,omitempty"`  // model override for Pi; empty = use top-level Model
+}
+
+// OpencodeConfig holds Opencode agent settings.
+type OpencodeConfig struct {
+	Binary string `yaml:"binary,omitempty"` // path to opencode binary; empty = exec.LookPath("opencode")
+	Model  string `yaml:"model,omitempty"`  // model override for Opencode; empty = use top-level Model
 }
 
 // TranscriptConfig controls agent transcript persistence.

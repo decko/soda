@@ -41,6 +41,14 @@ mode: autonomous   # or "checkpoint"
 # Model (used for all phases in v1)
 model: claude-opus-4-6
 
+# Runner backend — "claude" (default), "pi", or "opencode"
+# runner: opencode
+
+# Opencode agent settings (uncomment to use opencode as the runner backend)
+# opencode:
+#   binary: opencode           # path to opencode binary; empty = exec.LookPath("opencode")
+#   model: claude-sonnet-4-20250514  # model override; empty = use top-level model
+
 # Authentication — optional keychain/vault-based credential injection.
 # When api_key_helper is set, SODA writes a Claude Code settings file
 # with apiKeyHelper pointing to this script. The script must print a
