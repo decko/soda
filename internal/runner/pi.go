@@ -362,9 +362,9 @@ func classifyPiExitError(waitErr error, stderr []byte) error {
 		substrings []string
 		reason     string
 	}{
-		{[]string{"rate limit", "429", "too many requests"}, "rate_limit"},
-		{[]string{"timeout", "504", "529"}, "timeout"},
-		{[]string{"overloaded", "500", "502", "503", "server error", "internal error"}, "overloaded"},
+		{[]string{"rate limit", " 429", "too many requests"}, "rate_limit"},
+		{[]string{"timeout", " 504", " 529"}, "timeout"},
+		{[]string{"overloaded", " 500", " 502", " 503", "server error", "internal error"}, "overloaded"},
 		{[]string{"connection refused", "econnreset", "connection reset"}, "connection"},
 	}
 

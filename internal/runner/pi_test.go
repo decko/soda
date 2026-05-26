@@ -397,6 +397,20 @@ func TestClassifyPiExitError(t *testing.T) {
 			t.Errorf("Reason = %q, want %q", te.Reason, "unknown")
 		}
 	})
+
+	t.Run("no_false_positive_on_bare_numbers", func(t *testing.T) {
+		err := classifyPiExitError(
+			fmt.Errorf("exit status 1"),
+			[]byte("used 1500 tokens in 2529 ms"),
+		)
+		var te *TransientError
+		if !errors.As(err, &te) {
+			t.Fatalf("expected TransientError, got %T: %v", err, err)
+		}
+		if te.Reason != "unknown" {
+			t.Errorf("Reason = %q, want %q (bare numbers should not match)", te.Reason, "unknown")
+		}
+	})
 }
 
 func TestWritePiSystemPrompt(t *testing.T) {
