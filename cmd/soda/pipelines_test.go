@@ -144,7 +144,7 @@ func TestRunPipelines_LocalOverrideHidesEmbedded(t *testing.T) {
 
 func TestResolvePhasesPath_EmbeddedQuickFix(t *testing.T) {
 	t.Chdir(t.TempDir())
-	path, cleanup, err := resolvePhasesPath("quick-fix", "")
+	path, cleanup, err := resolvePhasesPath("quick-fix", "", "")
 	if err != nil {
 		t.Fatalf("resolvePhasesPath(quick-fix) failed: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestResolvePhasesPath_EmbeddedQuickFix(t *testing.T) {
 
 func TestResolvePhasesPath_EmbeddedDocsOnly(t *testing.T) {
 	t.Chdir(t.TempDir())
-	path, cleanup, err := resolvePhasesPath("docs-only", "")
+	path, cleanup, err := resolvePhasesPath("docs-only", "", "")
 	if err != nil {
 		t.Fatalf("resolvePhasesPath(docs-only) failed: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestResolvePhasesPath_EmbeddedDocsOnly(t *testing.T) {
 
 func TestResolvePhasesPath_UnknownPipeline(t *testing.T) {
 	t.Chdir(t.TempDir())
-	_, _, err := resolvePhasesPath("nonexistent-pipeline", "")
+	_, _, err := resolvePhasesPath("nonexistent-pipeline", "", "")
 	if err == nil {
 		t.Fatal("expected error for unknown pipeline, got nil")
 	}
@@ -214,7 +214,7 @@ func TestResolvePhasesPath_DependsOnValidation(t *testing.T) {
 	// validation (which happens inside LoadPipeline).
 	for _, name := range []string{"quick-fix", "docs-only"} {
 		t.Run(name, func(t *testing.T) {
-			path, cleanup, err := resolvePhasesPath(name, "")
+			path, cleanup, err := resolvePhasesPath(name, "", "")
 			if err != nil {
 				t.Fatalf("resolvePhasesPath(%s) failed: %v", name, err)
 			}
@@ -240,7 +240,7 @@ func TestKnownEmbeddedPipelines_AllDiscoverable(t *testing.T) {
 
 	for _, name := range names {
 		t.Run(name, func(t *testing.T) {
-			path, cleanup, err := resolvePhasesPath(name, "")
+			path, cleanup, err := resolvePhasesPath(name, "", "")
 			if err != nil {
 				t.Fatalf("resolvePhasesPath(%s) failed: %v", name, err)
 			}
@@ -251,6 +251,92 @@ func TestKnownEmbeddedPipelines_AllDiscoverable(t *testing.T) {
 				t.Fatalf("resolvePhasesPath(%s) returned empty path", name)
 			}
 		})
+	}
+}
+
+func TestResolvePhasesPath_PipelinesPathDefault(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
+	// Create .pipelines/default.yaml
+	pipelinesDir := filepath.Join(tmpDir, ".pipelines")
+	if err := os.MkdirAll(pipelinesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	phases := "phases:\n  - name: triage\n    prompt: prompts/triage.md\n    timeout: 1m\n"
+	if err := os.WriteFile(filepath.Join(pipelinesDir, "default.yaml"), []byte(phases), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	path, cleanup, err := resolvePhasesPath("", "", pipelinesDir)
+	if err != nil {
+		t.Fatalf("resolvePhasesPath with pipelinesPath failed: %v", err)
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+
+	wantPath := filepath.Join(pipelinesDir, "default.yaml")
+	if path != wantPath {
+		t.Errorf("path = %q, want %q", path, wantPath)
+	}
+}
+
+func TestResolvePhasesPath_PipelinesPathNamed(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
+	// Create .pipelines/fast.yaml
+	pipelinesDir := filepath.Join(tmpDir, ".pipelines")
+	if err := os.MkdirAll(pipelinesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	phases := "phases:\n  - name: implement\n    prompt: prompts/implement.md\n    timeout: 15m\n"
+	if err := os.WriteFile(filepath.Join(pipelinesDir, "fast.yaml"), []byte(phases), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	path, cleanup, err := resolvePhasesPath("fast", "", pipelinesDir)
+	if err != nil {
+		t.Fatalf("resolvePhasesPath with pipelinesPath named failed: %v", err)
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+
+	wantPath := filepath.Join(pipelinesDir, "fast.yaml")
+	if path != wantPath {
+		t.Errorf("path = %q, want %q", path, wantPath)
+	}
+}
+
+func TestResolvePhasesPath_PipelinesPathFallsThrough(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
+	// Create .pipelines/ dir but without the requested pipeline.
+	pipelinesDir := filepath.Join(tmpDir, ".pipelines")
+	if err := os.MkdirAll(pipelinesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create phases.yaml in CWD — should fall through to CWD resolution.
+	phases := "phases:\n  - name: triage\n    prompt: prompts/triage.md\n    timeout: 1m\n"
+	if err := os.WriteFile(filepath.Join(tmpDir, "phases.yaml"), []byte(phases), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	path, cleanup, err := resolvePhasesPath("", "", pipelinesDir)
+	if err != nil {
+		t.Fatalf("resolvePhasesPath should fall through: %v", err)
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+
+	// Should resolve to the CWD phases.yaml, not the pipelines dir.
+	if !strings.HasSuffix(path, "phases.yaml") {
+		t.Errorf("path = %q, want CWD phases.yaml", path)
 	}
 }
 

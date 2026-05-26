@@ -157,7 +157,7 @@ func runPipeline(cfg *config.Config, opts pipelineOpts) error {
 
 	// Load pipeline config
 	pipelineName := opts.pipelineName
-	phasesPath, phasesCleanup, err := resolvePhasesPath(pipelineName, cfg.PhasesPath)
+	phasesPath, phasesCleanup, err := resolvePhasesPath(pipelineName, cfg.PhasesPath, cfg.PipelinesPath)
 	if err != nil {
 		return fmt.Errorf("run: %w", err)
 	}
@@ -244,7 +244,7 @@ func runPipeline(cfg *config.Config, opts pipelineOpts) error {
 			// Auto-adopt the stored pipeline name so the resume uses the correct config.
 			fmt.Fprintf(os.Stderr, "Warning: original run used pipeline %q; adopting for resume\n", storedPipeline)
 			pipelineName = storedPipeline
-			newPhasesPath, newCleanup, reloadErr := resolvePhasesPath(pipelineName, cfg.PhasesPath)
+			newPhasesPath, newCleanup, reloadErr := resolvePhasesPath(pipelineName, cfg.PhasesPath, cfg.PipelinesPath)
 			if reloadErr != nil {
 				return fmt.Errorf("run: %w", reloadErr)
 			}

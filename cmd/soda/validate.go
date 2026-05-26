@@ -75,7 +75,7 @@ func runValidate(w io.Writer, errW io.Writer, cfg *config.Config, pipelineName s
 	fmt.Fprintln(w, "✓ config: valid")
 
 	// Stage 2: Phases
-	pl := validatePhases(w, result, pipelineName)
+	pl := validatePhases(w, result, cfg, pipelineName)
 
 	// Stage 3: Prompts (only if phases loaded)
 	if pl != nil {
@@ -118,8 +118,8 @@ func runValidate(w io.Writer, errW io.Writer, cfg *config.Config, pipelineName s
 }
 
 // validatePhases loads and validates the pipeline config (cross-references, structure).
-func validatePhases(w io.Writer, result *validationResult, pipelineName string) *pipeline.PhasePipeline {
-	phasesPath, cleanup, err := resolvePhasesPath(pipelineName, "")
+func validatePhases(w io.Writer, result *validationResult, cfg *config.Config, pipelineName string) *pipeline.PhasePipeline {
+	phasesPath, cleanup, err := resolvePhasesPath(pipelineName, cfg.PhasesPath, cfg.PipelinesPath)
 	if err != nil {
 		result.addError("phases: %v", err)
 		return nil
@@ -394,7 +394,7 @@ func validateNotifyScript(result *validationResult, prefix string, sc *config.Sc
 // _schema_version field, and compares it against the current schema hash.
 func runValidateSession(w io.Writer, cfg *config.Config, ticketKey string, pipelineName string) error {
 	// Load pipeline.
-	phasesPath, cleanup, err := resolvePhasesPath(pipelineName, cfg.PhasesPath)
+	phasesPath, cleanup, err := resolvePhasesPath(pipelineName, cfg.PhasesPath, cfg.PipelinesPath)
 	if err != nil {
 		return fmt.Errorf("validate session: %w", err)
 	}

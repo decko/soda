@@ -147,15 +147,29 @@ func extractEmbeddedPrompts() (string, error) {
 // When pipelineName is empty or "default", it resolves to phases.yaml;
 // otherwise it resolves to phases-<name>.yaml. The search order is:
 //
-//  0. configPhasesPath from soda.yaml (if set, used as-is for default pipeline)
-//  1. Working directory
-//  2. User config directory (~/.config/soda/)
-//  3. Embedded default (only for the "default" pipeline)
+//  0. pipelinesPath directory (e.g. ".pipelines/default.yaml" or ".pipelines/<name>.yaml")
+//  1. configPhasesPath from soda.yaml (if set, used as-is for default pipeline)
+//  2. Working directory
+//  3. User config directory (~/.config/soda/)
+//  4. Embedded default (only for the "default" pipeline)
 //
 // Caller must remove the temp file if cleanup is non-nil.
-func resolvePhasesPath(pipelineName, configPhasesPath string) (path string, cleanup func(), err error) {
+func resolvePhasesPath(pipelineName, configPhasesPath, pipelinesPath string) (path string, cleanup func(), err error) {
 	if err := pipeline.ValidatePipelineName(pipelineName); err != nil {
 		return "", nil, err
+	}
+
+	// Step 0: Check pipelinesPath directory for flat-named pipeline files.
+	if pipelinesPath != "" {
+		var dirFile string
+		if pipelineName == "" || pipelineName == "default" {
+			dirFile = filepath.Join(pipelinesPath, "default.yaml")
+		} else {
+			dirFile = filepath.Join(pipelinesPath, pipelineName+".yaml")
+		}
+		if _, statErr := os.Stat(dirFile); statErr == nil {
+			return dirFile, nil, nil
+		}
 	}
 
 	// If the config specifies an explicit phases_path and we're resolving
