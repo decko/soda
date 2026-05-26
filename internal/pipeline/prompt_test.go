@@ -240,6 +240,39 @@ func TestLoadWithSource(t *testing.T) {
 		}
 	})
 
+	t.Run("populates_prompt_version", func(t *testing.T) {
+		dir := t.TempDir()
+		content := "{{/* soda:prompt-version=1 */}}\nYou are a triage engineer.\nTicket: {{.Ticket.Key}}"
+		if err := os.WriteFile(filepath.Join(dir, "triage.md"), []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		loader := NewPromptLoader(dir)
+		result, err := loader.LoadWithSource("triage.md")
+		if err != nil {
+			t.Fatalf("LoadWithSource: %v", err)
+		}
+		if result.PromptVersion != 1 {
+			t.Errorf("PromptVersion = %d, want 1", result.PromptVersion)
+		}
+	})
+
+	t.Run("prompt_version_zero_when_no_header", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "plain.md"), []byte("no version header"), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		loader := NewPromptLoader(dir)
+		result, err := loader.LoadWithSource("plain.md")
+		if err != nil {
+			t.Fatalf("LoadWithSource: %v", err)
+		}
+		if result.PromptVersion != 0 {
+			t.Errorf("PromptVersion = %d, want 0", result.PromptVersion)
+		}
+	})
+
 	t.Run("single_dir_skips_validation", func(t *testing.T) {
 		dir := t.TempDir()
 		// Even an invalid template in the only (embedded) dir is returned as-is.

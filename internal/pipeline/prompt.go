@@ -205,6 +205,9 @@ type LoadResult struct {
 	Fallback bool
 	// FallbackReason describes why the override was rejected, if Fallback is true.
 	FallbackReason string
+	// PromptVersion is the version extracted from the soda:prompt-version
+	// header in the raw template text. Zero when no header is present.
+	PromptVersion int
 }
 
 // NewPromptLoader creates a loader that searches the given directories in order.
@@ -272,9 +275,10 @@ func (loader *PromptLoader) LoadWithSource(name string) (*LoadResult, error) {
 		}
 
 		result := &LoadResult{
-			Content:    content,
-			Source:     absPath,
-			IsOverride: isOverride,
+			Content:       content,
+			Source:        absPath,
+			IsOverride:    isOverride,
+			PromptVersion: ExtractPromptVersion(content),
 		}
 		if fallbackReason != "" {
 			result.Fallback = true
