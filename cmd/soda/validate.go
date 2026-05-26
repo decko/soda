@@ -156,11 +156,15 @@ func validatePrompts(w io.Writer, result *validationResult, pl *pipeline.PhasePi
 	loaderDirs = append(loaderDirs, promptDir)
 	loader := pipeline.NewPromptLoader(loaderDirs...)
 
+	// Create a reference loader for the embedded prompts only, used by
+	// field coverage checks to compare override templates against defaults.
+	embeddedLoader := pipeline.NewPromptLoader(promptDir)
+
 	promptErrors := 0
 	for _, phase := range pl.Phases {
 		// Phase prompt (skip parallel-review phases that have no top-level prompt).
 		if phase.Prompt != "" {
-			if err := validateSinglePrompt(loader, phase.Prompt, result); err != nil {
+			if err := validateSinglePrompt(loader, embeddedLoader, phase.Prompt, result); err != nil {
 				result.addError("prompts: phase %q: %v", phase.Name, err)
 				promptErrors++
 			}
@@ -170,7 +174,7 @@ func validatePrompts(w io.Writer, result *validationResult, pl *pipeline.PhasePi
 		for _, reviewer := range phase.Reviewers {
 			if reviewer.Prompt != "" {
 				label := fmt.Sprintf("%s/%s", phase.Name, reviewer.Name)
-				if err := validateSinglePrompt(loader, reviewer.Prompt, result); err != nil {
+				if err := validateSinglePrompt(loader, embeddedLoader, reviewer.Prompt, result); err != nil {
 					result.addError("prompts: reviewer %q: %v", label, err)
 					promptErrors++
 				}
@@ -186,7 +190,10 @@ func validatePrompts(w io.Writer, result *validationResult, pl *pipeline.PhasePi
 // validateSinglePrompt loads a prompt file and validates it as a Go template.
 // If the loader fell back from a broken override to the embedded default,
 // it records a warning so the user knows their custom file was rejected.
-func validateSinglePrompt(loader *pipeline.PromptLoader, name string, result *validationResult) error {
+// Also checks prompt version and field coverage against the embedded defaults.
+// embeddedLoader is a single-dir loader pointing at the embedded prompts
+// directory, used for field coverage comparison; may be nil.
+func validateSinglePrompt(loader *pipeline.PromptLoader, embeddedLoader *pipeline.PromptLoader, name string, result *validationResult) error {
 	lr, err := loader.LoadWithSource(name)
 	if err != nil {
 		return fmt.Errorf("load %s: %w", name, err)
@@ -200,7 +207,65 @@ func validateSinglePrompt(loader *pipeline.PromptLoader, name string, result *va
 		return fmt.Errorf("template %s: %w", name, err)
 	}
 
+	// Prompt version check: warn when the loaded template's version does not
+	// match the expected embedded version (drift from schema changes).
+	if warning := pipeline.CheckPromptVersion(name, lr.Content); warning != nil {
+		result.addWarning("prompts: %s: %s", name, warning.Reason)
+	}
+
+	// Field coverage check: compare the fields referenced in the loaded
+	// override template against the fields in the embedded default. Warn
+	// when the override is missing fields that the embedded template uses,
+	// since this may indicate the override has drifted from the current schema.
+	if lr.IsOverride && embeddedLoader != nil {
+		validateFieldCoverage(embeddedLoader, name, lr.Content, result)
+	}
+
 	return nil
+}
+
+// validateFieldCoverage compares the top-level PromptData fields referenced
+// in the override template against those in the embedded default. Fields
+// present in the embedded template but missing from the override are reported
+// as warnings.
+func validateFieldCoverage(embeddedLoader *pipeline.PromptLoader, name string, overrideContent string, result *validationResult) {
+	// Only check known embedded prompts (custom phases have no reference).
+	expectedVersion := pipeline.EmbeddedPromptVersion(name)
+	if expectedVersion == 0 {
+		return
+	}
+
+	overrideFields := pipeline.ScanPromptDataFields(overrideContent)
+	if len(overrideFields) == 0 {
+		// Override references no PromptData fields — unusual but valid.
+		return
+	}
+
+	// Build a set of override fields for quick lookup.
+	overrideSet := make(map[string]bool, len(overrideFields))
+	for _, field := range overrideFields {
+		overrideSet[field] = true
+	}
+
+	// Load the embedded version from the embedded-only loader.
+	embeddedLR, embeddedErr := embeddedLoader.LoadWithSource(name)
+	if embeddedErr != nil {
+		return
+	}
+
+	embeddedFields := pipeline.ScanPromptDataFields(embeddedLR.Content)
+
+	var missingFields []string
+	for _, field := range embeddedFields {
+		if !overrideSet[field] {
+			missingFields = append(missingFields, field)
+		}
+	}
+
+	if len(missingFields) > 0 {
+		result.addWarning("prompts: %s: override is missing fields used by embedded default: %s",
+			name, strings.Join(missingFields, ", "))
+	}
 }
 
 // validateSchemas checks that each phase has a non-empty schema after

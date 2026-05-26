@@ -229,7 +229,7 @@ func TestValidateSinglePrompt_ValidTemplate(t *testing.T) {
 
 	loader := pipeline.NewPromptLoader(dir)
 	result := &validationResult{}
-	err := validateSinglePrompt(loader, "test.md", result)
+	err := validateSinglePrompt(loader, nil, "test.md", result)
 	if err != nil {
 		t.Fatalf("expected no error for valid template, got: %v", err)
 	}
@@ -247,7 +247,7 @@ func TestValidateSinglePrompt_InvalidTemplate(t *testing.T) {
 
 	loader := pipeline.NewPromptLoader(dir)
 	result := &validationResult{}
-	err := validateSinglePrompt(loader, "bad.md", result)
+	err := validateSinglePrompt(loader, nil, "bad.md", result)
 	if err == nil {
 		t.Fatal("expected error for invalid template, got nil")
 	}
@@ -257,7 +257,7 @@ func TestValidateSinglePrompt_MissingFile(t *testing.T) {
 	dir := t.TempDir()
 	loader := pipeline.NewPromptLoader(dir)
 	result := &validationResult{}
-	err := validateSinglePrompt(loader, "missing.md", result)
+	err := validateSinglePrompt(loader, nil, "missing.md", result)
 	if err == nil {
 		t.Fatal("expected error for missing file, got nil")
 	}
@@ -283,7 +283,7 @@ func TestValidateSinglePrompt_FallbackWarning(t *testing.T) {
 	// Override dir first, fallback dir second — matches real loader search order.
 	loader := pipeline.NewPromptLoader(overrideDir, fallbackDir)
 	result := &validationResult{}
-	err := validateSinglePrompt(loader, "plan.md", result)
+	err := validateSinglePrompt(loader, nil, "plan.md", result)
 	if err != nil {
 		t.Fatalf("expected no error (should fall back), got: %v", err)
 	}
@@ -846,5 +846,129 @@ func TestRunValidate_WithTranscriptConfig(t *testing.T) {
 	output := stdout.String()
 	if !strings.Contains(output, "✓ transcript: tools") {
 		t.Errorf("expected transcript valid message, got: %s", output)
+	}
+}
+
+func TestValidateSinglePrompt_VersionMismatchWarning(t *testing.T) {
+	// Create a prompt matching a known embedded path but without a version header.
+	dir := t.TempDir()
+	promptSubdir := filepath.Join(dir, "prompts")
+	if err := os.MkdirAll(promptSubdir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(promptSubdir, "triage.md"), []byte("Hello {{.Ticket.Key}}"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	loader := pipeline.NewPromptLoader(dir)
+	result := &validationResult{}
+	err := validateSinglePrompt(loader, nil, "prompts/triage.md", result)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	// Should have a warning about the missing version header.
+	foundVersionWarning := false
+	for _, warn := range result.warnings {
+		if strings.Contains(warn, "prompt-version") {
+			foundVersionWarning = true
+			break
+		}
+	}
+	if !foundVersionWarning {
+		t.Errorf("expected warning about prompt version, got warnings: %v", result.warnings)
+	}
+}
+
+func TestValidateSinglePrompt_VersionMatchNoWarning(t *testing.T) {
+	// Create a prompt with matching version header.
+	dir := t.TempDir()
+	promptSubdir := filepath.Join(dir, "prompts")
+	if err := os.MkdirAll(promptSubdir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	content := "{{/* soda:prompt-version=1 */}}\nHello {{.Ticket.Key}}"
+	if err := os.WriteFile(filepath.Join(promptSubdir, "triage.md"), []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	loader := pipeline.NewPromptLoader(dir)
+	result := &validationResult{}
+	err := validateSinglePrompt(loader, nil, "prompts/triage.md", result)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	for _, warn := range result.warnings {
+		if strings.Contains(warn, "prompt-version") || strings.Contains(warn, "version") {
+			t.Errorf("unexpected version warning: %s", warn)
+		}
+	}
+}
+
+func TestValidateSinglePrompt_FieldCoverageWarning(t *testing.T) {
+	// Override dir with a template missing fields used by the embedded default.
+	overrideDir := t.TempDir()
+	embeddedDir := t.TempDir()
+
+	promptSubdirOverride := filepath.Join(overrideDir, "prompts")
+	promptSubdirEmbedded := filepath.Join(embeddedDir, "prompts")
+	if err := os.MkdirAll(promptSubdirOverride, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(promptSubdirEmbedded, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Override template uses only Ticket.
+	overrideContent := "{{/* soda:prompt-version=1 */}}\nKey: {{.Ticket.Key}}"
+	if err := os.WriteFile(filepath.Join(promptSubdirOverride, "triage.md"), []byte(overrideContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Embedded template uses Ticket and Config.
+	embeddedContent := "{{/* soda:prompt-version=1 */}}\nKey: {{.Ticket.Key}} Config: {{.Config.Formatter}}"
+	if err := os.WriteFile(filepath.Join(promptSubdirEmbedded, "triage.md"), []byte(embeddedContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Override dir first, embedded dir second.
+	loader := pipeline.NewPromptLoader(overrideDir, embeddedDir)
+	embeddedLoader := pipeline.NewPromptLoader(embeddedDir)
+	result := &validationResult{}
+	err := validateSinglePrompt(loader, embeddedLoader, "prompts/triage.md", result)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	// Should have a warning about missing Config field.
+	foundFieldWarning := false
+	for _, warn := range result.warnings {
+		if strings.Contains(warn, "missing fields") && strings.Contains(warn, "Config") {
+			foundFieldWarning = true
+			break
+		}
+	}
+	if !foundFieldWarning {
+		t.Errorf("expected warning about missing Config field, got warnings: %v", result.warnings)
+	}
+}
+
+func TestValidateSinglePrompt_NoFieldCoverageForEmbedded(t *testing.T) {
+	// When the template is not an override (single dir loader),
+	// no field coverage warning should be emitted.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "test.md"), []byte("Key: {{.Ticket.Key}}"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	loader := pipeline.NewPromptLoader(dir)
+	result := &validationResult{}
+	err := validateSinglePrompt(loader, nil, "test.md", result)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	for _, warn := range result.warnings {
+		if strings.Contains(warn, "missing fields") {
+			t.Errorf("unexpected field coverage warning for non-override: %s", warn)
+		}
 	}
 }
