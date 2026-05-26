@@ -59,7 +59,7 @@ func TestBuildSandboxPaths(t *testing.T) {
 		"/home/user/repo",
 		"/tmp/soda-triage",
 		[]string{"/opt/claude/bin", "/usr/lib/node"},
-		nil, nil,
+		nil,
 	)
 
 	// Read paths should include system paths, claude read paths, workDir, tmpDir.
@@ -87,7 +87,7 @@ func TestBuildSandboxPaths(t *testing.T) {
 func TestBuildSandboxPathsSSHAuthSock(t *testing.T) {
 	t.Setenv("SSH_AUTH_SOCK", "/tmp/ssh-XXXX/agent.1234")
 
-	sp := buildSandboxPaths("/work", "/tmp/sb", nil, nil, nil)
+	sp := buildSandboxPaths("/work", "/tmp/sb", nil, nil)
 
 	wantDir := "/tmp/ssh-XXXX"
 	if !containsPath(sp.ReadPaths, wantDir) {
@@ -101,7 +101,7 @@ func TestBuildSandboxPathsExtraPaths(t *testing.T) {
 	extraRead := []string{"/data/models", "/opt/tools"}
 	extraWrite := []string{"/var/output"}
 
-	sp := buildSandboxPaths("/work", "/tmp/sb", nil, extraRead, extraWrite)
+	sp := buildSandboxPaths("/work", "/tmp/sb", extraRead, extraWrite)
 
 	for _, want := range extraRead {
 		if !containsPath(sp.ReadPaths, want) {
@@ -118,7 +118,7 @@ func TestBuildSandboxPathsExtraPaths(t *testing.T) {
 func TestBuildSandboxPathsWriteScopedToWorktree(t *testing.T) {
 	t.Setenv("SSH_AUTH_SOCK", "")
 
-	sp := buildSandboxPaths("/home/user/repo", "/tmp/soda-impl", nil, nil, nil)
+	sp := buildSandboxPaths("/home/user/repo", "/tmp/soda-impl", nil, nil)
 
 	// Write should have exactly workDir + tmpDir — no system paths.
 	wantWrite := []string{"/home/user/repo", "/tmp/soda-impl"}
