@@ -211,6 +211,7 @@ soda/
 │   │   ├── events.go              # Structured event log
 │   │   ├── phase.go               # PhaseConfig, CorrectiveConfig, ReviewerConfig
 │   │   ├── prompt.go              # PromptData, ReworkFeedback, template rendering
+│   │   ├── prompt_version.go      # Prompt template versioning (drift detection)
 │   │   ├── state.go               # Disk state, locking, atomic writes
 │   │   ├── meta.go                # PipelineMeta (cycles, costs, flags)
 │   │   ├── monitor.go             # MonitorState, PRPoller interface
@@ -393,6 +394,7 @@ Atomic writes: always write to `.tmp` then rename. Archive on re-run (`verify.js
 - **Code snippet injection for rework**: when review triggers rework, the engine reads ±5 lines around each critical/major finding's `file:line` and injects them as `CodeSnippet` on `EnrichedFinding`. This eliminates a retrieval gap — the rework implement session sees the exact code without spending tokens on tool calls to find it. Validated by raki: reduced rework cycles by 25% and cost by 17%.
 - **Diff-scoped review**: review prompts include `git diff main...HEAD` so reviewers focus on changed code only. On rework cycles, prior findings are injected with exclusion instructions to prevent the whack-a-mole pattern (reviewer finds new issues in untouched code after each rework). Severity definitions (critical/major/minor) calibrate the reviewer's threshold. Validated by raki: medium-complexity first-pass rate went from 0% to 67%.
 - **Agent-agnostic transcript types**: `TranscriptLevel` and `TranscriptEntry` live in `internal/transcript/`, not `internal/claude/`. The runner interface stays agent-agnostic — future backends (Pi, Opencode) can produce transcripts without importing Claude-specific code. `internal/claude/transcript.go` re-exports via type aliases for backward compatibility.
+- **Prompt template versioning**: each embedded prompt carries a `{{/* soda:prompt-version=N */}}` comment header (currently `=1` for all 15 templates). Version is extracted from raw text via regex before Go template parsing (which strips comments). The engine emits a non-blocking `EventPromptVersionMismatch` warning when a loaded template's version diverges from the expected version in the static registry (`internal/pipeline/prompt_version.go`). `soda validate` also checks version and field coverage of override prompts against embedded defaults. When adding new `PromptData` fields consumed by templates: (1) increment the version in both the template header and the registry, (2) `soda validate` will warn users with overrides about missing fields.
 
 ## Git workflow
 
@@ -461,6 +463,7 @@ Atomic writes: always write to `.tmp` then rename. Archive on re-run (`verify.js
 35. **`arapuca-devel` is in Fedora**: no need for LFS fetch or cargo build of libarapuca. Just `BuildRequires: arapuca-devel` and pkg-config handles linking. This replaced the entire LFS complexity from the original spec.
 36. **Schema changes to LLM output types are high risk**: adding fields to structs used in `--json-schema` (e.g., `ReviewFinding`) can cause parse failures if the model doesn't produce valid values. Always make new fields optional (`omitempty`), validate on the consumer side with defaults, and use "should" not "must" in prompt instructions. Monitor parse error rate for 10 sessions after deployment.
 37. **Global config path is `~/.config/soda/soda.yaml`**: renamed from `config.yaml` in #537 for consistency with the project-local `soda.yaml`. `config.DefaultPath()` returns this. The `--config` flag default shown in `--help` is evaluated at runtime per user.
+38. **Prompt version headers are Go template comments**: the `{{/* soda:prompt-version=1 */}}` header is stripped by `text/template` parsing, so `ExtractPromptVersion` uses a regex on the raw text *before* parsing. If you move version extraction after `template.Parse`, it will always return 0. The version is an incrementing integer (not semver) — bump it in both the `.md` file and `embeddedPromptVersions` in `prompt_version.go` when changing which `PromptData` fields a template consumes.
 
 ## Raki evaluation framework
 
