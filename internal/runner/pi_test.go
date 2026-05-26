@@ -1,10 +1,13 @@
 package runner
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -417,6 +420,136 @@ func TestWritePiSystemPrompt(t *testing.T) {
 			t.Errorf("content = %q, want %q", string(got), content)
 		}
 	})
+}
+
+func TestRevertWorktree(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	dir := t.TempDir()
+
+	// Initialise a bare git repo with one committed file.
+	for _, args := range [][]string{
+		{"init"},
+		{"config", "user.email", "test@example.com"},
+		{"config", "user.name", "Test"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	testFile := filepath.Join(dir, "file.txt")
+	if err := os.WriteFile(testFile, []byte("original"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	for _, args := range [][]string{{"add", "."}, {"commit", "-m", "init"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	// Modify the file.
+	if err := os.WriteFile(testFile, []byte("modified"), 0o644); err != nil {
+		t.Fatalf("modify file: %v", err)
+	}
+
+	// Revert the worktree.
+	revertWorktree(dir)
+
+	// Verify the file is back to original.
+	got, err := os.ReadFile(testFile)
+	if err != nil {
+		t.Fatalf("read file after revert: %v", err)
+	}
+	if string(got) != "original" {
+		t.Errorf("content after revert = %q, want %q", string(got), "original")
+	}
+}
+
+func TestBudgetEnforcement(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	// Create a fake pi binary (shell script) that emits a cost-exceeding event.
+	binDir := t.TempDir()
+	fakePi := filepath.Join(binDir, "pi")
+	script := "#!/bin/sh\n" +
+		`echo '{"type":"message_end","usage":{"input_tokens":100,"output_tokens":50},"cost_usd":99.99}'` + "\n" +
+		`echo '{"type":"result","result":{"ok":true}}'` + "\n"
+	if err := os.WriteFile(fakePi, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake pi: %v", err)
+	}
+
+	// Create a git worktree with a committed file.
+	workDir := t.TempDir()
+	for _, args := range [][]string{
+		{"init"},
+		{"config", "user.email", "test@example.com"},
+		{"config", "user.name", "Test"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = workDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	agentFile := filepath.Join(workDir, "output.txt")
+	if err := os.WriteFile(agentFile, []byte("clean"), 0o644); err != nil {
+		t.Fatalf("write agent file: %v", err)
+	}
+	for _, args := range [][]string{{"add", "."}, {"commit", "-m", "init"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = workDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	// Simulate agent modifying a file before budget exceeded.
+	if err := os.WriteFile(agentFile, []byte("dirty"), 0o644); err != nil {
+		t.Fatalf("dirty agent file: %v", err)
+	}
+
+	piRunner, err := NewPiRunner(fakePi, "test-model", workDir)
+	if err != nil {
+		t.Fatalf("NewPiRunner: %v", err)
+	}
+
+	opts := RunOpts{
+		MaxBudgetUSD: 0.01, // well below the 99.99 emitted by the fake binary
+		WorkDir:      workDir,
+	}
+
+	_, runErr := piRunner.Run(context.Background(), opts)
+	if runErr == nil {
+		t.Fatal("expected budget_exceeded error, got nil")
+	}
+
+	var te *TransientError
+	if !errors.As(runErr, &te) {
+		t.Fatalf("expected TransientError, got %T: %v", runErr, runErr)
+	}
+	if te.Reason != "budget_exceeded" {
+		t.Errorf("Reason = %q, want %q", te.Reason, "budget_exceeded")
+	}
+
+	// Verify revertWorktree was called: the dirty file should be restored.
+	got, err := os.ReadFile(agentFile)
+	if err != nil {
+		t.Fatalf("read agent file after budget exceeded: %v", err)
+	}
+	if string(got) != "clean" {
+		t.Errorf("worktree not reverted: content = %q, want %q", string(got), "clean")
+	}
 }
 
 // assertContainsArg checks that args contains a flag followed by a specific value.
