@@ -849,6 +849,82 @@ func TestRunValidate_WithTranscriptConfig(t *testing.T) {
 	}
 }
 
+func TestValidatePipelinesPath_NotConfigured(t *testing.T) {
+	cfg := &config.Config{}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	validatePipelinesPath(&buf, result, cfg)
+
+	if result.hasErrors() {
+		t.Error("expected no errors when not configured")
+	}
+	output := buf.String()
+	if !strings.Contains(output, "not configured") {
+		t.Errorf("expected 'not configured', got: %s", output)
+	}
+}
+
+func TestValidatePipelinesPath_DirectoryExists(t *testing.T) {
+	dir := t.TempDir()
+	pipelinesDir := filepath.Join(dir, ".pipelines")
+	if err := os.MkdirAll(pipelinesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{PipelinesPath: pipelinesDir}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	validatePipelinesPath(&buf, result, cfg)
+
+	if result.hasErrors() {
+		t.Errorf("expected no errors, got: %v", result.errors)
+	}
+	output := buf.String()
+	if !strings.Contains(output, "✓ pipelines_path:") {
+		t.Errorf("expected valid message, got: %s", output)
+	}
+}
+
+func TestValidatePipelinesPath_DirectoryMissing(t *testing.T) {
+	cfg := &config.Config{PipelinesPath: "/nonexistent-pipelines-dir-xyz"}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	validatePipelinesPath(&buf, result, cfg)
+
+	if !result.hasErrors() {
+		t.Error("expected error for missing directory")
+	}
+	if len(result.errors) != 1 {
+		t.Fatalf("expected 1 error, got %d: %v", len(result.errors), result.errors)
+	}
+	if !strings.Contains(result.errors[0], "not found") {
+		t.Errorf("error should mention 'not found', got: %s", result.errors[0])
+	}
+}
+
+func TestValidatePipelinesPath_NotADirectory(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, ".pipelines")
+	if err := os.WriteFile(filePath, []byte("not a dir"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{PipelinesPath: filePath}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	validatePipelinesPath(&buf, result, cfg)
+
+	if !result.hasErrors() {
+		t.Error("expected error when path is not a directory")
+	}
+	if len(result.errors) != 1 {
+		t.Fatalf("expected 1 error, got %d: %v", len(result.errors), result.errors)
+	}
+	if !strings.Contains(result.errors[0], "not a directory") {
+		t.Errorf("error should mention 'not a directory', got: %s", result.errors[0])
+	}
+}
+
 func TestValidateSinglePrompt_VersionMismatchWarning(t *testing.T) {
 	// Create a prompt matching a known embedded path but without a version header.
 	dir := t.TempDir()

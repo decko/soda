@@ -74,6 +74,9 @@ func runValidate(w io.Writer, errW io.Writer, cfg *config.Config, pipelineName s
 	// Stage 1: Config is already loaded (loadConfig succeeded).
 	fmt.Fprintln(w, "✓ config: valid")
 
+	// Stage 1.5: Pipelines path
+	validatePipelinesPath(w, result, cfg)
+
 	// Stage 2: Phases
 	pl := validatePhases(w, result, cfg, pipelineName)
 
@@ -115,6 +118,26 @@ func runValidate(w io.Writer, errW io.Writer, cfg *config.Config, pipelineName s
 
 	fmt.Fprintf(w, "Validation passed: %d warning(s)\n", len(result.warnings))
 	return nil
+}
+
+// validatePipelinesPath checks whether the configured pipelines_path directory
+// exists on disk. Reports an error when the path is configured but the directory
+// is missing, and an OK/not-configured status otherwise.
+func validatePipelinesPath(w io.Writer, result *validationResult, cfg *config.Config) {
+	if cfg.PipelinesPath == "" {
+		fmt.Fprintln(w, "✓ pipelines_path: not configured")
+		return
+	}
+	info, err := os.Stat(cfg.PipelinesPath)
+	if err != nil {
+		result.addError("pipelines_path: directory %q not found", cfg.PipelinesPath)
+		return
+	}
+	if !info.IsDir() {
+		result.addError("pipelines_path: %q is not a directory", cfg.PipelinesPath)
+		return
+	}
+	fmt.Fprintf(w, "✓ pipelines_path: %s\n", cfg.PipelinesPath)
 }
 
 // validatePhases loads and validates the pipeline config (cross-references, structure).
