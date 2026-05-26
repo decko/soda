@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/decko/soda/internal/claude"
 	"github.com/decko/soda/internal/config"
 	"github.com/decko/soda/internal/pipeline"
 	"github.com/decko/soda/internal/progress"
+	"github.com/decko/soda/internal/runner"
 	"github.com/spf13/cobra"
 )
 
@@ -698,7 +698,7 @@ func TestPrintSummaryTransientError(t *testing.T) {
 	meta.Phases["plan"] = &pipeline.PhaseState{Status: pipeline.PhaseFailed, DurationMs: 5000, Cost: 0.70, Error: "timeout"}
 
 	transientErr := fmt.Errorf("engine: phase plan failed (transient, no retries left): %w",
-		&claude.TransientError{Reason: "timeout", Err: fmt.Errorf("connection reset")})
+		&runner.TransientError{Reason: "timeout", Err: fmt.Errorf("connection reset")})
 	var buf bytes.Buffer
 	fprintSummary(&buf, state, testPhases(), "Transient test", 1*time.Minute, transientErr, nil)
 	output := buf.String()
@@ -727,7 +727,7 @@ func TestPrintSummaryParseError(t *testing.T) {
 	meta.Phases["triage"] = &pipeline.PhaseState{Status: pipeline.PhaseFailed, DurationMs: 15000, Cost: 0.80, Error: "parse error"}
 
 	parseErr := fmt.Errorf("engine: phase triage failed (parse, no retries left): %w",
-		&claude.ParseError{Raw: []byte("bad output"), Err: fmt.Errorf("invalid JSON")})
+		&runner.ParseError{Err: fmt.Errorf("invalid JSON")})
 	var buf bytes.Buffer
 	fprintSummary(&buf, state, testPhases(), "Parse test", 30*time.Second, parseErr, nil)
 	output := buf.String()
@@ -755,7 +755,7 @@ func TestPrintSummaryTransientErrorEmptyPhase(t *testing.T) {
 
 	// No phase has PhaseFailed, so failedPhase will be "".
 	transientErr := fmt.Errorf("engine: transient: %w",
-		&claude.TransientError{Reason: "timeout", Err: fmt.Errorf("connection reset")})
+		&runner.TransientError{Reason: "timeout", Err: fmt.Errorf("connection reset")})
 	var buf bytes.Buffer
 	fprintSummary(&buf, state, testPhases(), "Transient empty phase", 30*time.Second, transientErr, nil)
 	output := buf.String()
@@ -777,7 +777,7 @@ func TestPrintSummaryParseErrorEmptyPhase(t *testing.T) {
 
 	// No phase has PhaseFailed, so failedPhase will be "".
 	parseErr := fmt.Errorf("engine: parse: %w",
-		&claude.ParseError{Raw: []byte("bad"), Err: fmt.Errorf("invalid")})
+		&runner.ParseError{Err: fmt.Errorf("invalid")})
 	var buf bytes.Buffer
 	fprintSummary(&buf, state, testPhases(), "Parse empty phase", 30*time.Second, parseErr, nil)
 	output := buf.String()

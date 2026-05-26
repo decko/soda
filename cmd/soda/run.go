@@ -15,7 +15,6 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/decko/soda/internal/claude"
 	"github.com/decko/soda/internal/config"
 	"github.com/decko/soda/internal/detect"
 	"github.com/decko/soda/internal/git"
@@ -279,6 +278,7 @@ func runPipeline(cfg *config.Config, opts pipelineOpts) error {
 	// Build runner
 	var r runner.Runner
 	useMock := opts.useMock
+	usePi := cfg.Runner == "pi"
 	if useMock {
 		r = buildMockRunner()
 	} else if cfg.Sandbox.Enabled {
@@ -295,12 +295,36 @@ func runPipeline(cfg *config.Config, opts pipelineOpts) error {
 				LogDir:          cfg.Sandbox.Proxy.LogDir,
 			},
 		}
-		sbRunner, err := sandbox.New(sbCfg)
-		if err != nil {
-			return fmt.Errorf("run: create sandbox runner: %w", err)
+		if usePi {
+			piBinary := cfg.Pi.Binary
+			piAdapter, adapterErr := sandbox.NewPiAdapter(piBinary)
+			if adapterErr != nil {
+				return fmt.Errorf("run: create pi adapter: %w", adapterErr)
+			}
+			sbRunner, sbErr := sandbox.NewWithAdapter(sbCfg, piAdapter)
+			if sbErr != nil {
+				return fmt.Errorf("run: create sandbox runner (pi): %w", sbErr)
+			}
+			defer sbRunner.Close()
+			r = sbRunner
+		} else {
+			sbRunner, sbErr := sandbox.New(sbCfg)
+			if sbErr != nil {
+				return fmt.Errorf("run: create sandbox runner: %w", sbErr)
+			}
+			defer sbRunner.Close()
+			r = sbRunner
 		}
-		defer sbRunner.Close()
-		r = sbRunner
+	} else if usePi {
+		piModel := cfg.Pi.Model
+		if piModel == "" {
+			piModel = cfg.Model
+		}
+		piRunner, piErr := runner.NewPiRunner(cfg.Pi.Binary, piModel, workDir)
+		if piErr != nil {
+			return fmt.Errorf("run: create pi runner: %w", piErr)
+		}
+		r = piRunner
 	} else {
 		claudeRunner, err := runner.NewClaudeRunner("claude", cfg.Model, workDir)
 		if err != nil {
@@ -1425,12 +1449,12 @@ func isBudgetExceededError(err error) bool {
 }
 
 func isTransientError(err error) bool {
-	var te *claude.TransientError
+	var te *runner.TransientError
 	return errors.As(err, &te)
 }
 
 func isParseError(err error) bool {
-	var pe *claude.ParseError
+	var pe *runner.ParseError
 	return errors.As(err, &pe)
 }
 
