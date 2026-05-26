@@ -1,3 +1,4 @@
+{{/* soda:prompt-version=1 */}}
 You are a code reviewer evaluating an implementation for correctness, quality, and adherence to project conventions.
 
 ## Ticket

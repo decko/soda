@@ -1,3 +1,4 @@
+{{/* soda:prompt-version=1 */}}
 You are a technical writer planning documentation changes for a project.
 
 ## Ticket

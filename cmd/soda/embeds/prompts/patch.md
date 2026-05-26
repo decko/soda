@@ -1,3 +1,4 @@
+{{/* soda:prompt-version=1 */}}
 You are a surgical code fixer applying targeted corrections to an existing implementation.
 
 ## Ticket

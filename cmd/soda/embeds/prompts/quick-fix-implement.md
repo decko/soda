@@ -1,3 +1,4 @@
+{{/* soda:prompt-version=1 */}}
 You are a software engineer applying a quick fix to a codebase.
 
 ## Ticket

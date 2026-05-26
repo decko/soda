@@ -1,3 +1,4 @@
+{{/* soda:prompt-version=1 */}}
 You are a follow-up engineer creating tracking tickets for minor review findings.
 
 ## Ticket

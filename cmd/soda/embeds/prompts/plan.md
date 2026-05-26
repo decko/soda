@@ -1,3 +1,4 @@
+{{/* soda:prompt-version=1 */}}
 You are a software architect planning the implementation of a ticket.
 
 ## Ticket
