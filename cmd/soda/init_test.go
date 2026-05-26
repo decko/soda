@@ -590,6 +590,75 @@ func TestRunInit_NoColorEnv(t *testing.T) {
 	}
 }
 
+func TestRunInit_PipelinesPathSet(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "soda.yaml")
+
+	var buf bytes.Buffer
+	if err := runInit(&buf, strings.NewReader(""), false, initOptions{Output: dest, NoGitignore: true}); err != nil {
+		t.Fatalf("runInit() error: %v", err)
+	}
+
+	cfg, err := config.Load(dest)
+	if err != nil {
+		t.Fatalf("Load() written config: %v", err)
+	}
+	if cfg.PipelinesPath != ".pipelines/" {
+		t.Errorf("PipelinesPath = %q, want %q", cfg.PipelinesPath, ".pipelines/")
+	}
+}
+
+func TestRunInit_PipelinesDirCreated(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "soda.yaml")
+
+	var buf bytes.Buffer
+	if err := runInit(&buf, strings.NewReader(""), false, initOptions{Output: dest, NoGitignore: true}); err != nil {
+		t.Fatalf("runInit() error: %v", err)
+	}
+
+	pipelinesDir := filepath.Join(dir, ".pipelines")
+	info, err := os.Stat(pipelinesDir)
+	if err != nil {
+		t.Fatalf(".pipelines/ not created: %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatalf(".pipelines/ is not a directory")
+	}
+
+	// Output should mention the directory creation.
+	if !strings.Contains(buf.String(), ".pipelines") {
+		t.Errorf("output should mention .pipelines, got: %s", buf.String())
+	}
+}
+
+func TestRunInit_DryRunSkipsPipelinesDir(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "soda.yaml")
+
+	var buf bytes.Buffer
+	if err := runInit(&buf, strings.NewReader(""), false, initOptions{Output: dest, DryRun: true, NoGitignore: true}); err != nil {
+		t.Fatalf("runInit(dryRun=true) error: %v", err)
+	}
+
+	// Config file should NOT be written.
+	if _, err := os.Stat(dest); err == nil {
+		t.Fatal("dry-run should not write config file")
+	}
+
+	// .pipelines/ should NOT be created.
+	pipelinesDir := filepath.Join(dir, ".pipelines")
+	if _, err := os.Stat(pipelinesDir); err == nil {
+		t.Fatal("dry-run should not create .pipelines/ directory")
+	}
+
+	// But the output should contain pipelines_path in the YAML.
+	output := buf.String()
+	if !strings.Contains(output, "pipelines_path") {
+		t.Errorf("dry-run output should contain pipelines_path, got: %s", output)
+	}
+}
+
 func TestConfigFromDetected_GitLab(t *testing.T) {
 	info := &detect.ProjectInfo{
 		Language:    "rust",
