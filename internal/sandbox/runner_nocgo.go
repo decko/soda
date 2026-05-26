@@ -20,6 +20,11 @@ func New(_ Config) (*Runner, error) {
 	return nil, fmt.Errorf("sandbox: cgo is required for sandbox support; rebuild with CGO_ENABLED=1")
 }
 
+// NewWithAdapter returns an error because sandbox support requires cgo (go-arapuca uses cgo).
+func NewWithAdapter(_ Config, _ AgentAdapter) (*Runner, error) {
+	return nil, fmt.Errorf("sandbox: cgo is required for sandbox support; rebuild with CGO_ENABLED=1")
+}
+
 // Close is a no-op.
 func (r *Runner) Close() {}
 
