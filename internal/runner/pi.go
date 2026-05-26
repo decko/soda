@@ -195,6 +195,18 @@ func (r *PiRunner) Run(ctx context.Context, opts RunOpts) (*RunResult, error) {
 
 	wg.Wait()
 
+	// Budget exceeded takes precedence over stdout drain errors — we must
+	// always revert the worktree when the budget is blown, even if the
+	// stdout scanner also failed (e.g., line exceeded 1MB buffer).
+	if budgetExceeded {
+		revertWorktree(opts.WorkDir)
+		cmd.Wait()
+		return nil, &TransientError{
+			Reason: "budget_exceeded",
+			Err:    fmt.Errorf("pi runner: budget exceeded ($%.2f >= $%.2f)", costAccumulator, opts.MaxBudgetUSD),
+		}
+	}
+
 	// Check stdout drain error.
 	if stdoutErr != nil {
 		cmd.Wait()
@@ -202,15 +214,6 @@ func (r *PiRunner) Run(ctx context.Context, opts RunOpts) (*RunResult, error) {
 	}
 
 	waitErr := cmd.Wait()
-
-	// Budget exceeded: revert worktree and return budget error.
-	if budgetExceeded {
-		revertWorktree(opts.WorkDir)
-		return nil, &TransientError{
-			Reason: "budget_exceeded",
-			Err:    fmt.Errorf("pi runner: budget exceeded ($%.2f >= $%.2f)", costAccumulator, opts.MaxBudgetUSD),
-		}
-	}
 
 	if waitErr != nil {
 		// Context cancellation — not retryable.
