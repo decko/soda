@@ -79,8 +79,16 @@ func (r *PiRunner) Run(ctx context.Context, opts RunOpts) (*RunResult, error) {
 		}
 	}
 
-	cmd := exec.CommandContext(ctx, r.binary, args...)
-	cmd.Dir = r.workDir
+	// Budget tracking: cancel if cost exceeds budget.
+	budgetCtx := ctx
+	var budgetCancel context.CancelFunc
+	if opts.MaxBudgetUSD > 0 {
+		budgetCtx, budgetCancel = context.WithCancel(ctx)
+		defer budgetCancel()
+	}
+
+	cmd := exec.CommandContext(budgetCtx, r.binary, args...)
+	cmd.Dir = opts.WorkDir
 
 	// Stdin: prompt via stdin, or /dev/null if empty.
 	if opts.UserPrompt != "" {
@@ -119,14 +127,6 @@ func (r *PiRunner) Run(ctx context.Context, opts RunOpts) (*RunResult, error) {
 	var stdoutErr error
 	var wg sync.WaitGroup
 	wg.Add(2)
-
-	// Budget tracking: cancel if cost exceeds budget.
-	budgetCtx := ctx
-	var budgetCancel context.CancelFunc
-	if opts.MaxBudgetUSD > 0 {
-		budgetCtx, budgetCancel = context.WithCancel(ctx)
-		defer budgetCancel()
-	}
 
 	var costAccumulator float64
 	var costMu sync.Mutex
