@@ -133,6 +133,26 @@ func TestScanPromptDataFields(t *testing.T) {
 			want: []string{"ReworkFeedback"},
 		},
 		{
+			name: "range_variable_dot_access_excluded",
+			tmpl: "{{range $idx, $finding := .ReworkFeedback.ReviewFindings}}{{$finding.Severity}} {{$finding.File}}{{if $finding.Line}}:{{$finding.Line}}{{end}} — {{$finding.Issue}}{{end}}",
+			want: []string{"ReworkFeedback"},
+		},
+		{
+			name: "rebound_dot_inside_range_excluded",
+			tmpl: "{{- range .ReworkFeedback.PriorCycles}}{{.Cycle}} {{.Source}}{{- end}}",
+			want: []string{"ReworkFeedback"},
+		},
+		{
+			name: "mixed_top_level_and_range_subfields",
+			tmpl: "{{.Ticket.Key}} {{range $idx, $ci := .ReworkFeedback.CodeIssues}}{{$ci.Severity}} {{$ci.File}}{{end}} {{.SiblingContext}}",
+			want: []string{"Ticket", "ReworkFeedback", "SiblingContext"},
+		},
+		{
+			name: "dollar_root_dot_access",
+			tmpl: "{{range $idx, $finding := .ReworkFeedback.ReviewFindings}}{{len $.ReworkFeedback.ReviewFindings}}{{end}}",
+			want: []string{"ReworkFeedback"},
+		},
+		{
 			name: "sibling_context",
 			tmpl: "{{- if .SiblingContext}}## Siblings\n{{.SiblingContext}}{{- end}}",
 			want: []string{"SiblingContext"},
