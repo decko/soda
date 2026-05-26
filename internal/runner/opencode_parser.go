@@ -261,9 +261,9 @@ func MapOpencodeToolName(tool string) string {
 	return tool
 }
 
-// deduplicateTools returns a copy of tools with duplicates removed,
+// DeduplicateTools returns a copy of tools with duplicates removed,
 // preserving the original order.
-func deduplicateTools(tools []string) []string {
+func DeduplicateTools(tools []string) []string {
 	seen := make(map[string]bool, len(tools))
 	var result []string
 	for _, tool := range tools {

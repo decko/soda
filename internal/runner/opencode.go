@@ -302,7 +302,7 @@ func buildOpencodeArgs(opts RunOpts, defaultModel string) []string {
 	for _, tool := range opts.AllowedTools {
 		mapped = append(mapped, MapOpencodeToolName(tool))
 	}
-	mapped = deduplicateTools(mapped)
+	mapped = DeduplicateTools(mapped)
 	if len(mapped) > 0 {
 		args = append(args, "--permissions", strings.Join(mapped, ","))
 	}

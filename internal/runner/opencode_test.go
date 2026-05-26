@@ -334,7 +334,7 @@ func TestMapOpencodeToolName(t *testing.T) {
 func TestDeduplicateTools(t *testing.T) {
 	t.Run("removes_duplicates", func(t *testing.T) {
 		input := []string{"bash", "read", "bash", "write", "read"}
-		got := deduplicateTools(input)
+		got := DeduplicateTools(input)
 		want := []string{"bash", "read", "write"}
 		if len(got) != len(want) {
 			t.Fatalf("got %v, want %v", got, want)
@@ -348,7 +348,7 @@ func TestDeduplicateTools(t *testing.T) {
 
 	t.Run("preserves_order", func(t *testing.T) {
 		input := []string{"write", "read", "bash"}
-		got := deduplicateTools(input)
+		got := DeduplicateTools(input)
 		for idx := range input {
 			if got[idx] != input[idx] {
 				t.Errorf("got[%d] = %q, want %q", idx, got[idx], input[idx])
@@ -357,7 +357,7 @@ func TestDeduplicateTools(t *testing.T) {
 	})
 
 	t.Run("handles_empty", func(t *testing.T) {
-		got := deduplicateTools(nil)
+		got := DeduplicateTools(nil)
 		if len(got) != 0 {
 			t.Errorf("got %v, want empty", got)
 		}
