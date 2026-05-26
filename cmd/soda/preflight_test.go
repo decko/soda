@@ -13,7 +13,7 @@ import (
 
 func TestRunPreflight_AllPass(t *testing.T) {
 	env := allPassEnv()
-	err := runPreflight(env, false)
+	err := runPreflight(env, false, "")
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -28,7 +28,7 @@ func TestRunPreflight_AllPass_MockMode(t *testing.T) {
 		}
 		return "/usr/bin/" + file, nil
 	}
-	err := runPreflight(env, true)
+	err := runPreflight(env, true, "")
 	if err != nil {
 		t.Fatalf("expected no error in mock mode even without claude, got: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestRunPreflight_GitMissing(t *testing.T) {
 		}
 		return "/usr/bin/" + file, nil
 	}
-	err := runPreflight(env, false)
+	err := runPreflight(env, false, "")
 	if err == nil {
 		t.Fatal("expected error when git is missing")
 	}
@@ -76,7 +76,7 @@ func TestRunPreflight_NotGitRepo(t *testing.T) {
 		}
 		return "", nil
 	}
-	err := runPreflight(env, false)
+	err := runPreflight(env, false, "")
 	if err == nil {
 		t.Fatal("expected error when not in a git repo")
 	}
@@ -103,7 +103,7 @@ func TestRunPreflight_ClaudeMissing(t *testing.T) {
 		}
 		return "/usr/bin/" + file, nil
 	}
-	err := runPreflight(env, false)
+	err := runPreflight(env, false, "")
 	if err == nil {
 		t.Fatal("expected error when claude is missing")
 	}
@@ -135,7 +135,7 @@ func TestRunPreflight_ClaudeMissing_MockMode(t *testing.T) {
 		return "/usr/bin/" + file, nil
 	}
 	// In mock mode, claude checks are entirely skipped.
-	err := runPreflight(env, true)
+	err := runPreflight(env, true, "")
 	if err != nil {
 		t.Fatalf("expected no error in mock mode, got: %v", err)
 	}
@@ -152,7 +152,7 @@ func TestRunPreflight_ClaudeVersionTooOld(t *testing.T) {
 		}
 		return "", nil
 	}
-	err := runPreflight(env, false)
+	err := runPreflight(env, false, "")
 	if err == nil {
 		t.Fatal("expected error when claude version is too old")
 	}
@@ -186,7 +186,7 @@ func TestRunPreflight_NoConfigDoesNotFail(t *testing.T) {
 	env.UserConfigDir = func() (string, error) {
 		return "/home/testuser/.config", nil
 	}
-	err := runPreflight(env, false)
+	err := runPreflight(env, false, "")
 	if err != nil {
 		t.Fatalf("expected no error (config checks excluded from preflight), got: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestRunPreflight_InvalidConfigDoesNotFail(t *testing.T) {
 	env.LoadConfig = func(path string) (*config.Config, error) {
 		return nil, errors.New("invalid YAML syntax")
 	}
-	err := runPreflight(env, false)
+	err := runPreflight(env, false, "")
 	if err != nil {
 		t.Fatalf("expected no error (config checks excluded from preflight), got: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestRunPreflight_MultipleFailures(t *testing.T) {
 	env.Stat = func(name string) (os.FileInfo, error) {
 		return nil, os.ErrNotExist
 	}
-	err := runPreflight(env, false)
+	err := runPreflight(env, false, "")
 	if err == nil {
 		t.Fatal("expected error with multiple failures")
 	}
@@ -283,8 +283,66 @@ func TestRunPreflight_OptionalFailuresIgnored(t *testing.T) {
 		}
 		return "/usr/bin/" + file, nil
 	}
-	err := runPreflight(env, false)
+	err := runPreflight(env, false, "")
 	if err != nil {
 		t.Fatalf("expected no error for optional-only failures, got: %v", err)
+	}
+}
+
+func TestRunPreflight_SkipsClaudeForPiRunner(t *testing.T) {
+	// When runner is "pi", Claude CLI checks should be skipped entirely.
+	env := allPassEnv()
+	env.LookPath = func(file string) (string, error) {
+		if file == "claude" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + file, nil
+	}
+	err := runPreflight(env, false, "pi")
+	if err != nil {
+		t.Fatalf("expected no error with runner=pi and no claude, got: %v", err)
+	}
+}
+
+func TestRunPreflight_SkipsClaudeForOpencodeRunner(t *testing.T) {
+	// When runner is "opencode", Claude CLI checks should be skipped entirely.
+	env := allPassEnv()
+	env.LookPath = func(file string) (string, error) {
+		if file == "claude" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + file, nil
+	}
+	err := runPreflight(env, false, "opencode")
+	if err != nil {
+		t.Fatalf("expected no error with runner=opencode and no claude, got: %v", err)
+	}
+}
+
+func TestRunPreflight_ChecksClaudeForDefaultRunner(t *testing.T) {
+	// When runner is "" (default=claude), Claude CLI checks should still run.
+	env := allPassEnv()
+	env.LookPath = func(file string) (string, error) {
+		if file == "claude" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + file, nil
+	}
+	err := runPreflight(env, false, "")
+	if err == nil {
+		t.Fatal("expected error when runner is default and claude is missing")
+	}
+	var pe *PreflightError
+	if !errors.As(err, &pe) {
+		t.Fatalf("expected PreflightError, got %T", err)
+	}
+	found := false
+	for _, f := range pe.Failures {
+		if f.name == "claude" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected claude failure in PreflightError for default runner")
 	}
 }
