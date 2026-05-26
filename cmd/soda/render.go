@@ -44,7 +44,7 @@ func runRender(cmd *cobra.Command, cfg *config.Config, phaseName, ticketKey stri
 
 	// Load pipeline config
 	pipelineName, _ := cmd.Flags().GetString("pipeline")
-	phasesPath, cleanup, err := resolvePhasesPath(pipelineName, "", "")
+	phasesPath, cleanup, err := resolvePhasesPath(pipelineName, cfg.PhasesPath, cfg.PipelinesPath)
 	if err != nil {
 		return fmt.Errorf("render: %w", err)
 	}
