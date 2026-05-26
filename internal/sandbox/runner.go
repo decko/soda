@@ -51,6 +51,22 @@ func New(config Config) (*Runner, error) {
 	}, nil
 }
 
+// NewWithAdapter creates a sandbox runner using a caller-provided AgentAdapter.
+// This allows the runner-type decision to live in cmd/soda/run.go rather than
+// being hardcoded here. Call Close() when done.
+func NewWithAdapter(config Config, adapter AgentAdapter) (*Runner, error) {
+	sb, err := arapuca.New()
+	if err != nil {
+		return nil, fmt.Errorf("sandbox: create: %w", err)
+	}
+
+	return &Runner{
+		sandbox: sb,
+		config:  config,
+		adapter: adapter,
+	}, nil
+}
+
 // Close releases the sandbox. Safe to call multiple times.
 func (r *Runner) Close() {
 	if r.sandbox != nil {
