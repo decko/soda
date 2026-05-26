@@ -91,7 +91,7 @@ func TestParsePiStream(t *testing.T) {
 	})
 
 	t.Run("returns_transient_error_on_error_event", func(t *testing.T) {
-		stream := `{"type":"error","error":"rate limit exceeded 429"}`
+		stream := `{"type":"error","error":"rate limit exceeded"}`
 
 		_, err := ParsePiStream([]byte(stream), nil)
 		if err == nil {
@@ -280,6 +280,7 @@ func TestClassifyPiError(t *testing.T) {
 		{"server overloaded 503", "overloaded"},
 		{"connection refused", "connection"},
 		{"something unknown happened", "unknown"},
+		{"used 1500 tokens", "unknown"}, // bare "500" must NOT match
 	}
 
 	for _, tt := range tests {
