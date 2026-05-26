@@ -440,6 +440,12 @@ func runPipeline(cfg *config.Config, opts pipelineOpts) error {
 		cfg.Limits.MaxCostPerTicket = opts.maxCost
 	}
 
+	// When using Pi, prefer pi.model over top-level model.
+	effectiveModel := cfg.Model
+	if usePi && cfg.Pi.Model != "" {
+		effectiveModel = cfg.Pi.Model
+	}
+
 	engineCfg := pipeline.EngineConfig{
 		Pipeline:               pl,
 		Loader:                 loader,
@@ -447,7 +453,7 @@ func runPipeline(cfg *config.Config, opts pipelineOpts) error {
 		PromptConfig:           promptConfig,
 		PromptContext:          promptContext,
 		DetectedStack:          detectedStack,
-		Model:                  cfg.Model,
+		Model:                  effectiveModel,
 		PipelineName:           pipelineName,
 		BinaryVersion:          binaryVersionID(),
 		WorkDir:                workDir,
