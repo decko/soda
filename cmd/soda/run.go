@@ -279,6 +279,7 @@ func runPipeline(cfg *config.Config, opts pipelineOpts) error {
 	var r runner.Runner
 	useMock := opts.useMock
 	usePi := cfg.Runner == "pi"
+	useOpencode := cfg.Runner == "opencode"
 	if useMock {
 		r = buildMockRunner()
 	} else if cfg.Sandbox.Enabled {
@@ -295,7 +296,19 @@ func runPipeline(cfg *config.Config, opts pipelineOpts) error {
 				LogDir:          cfg.Sandbox.Proxy.LogDir,
 			},
 		}
-		if usePi {
+		if useOpencode {
+			ocBinary := cfg.Opencode.Binary
+			ocAdapter, adapterErr := sandbox.NewOpencodeAdapter(ocBinary)
+			if adapterErr != nil {
+				return fmt.Errorf("run: create opencode adapter: %w", adapterErr)
+			}
+			sbRunner, sbErr := sandbox.NewWithAdapter(sbCfg, ocAdapter)
+			if sbErr != nil {
+				return fmt.Errorf("run: create sandbox runner (opencode): %w", sbErr)
+			}
+			defer sbRunner.Close()
+			r = sbRunner
+		} else if usePi {
 			piBinary := cfg.Pi.Binary
 			piAdapter, adapterErr := sandbox.NewPiAdapter(piBinary)
 			if adapterErr != nil {
@@ -315,6 +328,16 @@ func runPipeline(cfg *config.Config, opts pipelineOpts) error {
 			defer sbRunner.Close()
 			r = sbRunner
 		}
+	} else if useOpencode {
+		ocModel := cfg.Opencode.Model
+		if ocModel == "" {
+			ocModel = cfg.Model
+		}
+		ocRunner, ocErr := runner.NewOpencodeRunner(cfg.Opencode.Binary, ocModel, workDir)
+		if ocErr != nil {
+			return fmt.Errorf("run: create opencode runner: %w", ocErr)
+		}
+		r = ocRunner
 	} else if usePi {
 		piModel := cfg.Pi.Model
 		if piModel == "" {
@@ -440,9 +463,11 @@ func runPipeline(cfg *config.Config, opts pipelineOpts) error {
 		cfg.Limits.MaxCostPerTicket = opts.maxCost
 	}
 
-	// When using Pi, prefer pi.model over top-level model.
+	// When using Pi or Opencode, prefer agent-specific model over top-level model.
 	effectiveModel := cfg.Model
-	if usePi && cfg.Pi.Model != "" {
+	if useOpencode && cfg.Opencode.Model != "" {
+		effectiveModel = cfg.Opencode.Model
+	} else if usePi && cfg.Pi.Model != "" {
 		effectiveModel = cfg.Pi.Model
 	}
 
