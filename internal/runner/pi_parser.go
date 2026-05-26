@@ -86,6 +86,7 @@ func ParsePiStream(data []byte, onChunk func(string)) (*PiStreamResult, error) {
 				lastErr = &SemanticError{Message: event.Error}
 				continue
 			}
+			lastErr = nil // Recovery: a valid result supersedes prior errors.
 			if len(event.Result) > 0 && string(event.Result) != "null" {
 				result.Output = event.Result
 			}
@@ -94,11 +95,18 @@ func ParsePiStream(data []byte, onChunk func(string)) (*PiStreamResult, error) {
 			}
 
 		case "error":
-			// Classify Pi error events as transient errors.
 			reason := classifyPiError(event.Error)
-			lastErr = &TransientError{
-				Reason: reason,
-				Err:    fmt.Errorf("pi: %s", event.Error),
+			if reason != "unknown" {
+				// Known transient pattern — retryable.
+				lastErr = &TransientError{
+					Reason: reason,
+					Err:    fmt.Errorf("pi: %s", event.Error),
+				}
+			} else {
+				// Unknown or non-transient error — not retryable.
+				lastErr = &ParseError{
+					Err: fmt.Errorf("pi: %s", event.Error),
+				}
 			}
 		}
 	}

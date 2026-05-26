@@ -107,6 +107,23 @@ func TestParsePiStream(t *testing.T) {
 		}
 	})
 
+	t.Run("returns_parse_error_on_unknown_error_event", func(t *testing.T) {
+		stream := `{"type":"error","error":"invalid API key"}`
+
+		_, err := ParsePiStream([]byte(stream), nil)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+
+		var pe *ParseError
+		if !errors.As(err, &pe) {
+			t.Fatalf("expected ParseError for non-transient error, got %T: %v", err, err)
+		}
+		if !strings.Contains(pe.Error(), "invalid API key") {
+			t.Errorf("error should contain original message, got: %v", pe)
+		}
+	})
+
 	t.Run("calls_onChunk_for_assistant_content", func(t *testing.T) {
 		stream := strings.Join([]string{
 			`{"type":"assistant","content":"chunk1"}`,
@@ -160,6 +177,42 @@ func TestParsePiStream(t *testing.T) {
 		}
 		if result.Output != nil {
 			t.Errorf("Output = %s, want nil", string(result.Output))
+		}
+	})
+
+	t.Run("successful_result_clears_prior_error", func(t *testing.T) {
+		stream := strings.Join([]string{
+			`{"type":"error","error":"rate limit exceeded"}`,
+			`{"type":"assistant","content":"Hello"}`,
+			`{"type":"result","result":{"answer":"42"}}`,
+		}, "\n")
+		result, err := ParsePiStream([]byte(stream), nil)
+		if err != nil {
+			t.Fatalf("expected recovery after valid result, got: %v", err)
+		}
+		if string(result.Output) != `{"answer":"42"}` {
+			t.Errorf("Output = %s, want %s", string(result.Output), `{"answer":"42"}`)
+		}
+		if result.RawText != "Hello" {
+			t.Errorf("RawText = %q, want %q", result.RawText, "Hello")
+		}
+	})
+
+	t.Run("semantic_error_after_transient_error_returns_semantic", func(t *testing.T) {
+		stream := strings.Join([]string{
+			`{"type":"error","error":"rate limit exceeded"}`,
+			`{"type":"result","subtype":"error","error":"task failed"}`,
+		}, "\n")
+		_, err := ParsePiStream([]byte(stream), nil)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		var se *SemanticError
+		if !errors.As(err, &se) {
+			t.Fatalf("expected SemanticError, got %T: %v", err, err)
+		}
+		if se.Message != "task failed" {
+			t.Errorf("Message = %q, want %q", se.Message, "task failed")
 		}
 	})
 
