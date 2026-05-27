@@ -104,7 +104,7 @@ func runValidate(w io.Writer, errW io.Writer, cfg *config.Config, pipelineName s
 	validateTranscript(w, result, cfg)
 
 	// Stage 9: Runner binary
-	validateRunner(w, result, cfg)
+	validateRunner(w, result, cfg, exec.LookPath)
 
 	// Print summary
 	fmt.Fprintln(w)
@@ -534,7 +534,9 @@ func truncateVersion(version string, maxLen int) string {
 
 // validateRunner checks that the configured runner binary is available in PATH.
 // Reports available alternatives when the configured runner is not found.
-func validateRunner(w io.Writer, result *validationResult, cfg *config.Config) {
+// The lookPath parameter follows the injection pattern used by doctorEnv.LookPath
+// so tests can fully control binary resolution.
+func validateRunner(w io.Writer, result *validationResult, cfg *config.Config, lookPath func(string) (string, error)) {
 	runnerName := cfg.Runner
 	if runnerName == "" {
 		runnerName = "claude" // default runner
@@ -557,7 +559,7 @@ func validateRunner(w io.Writer, result *validationResult, cfg *config.Config) {
 		binaryName = runnerName
 	}
 
-	_, err := exec.LookPath(binaryName)
+	_, err := lookPath(binaryName)
 	if err != nil {
 		hint := runner.InstallHint(info)
 		errMsg := fmt.Sprintf("runner: %s (%s) not found in PATH", runnerName, binaryName)
@@ -571,7 +573,7 @@ func validateRunner(w io.Writer, result *validationResult, cfg *config.Config) {
 			if agent.Name == runnerName {
 				continue
 			}
-			if _, lookErr := exec.LookPath(agent.Binary); lookErr == nil {
+			if _, lookErr := lookPath(agent.Binary); lookErr == nil {
 				alternatives = append(alternatives, agent.Name)
 			}
 		}

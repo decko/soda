@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1051,18 +1053,27 @@ func TestValidateSinglePrompt_NoFieldCoverageForEmbedded(t *testing.T) {
 
 // --- validateRunner tests ---
 
+// stubLookPath returns a LookPath function that resolves known binaries
+// from a map and returns exec.ErrNotFound for unknown ones.
+func stubLookPath(found map[string]string) func(string) (string, error) {
+	return func(name string) (string, error) {
+		if path, ok := found[name]; ok {
+			return path, nil
+		}
+		return "", fmt.Errorf("%s: %w", name, exec.ErrNotFound)
+	}
+}
+
 func TestValidateRunner_ClaudeFound(t *testing.T) {
-	// This test relies on the claude binary being in PATH (as it is
-	// in the test environment). When it's not found, the test is skipped.
 	cfg := &config.Config{}
 	result := &validationResult{}
 	var buf bytes.Buffer
-	validateRunner(&buf, result, cfg)
+	lookPath := stubLookPath(map[string]string{"claude": "/usr/bin/claude"})
+	validateRunner(&buf, result, cfg, lookPath)
 
 	output := buf.String()
 	if result.hasErrors() {
-		// Claude not in PATH — skip rather than fail.
-		t.Skipf("claude not found in PATH, skipping: %v", result.errors)
+		t.Errorf("expected no errors, got: %v", result.errors)
 	}
 	if !strings.Contains(output, "✓ runner:") {
 		t.Errorf("expected '✓ runner:' line, got: %s", output)
@@ -1073,11 +1084,11 @@ func TestValidateRunner_ClaudeFound(t *testing.T) {
 }
 
 func TestValidateRunner_MissingRunner(t *testing.T) {
-	// Use a runner name that definitely doesn't exist.
 	cfg := &config.Config{Runner: "nonexistent-agent-xyz"}
 	result := &validationResult{}
 	var buf bytes.Buffer
-	validateRunner(&buf, result, cfg)
+	lookPath := stubLookPath(map[string]string{})
+	validateRunner(&buf, result, cfg, lookPath)
 
 	if !result.hasErrors() {
 		t.Error("expected error for missing runner binary")
@@ -1095,14 +1106,14 @@ func TestValidateRunner_MissingRunner(t *testing.T) {
 }
 
 func TestValidateRunner_PiWithCustomBinary(t *testing.T) {
-	// Use a custom binary that doesn't exist.
 	cfg := &config.Config{
 		Runner: "pi",
 		Pi:     config.PiConfig{Binary: "custom-pi-binary-xyz"},
 	}
 	result := &validationResult{}
 	var buf bytes.Buffer
-	validateRunner(&buf, result, cfg)
+	lookPath := stubLookPath(map[string]string{})
+	validateRunner(&buf, result, cfg, lookPath)
 
 	if !result.hasErrors() {
 		t.Error("expected error for missing custom pi binary")
@@ -1123,11 +1134,11 @@ func TestValidateRunner_InstallHintShown(t *testing.T) {
 	cfg := &config.Config{Runner: "pi"}
 	result := &validationResult{}
 	var buf bytes.Buffer
-	validateRunner(&buf, result, cfg)
+	lookPath := stubLookPath(map[string]string{})
+	validateRunner(&buf, result, cfg, lookPath)
 
-	// pi is likely not installed in the test env, so this should fail with install hint.
 	if !result.hasErrors() {
-		t.Skip("pi is installed, skipping install hint test")
+		t.Error("expected error for missing pi binary")
 	}
 	found := false
 	for _, errMsg := range result.errors {
@@ -1142,25 +1153,75 @@ func TestValidateRunner_InstallHintShown(t *testing.T) {
 }
 
 func TestValidateRunner_AlternativesShown(t *testing.T) {
+	// claude is available, but the configured runner is not.
 	cfg := &config.Config{Runner: "nonexistent-agent-xyz"}
 	result := &validationResult{}
 	var buf bytes.Buffer
-	validateRunner(&buf, result, cfg)
+	lookPath := stubLookPath(map[string]string{"claude": "/usr/bin/claude"})
+	validateRunner(&buf, result, cfg, lookPath)
 
 	if !result.hasErrors() {
 		t.Error("expected error for missing runner")
 	}
-	// At least one agent (claude) should be found as alternative.
 	foundAlt := false
 	for _, errMsg := range result.errors {
-		if strings.Contains(errMsg, "alternatives") {
+		if strings.Contains(errMsg, "alternatives") && strings.Contains(errMsg, "claude") {
 			foundAlt = true
 			break
 		}
 	}
-	// This may not always have alternatives if no agents are installed.
-	// Just verify no panic and the error message is well-formed.
-	_ = foundAlt
+	if !foundAlt {
+		t.Errorf("expected alternatives mentioning claude, got: %v", result.errors)
+	}
+}
+
+func TestValidateRunner_NoAlternativesWhenNoneAvailable(t *testing.T) {
+	cfg := &config.Config{Runner: "nonexistent-agent-xyz"}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	lookPath := stubLookPath(map[string]string{})
+	validateRunner(&buf, result, cfg, lookPath)
+
+	if !result.hasErrors() {
+		t.Error("expected error for missing runner")
+	}
+	for _, errMsg := range result.errors {
+		if strings.Contains(errMsg, "alternatives") {
+			t.Errorf("expected no alternatives when none available, got: %s", errMsg)
+		}
+	}
+}
+
+func TestValidateRunner_PiFoundNoError(t *testing.T) {
+	cfg := &config.Config{Runner: "pi"}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	lookPath := stubLookPath(map[string]string{"pi": "/usr/local/bin/pi"})
+	validateRunner(&buf, result, cfg, lookPath)
+
+	if result.hasErrors() {
+		t.Errorf("expected no errors when pi is found, got: %v", result.errors)
+	}
+	output := buf.String()
+	if !strings.Contains(output, "✓ runner: pi") {
+		t.Errorf("expected '✓ runner: pi' line, got: %s", output)
+	}
+}
+
+func TestValidateRunner_OpencodeFoundNoError(t *testing.T) {
+	cfg := &config.Config{Runner: "opencode"}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	lookPath := stubLookPath(map[string]string{"opencode": "/usr/local/bin/opencode"})
+	validateRunner(&buf, result, cfg, lookPath)
+
+	if result.hasErrors() {
+		t.Errorf("expected no errors when opencode is found, got: %v", result.errors)
+	}
+	output := buf.String()
+	if !strings.Contains(output, "✓ runner: opencode") {
+		t.Errorf("expected '✓ runner: opencode' line, got: %s", output)
+	}
 }
 
 func TestRunValidate_WithRunnerCheck(t *testing.T) {
