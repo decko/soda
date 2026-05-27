@@ -46,7 +46,14 @@ func (a *OpencodeAdapter) Binary() string {
 func (a *OpencodeAdapter) BuildArgs(opts runner.RunOpts, tmpDir string) ([]string, error) {
 	// Write agent file to {tmpDir}/.opencode/agent/soda-{phase}.md so
 	// Opencode can discover it via HOME=tmpDir.
-	if opts.SystemPrompt != "" {
+	// When an output schema is provided, append it to the agent file so the
+	// model can see the expected output format (opencode has no --json-schema flag).
+	agentContent := opts.SystemPrompt
+	if opts.OutputSchema != "" {
+		schemaSection := "\n\n## Output Schema\n\nYou MUST produce a JSON object conforming to this schema:\n\n```json\n" + opts.OutputSchema + "\n```\n"
+		agentContent += schemaSection
+	}
+	if agentContent != "" {
 		promptDir := tmpDir
 		phase := opts.Phase
 		if phase == "" {
@@ -58,7 +65,7 @@ func (a *OpencodeAdapter) BuildArgs(opts runner.RunOpts, tmpDir string) ([]strin
 		}
 		agentName := "soda-" + strings.ReplaceAll(phase, "/", "-")
 		agentPath := filepath.Join(agentDir, agentName+".md")
-		if err := os.WriteFile(agentPath, []byte(opts.SystemPrompt), 0o644); err != nil {
+		if err := os.WriteFile(agentPath, []byte(agentContent), 0o644); err != nil {
 			return nil, fmt.Errorf("sandbox: write opencode agent file: %w", err)
 		}
 	}

@@ -59,9 +59,21 @@ func (r *OpencodeRunner) Run(ctx context.Context, opts RunOpts) (*RunResult, err
 		}
 	}
 
-	// Write agent file for system prompt.
-	if opts.SystemPrompt != "" {
-		cleanup, err := writeOpencodeAgentFile(opts.WorkDir, opts.Phase, opts.SystemPrompt)
+	// Normalize phase: default to "default" when empty so the agent file name
+	// matches the --agent flag produced by buildOpencodeArgs.
+	phase := opts.Phase
+	if phase == "" {
+		phase = "default"
+	}
+
+	// Write agent file for system prompt (and output schema, if provided).
+	agentContent := opts.SystemPrompt
+	if opts.OutputSchema != "" {
+		schemaSection := "\n\n## Output Schema\n\nYou MUST produce a JSON object conforming to this schema:\n\n```json\n" + opts.OutputSchema + "\n```\n"
+		agentContent += schemaSection
+	}
+	if agentContent != "" {
+		cleanup, err := writeOpencodeAgentFile(opts.WorkDir, phase, agentContent)
 		if err != nil {
 			return nil, fmt.Errorf("opencode runner: write agent file: %w", err)
 		}
@@ -295,10 +307,13 @@ func buildOpencodeArgs(opts RunOpts, defaultModel string) []string {
 		args = append(args, "--model", effectiveModel)
 	}
 
-	// Agent name derived from phase.
-	if opts.Phase != "" {
-		args = append(args, "--agent", agentName(opts.Phase))
+	// Agent name derived from phase; default to "default" when empty so the
+	// written agent file is always loaded (matches sandbox adapter behaviour).
+	phase := opts.Phase
+	if phase == "" {
+		phase = "default"
 	}
+	args = append(args, "--agent", agentName(phase))
 
 	// Map and add allowed tools.
 	mapped := make([]string, 0, len(opts.AllowedTools))

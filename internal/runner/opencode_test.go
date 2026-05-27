@@ -448,6 +448,39 @@ func TestBuildOpencodeArgs(t *testing.T) {
 		args := buildOpencodeArgs(opts, "model")
 		assertContainsArg(t, args, "--agent", "soda-review-go-specialist")
 	})
+
+	t.Run("empty_phase_defaults_to_soda_default", func(t *testing.T) {
+		opts := RunOpts{}
+		args := buildOpencodeArgs(opts, "model")
+		assertContainsArg(t, args, "--agent", "soda-default")
+	})
+
+	t.Run("output_schema_in_agent_file", func(t *testing.T) {
+		dir := t.TempDir()
+		schema := `{"required":["ticket_key","verdict"]}`
+		content := "You are a helpful assistant."
+		agentContent := content + "\n\n## Output Schema\n\nYou MUST produce a JSON object conforming to this schema:\n\n```json\n" + schema + "\n```\n"
+		cleanup, err := writeOpencodeAgentFile(dir, "default", agentContent)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		defer cleanup()
+
+		agentPath := filepath.Join(dir, ".opencode", "agent", "soda-default.md")
+		got, readErr := os.ReadFile(agentPath)
+		if readErr != nil {
+			t.Fatalf("failed to read file: %v", readErr)
+		}
+		if !strings.Contains(string(got), "## Output Schema") {
+			t.Error("agent file should contain output schema section")
+		}
+		if !strings.Contains(string(got), schema) {
+			t.Error("agent file should contain the schema JSON")
+		}
+		if !strings.Contains(string(got), content) {
+			t.Error("agent file should contain the system prompt")
+		}
+	})
 }
 
 func TestWriteOpencodeAgentFile(t *testing.T) {
