@@ -31,14 +31,16 @@ func (e *PreflightError) Error() string {
 // begins.
 //
 // When useMock is true, Claude CLI checks are skipped because the mock
-// runner doesn't invoke Claude.
-func runPreflight(env *doctorEnv, useMock bool) error {
+// runner doesn't invoke Claude. When runnerName is "pi" or "opencode",
+// Claude CLI checks are also skipped because those runners don't invoke
+// the Claude Code CLI.
+func runPreflight(env *doctorEnv, useMock bool, runnerName string) error {
 	checks := []func(*doctorEnv) checkResult{
 		checkGit,
 		checkGitRepo,
 	}
 
-	if !useMock {
+	if !useMock && runnerName != "pi" && runnerName != "opencode" {
 		checks = append(checks, checkClaude, checkClaudeVersion)
 	}
 
