@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"os"
@@ -28,13 +29,14 @@ type checkResult struct {
 // doctorEnv provides dependency injection for doctor checks, enabling
 // unit tests without requiring real binaries or filesystem state.
 type doctorEnv struct {
-	LookPath      func(file string) (string, error)
-	RunCmd        func(name string, args ...string) (string, error)
-	Stat          func(name string) (os.FileInfo, error)
-	LoadConfig    func(path string) (*config.Config, error)
-	UserConfigDir func() (string, error)
-	UserHomeDir   func() (string, error)
-	Getenv        func(key string) string // injectable os.Getenv for testable env checks
+	LookPath       func(file string) (string, error)
+	RunCmd         func(name string, args ...string) (string, error)
+	Stat           func(name string) (os.FileInfo, error)
+	LoadConfig     func(path string) (*config.Config, error)
+	UserConfigDir  func() (string, error)
+	UserHomeDir    func() (string, error)
+	Getenv         func(key string) string // injectable os.Getenv for testable env checks
+	ExecInstallCmd func(cmd string) error  // runs an install command (sh -c); nil = default
 
 	// ParsedConfig is populated by checkConfigValid on success.
 	// Downstream checks use it to adjust their required status.
@@ -68,6 +70,13 @@ func defaultDoctorEnv() *doctorEnv {
 		UserConfigDir: os.UserConfigDir,
 		UserHomeDir:   os.UserHomeDir,
 		Getenv:        os.Getenv,
+		ExecInstallCmd: func(cmd string) error {
+			c := exec.Command("sh", "-c", cmd)
+			c.Stdin = os.Stdin
+			c.Stdout = os.Stdout
+			c.Stderr = os.Stderr
+			return c.Run()
+		},
 	}
 }
 
@@ -81,7 +90,7 @@ func (e *doctorEnv) getenv(key string) string {
 }
 
 func newDoctorCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "Check prerequisites and environment health",
 		Long: `Run diagnostic checks to verify that required tools are installed,
@@ -89,18 +98,41 @@ configuration files are present and valid, and the environment is
 ready for soda to operate.
 
 Each check reports ✓ (pass), ✗ (fail), or ⚠ (optional) with a
-suggested fix. Only required failures cause a non-zero exit code.`,
+suggested fix. Only required failures cause a non-zero exit code.
+
+Use --install to be prompted to auto-install missing agent CLIs.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			env := defaultDoctorEnv()
-			return runDoctor(cmd.OutOrStdout(), env)
+			install, _ := cmd.Flags().GetBool("install")
+			return runDoctorFull(cmd.OutOrStdout(), cmd.InOrStdin(), env, install)
 		},
 	}
+
+	cmd.Flags().Bool("install", false, "prompt to install missing agent CLIs")
+
+	return cmd
 }
 
 // runDoctor executes all diagnostic checks and prints results.
 // Returns a non-nil error if any required check fails (exit 1).
+// Preserved for backward compatibility with existing callers and tests.
 func runDoctor(w io.Writer, env *doctorEnv) error {
+	return runDoctorFull(w, strings.NewReader(""), env, false)
+}
+
+// installableAgents lists agent check functions whose failures can be
+// auto-installed when --install is given.
+var installableAgents = map[string]bool{
+	"pi":       true,
+	"opencode": true,
+}
+
+// runDoctorFull is the extended version of runDoctor that supports the
+// --install flag. When install is true and an agent check fails, it
+// prompts the user to install the missing CLI and runs the command on
+// confirmation.
+func runDoctorFull(w io.Writer, stdin io.Reader, env *doctorEnv, install bool) error {
 	checks := []func(*doctorEnv) checkResult{
 		checkGit,
 		checkGitRepo,
@@ -120,6 +152,8 @@ func runDoctor(w io.Writer, env *doctorEnv) error {
 		checkOpencode,
 	}
 
+	reader := bufio.NewReader(stdin)
+
 	var failed int
 	for _, check := range checks {
 		result := check(env)
@@ -138,6 +172,20 @@ func runDoctor(w io.Writer, env *doctorEnv) error {
 			if result.fix != "" {
 				fmt.Fprintf(w, "  fix: %s\n", result.fix)
 			}
+
+			// Offer auto-install for known agents when --install is set.
+			if install && installableAgents[result.name] {
+				installed := offerInstall(w, reader, env, result.name)
+				if installed {
+					// Re-run the check after installation.
+					recheck := check(env)
+					if recheck.passed {
+						fmt.Fprintf(w, "✓ %s: %s\n", recheck.name, recheck.detail)
+					} else {
+						fmt.Fprintf(w, "⚠ %s: installation may have failed: %s\n", recheck.name, recheck.detail)
+					}
+				}
+			}
 		}
 	}
 
@@ -148,6 +196,55 @@ func runDoctor(w io.Writer, env *doctorEnv) error {
 	}
 	fmt.Fprintln(w, "All checks passed")
 	return nil
+}
+
+// offerInstall prompts the user to install a missing agent CLI. Returns
+// true if installation was attempted and ExecInstallCmd did not error.
+func offerInstall(w io.Writer, reader *bufio.Reader, env *doctorEnv, agentName string) bool {
+	info := runner.AgentByName(agentName)
+	if info == nil || len(info.InstallCmds) == 0 {
+		return false
+	}
+
+	// Pick the best install method: prefer one whose package manager is
+	// available, otherwise fall back to the first method.
+	var chosen *runner.InstallMethod
+	for idx := range info.InstallCmds {
+		method := &info.InstallCmds[idx]
+		// Check if the package manager (first word of the command) is available.
+		parts := strings.Fields(method.Command)
+		if len(parts) > 0 {
+			if _, err := env.LookPath(parts[0]); err == nil {
+				chosen = method
+				break
+			}
+		}
+	}
+	if chosen == nil {
+		chosen = &info.InstallCmds[0]
+	}
+
+	fmt.Fprintf(w, "  Auto-install %s via %s? (%s) [y/N] ", agentName, chosen.Label, chosen.Command)
+	line, err := reader.ReadString('\n')
+	if err != nil && err.Error() != "EOF" {
+		return false
+	}
+	line = strings.TrimSpace(line)
+	if !strings.EqualFold(line, "y") && !strings.EqualFold(line, "yes") {
+		return false
+	}
+
+	execFn := env.ExecInstallCmd
+	if execFn == nil {
+		return false
+	}
+
+	fmt.Fprintf(w, "  Running: %s\n", chosen.Command)
+	if installErr := execFn(chosen.Command); installErr != nil {
+		fmt.Fprintf(w, "  Install failed: %v\n", installErr)
+		return false
+	}
+	return true
 }
 
 // checkGit verifies that git is available in PATH.
