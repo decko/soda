@@ -11,6 +11,7 @@ import (
 
 	"github.com/decko/soda/internal/claude"
 	"github.com/decko/soda/internal/config"
+	"github.com/decko/soda/internal/runner"
 )
 
 // mockFileInfo implements os.FileInfo for tests.
@@ -2191,5 +2192,239 @@ func TestCheckCommitSigning_SSHBareInlineKeySK(t *testing.T) {
 	}
 	if !strings.Contains(r.detail, "inline") {
 		t.Errorf("expected detail to mention inline, got: %q", r.detail)
+	}
+}
+
+// --- checkPi tests ---
+
+func TestCheckPi_Found(t *testing.T) {
+	env := allPassEnv()
+	r := checkPi(env)
+	if !r.passed {
+		t.Error("expected pi check to pass")
+	}
+	if r.name != "pi" {
+		t.Errorf("expected name 'pi', got %q", r.name)
+	}
+}
+
+func TestCheckPi_NotFound(t *testing.T) {
+	env := allPassEnv()
+	env.LookPath = func(file string) (string, error) {
+		if file == "pi" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + file, nil
+	}
+	r := checkPi(env)
+	if r.passed {
+		t.Error("expected pi check to fail")
+	}
+	if r.required {
+		t.Error("expected pi check to be optional (required=false)")
+	}
+	if !strings.Contains(r.detail, "optional") {
+		t.Errorf("expected detail to mention optional, got: %q", r.detail)
+	}
+	piInfo := runner.AgentByName("pi")
+	expectedFix := runner.InstallHint(piInfo)
+	if r.fix != expectedFix {
+		t.Errorf("expected fix %q, got %q", expectedFix, r.fix)
+	}
+}
+
+// --- checkOpencode tests ---
+
+func TestCheckOpencode_Found(t *testing.T) {
+	env := allPassEnv()
+	r := checkOpencode(env)
+	if !r.passed {
+		t.Error("expected opencode check to pass")
+	}
+	if r.name != "opencode" {
+		t.Errorf("expected name 'opencode', got %q", r.name)
+	}
+}
+
+func TestCheckOpencode_NotFound(t *testing.T) {
+	env := allPassEnv()
+	env.LookPath = func(file string) (string, error) {
+		if file == "opencode" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + file, nil
+	}
+	r := checkOpencode(env)
+	if r.passed {
+		t.Error("expected opencode check to fail")
+	}
+	if r.required {
+		t.Error("expected opencode check to be optional (required=false)")
+	}
+	if !strings.Contains(r.detail, "optional") {
+		t.Errorf("expected detail to mention optional, got: %q", r.detail)
+	}
+	ocInfo := runner.AgentByName("opencode")
+	expectedFix := runner.InstallHint(ocInfo)
+	if r.fix != expectedFix {
+		t.Errorf("expected fix %q, got %q", expectedFix, r.fix)
+	}
+}
+
+// --- runDoctor shows pi/opencode lines ---
+
+func TestRunDoctor_ShowsPiAndOpencodeLines(t *testing.T) {
+	env := allPassEnv()
+	var buf bytes.Buffer
+	err := runDoctor(&buf, env)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "pi:") {
+		t.Errorf("expected pi line in doctor output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "opencode:") {
+		t.Errorf("expected opencode line in doctor output, got:\n%s", out)
+	}
+}
+
+// TestCheckAgentCLI_IncludesVersionInDetail verifies that when the agent binary
+// is found and returns a version string, checkAgentCLI includes the version
+// in parentheses in the detail field (e.g. '/usr/bin/pi (1.2.3)').
+func TestCheckAgentCLI_IncludesVersionInDetail(t *testing.T) {
+	env := &doctorEnv{
+		LookPath: func(file string) (string, error) {
+			if file == "pi" {
+				return "/usr/bin/pi", nil
+			}
+			return "", errors.New("not found")
+		},
+		RunCmd: func(name string, args ...string) (string, error) {
+			if name == "pi" && len(args) > 0 && args[0] == "--version" {
+				return "pi 1.2.3", nil
+			}
+			return "", nil
+		},
+	}
+	r := checkPi(env)
+	if !r.passed {
+		t.Fatalf("expected pi check to pass, got detail: %q", r.detail)
+	}
+	if !strings.Contains(r.detail, "(1.2.3)") {
+		t.Errorf("expected version in detail, got: %q", r.detail)
+	}
+	if !strings.Contains(r.detail, "/usr/bin/pi") {
+		t.Errorf("expected path in detail, got: %q", r.detail)
+	}
+}
+
+// --- runDoctorFull --install tests ---
+
+func TestRunDoctorInstall_PromptsOnMissingAgent(t *testing.T) {
+	env := allPassEnv()
+	env.LookPath = func(file string) (string, error) {
+		if file == "pi" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + file, nil
+	}
+	installCalled := false
+	env.ExecInstallCmd = func(cmd string) error {
+		installCalled = true
+		return nil
+	}
+
+	// User answers "y" to install prompt.
+	var buf bytes.Buffer
+	err := runDoctorFull(&buf, strings.NewReader("y\n"), env, true)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if !installCalled {
+		t.Error("expected install command to be called when user answers 'y'")
+	}
+	out := buf.String()
+	if !strings.Contains(out, "Auto-install pi") {
+		t.Errorf("expected install prompt for pi, got:\n%s", out)
+	}
+}
+
+func TestRunDoctorInstall_NoInstallOnDecline(t *testing.T) {
+	env := allPassEnv()
+	env.LookPath = func(file string) (string, error) {
+		if file == "opencode" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + file, nil
+	}
+	installCalled := false
+	env.ExecInstallCmd = func(cmd string) error {
+		installCalled = true
+		return nil
+	}
+
+	// User answers "n".
+	var buf bytes.Buffer
+	err := runDoctorFull(&buf, strings.NewReader("n\n"), env, true)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if installCalled {
+		t.Error("expected install command NOT to be called when user answers 'n'")
+	}
+}
+
+func TestRunDoctorInstall_NoPromptWithoutFlag(t *testing.T) {
+	env := allPassEnv()
+	env.LookPath = func(file string) (string, error) {
+		if file == "pi" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + file, nil
+	}
+	installCalled := false
+	env.ExecInstallCmd = func(cmd string) error {
+		installCalled = true
+		return nil
+	}
+
+	// install=false — should not prompt at all.
+	var buf bytes.Buffer
+	err := runDoctorFull(&buf, strings.NewReader("y\n"), env, false)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if installCalled {
+		t.Error("expected install command NOT to be called when --install is not set")
+	}
+	out := buf.String()
+	if strings.Contains(out, "Auto-install") {
+		t.Errorf("expected no install prompt without --install flag, got:\n%s", out)
+	}
+}
+
+func TestRunDoctorInstall_EmptyInputDeclines(t *testing.T) {
+	env := allPassEnv()
+	env.LookPath = func(file string) (string, error) {
+		if file == "pi" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + file, nil
+	}
+	installCalled := false
+	env.ExecInstallCmd = func(cmd string) error {
+		installCalled = true
+		return nil
+	}
+
+	// Empty input (just newline) should decline.
+	var buf bytes.Buffer
+	err := runDoctorFull(&buf, strings.NewReader("\n"), env, true)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if installCalled {
+		t.Error("expected install command NOT to be called on empty input")
 	}
 }

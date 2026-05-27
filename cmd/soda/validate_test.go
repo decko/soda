@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1046,5 +1048,198 @@ func TestValidateSinglePrompt_NoFieldCoverageForEmbedded(t *testing.T) {
 		if strings.Contains(warn, "missing fields") {
 			t.Errorf("unexpected field coverage warning for non-override: %s", warn)
 		}
+	}
+}
+
+// --- validateRunner tests ---
+
+// stubLookPath returns a LookPath function that resolves known binaries
+// from a map and returns exec.ErrNotFound for unknown ones.
+func stubLookPath(found map[string]string) func(string) (string, error) {
+	return func(name string) (string, error) {
+		if path, ok := found[name]; ok {
+			return path, nil
+		}
+		return "", fmt.Errorf("%s: %w", name, exec.ErrNotFound)
+	}
+}
+
+func TestValidateRunner_ClaudeFound(t *testing.T) {
+	cfg := &config.Config{}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	lookPath := stubLookPath(map[string]string{"claude": "/usr/bin/claude"})
+	validateRunner(&buf, result, cfg, lookPath)
+
+	output := buf.String()
+	if result.hasErrors() {
+		t.Errorf("expected no errors, got: %v", result.errors)
+	}
+	if !strings.Contains(output, "✓ runner:") {
+		t.Errorf("expected '✓ runner:' line, got: %s", output)
+	}
+	if !strings.Contains(output, "claude") {
+		t.Errorf("expected 'claude' in output, got: %s", output)
+	}
+}
+
+func TestValidateRunner_MissingRunner(t *testing.T) {
+	cfg := &config.Config{Runner: "nonexistent-agent-xyz"}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	lookPath := stubLookPath(map[string]string{})
+	validateRunner(&buf, result, cfg, lookPath)
+
+	if len(result.warnings) == 0 {
+		t.Error("expected warning for missing runner binary")
+	}
+	found := false
+	for _, errMsg := range result.warnings {
+		if strings.Contains(errMsg, "nonexistent-agent-xyz") && strings.Contains(errMsg, "not found") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected warning mentioning 'nonexistent-agent-xyz', got: %v", result.warnings)
+	}
+}
+
+func TestValidateRunner_PiWithCustomBinary(t *testing.T) {
+	cfg := &config.Config{
+		Runner: "pi",
+		Pi:     config.PiConfig{Binary: "custom-pi-binary-xyz"},
+	}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	lookPath := stubLookPath(map[string]string{})
+	validateRunner(&buf, result, cfg, lookPath)
+
+	if len(result.warnings) == 0 {
+		t.Error("expected warning for missing custom pi binary")
+	}
+	found := false
+	for _, errMsg := range result.warnings {
+		if strings.Contains(errMsg, "custom-pi-binary-xyz") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected warning mentioning 'custom-pi-binary-xyz', got: %v", result.warnings)
+	}
+}
+
+func TestValidateRunner_InstallHintShown(t *testing.T) {
+	cfg := &config.Config{Runner: "pi"}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	lookPath := stubLookPath(map[string]string{})
+	validateRunner(&buf, result, cfg, lookPath)
+
+	if len(result.warnings) == 0 {
+		t.Error("expected warning for missing pi binary")
+	}
+	found := false
+	for _, errMsg := range result.warnings {
+		if strings.Contains(errMsg, "install:") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected install hint in error, got: %v", result.warnings)
+	}
+}
+
+func TestValidateRunner_AlternativesShown(t *testing.T) {
+	// claude is available, but the configured runner is not.
+	cfg := &config.Config{Runner: "nonexistent-agent-xyz"}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	lookPath := stubLookPath(map[string]string{"claude": "/usr/bin/claude"})
+	validateRunner(&buf, result, cfg, lookPath)
+
+	if len(result.warnings) == 0 {
+		t.Error("expected warning for missing runner")
+	}
+	foundAlt := false
+	for _, errMsg := range result.warnings {
+		if strings.Contains(errMsg, "alternatives") && strings.Contains(errMsg, "claude") {
+			foundAlt = true
+			break
+		}
+	}
+	if !foundAlt {
+		t.Errorf("expected alternatives mentioning claude, got: %v", result.warnings)
+	}
+}
+
+func TestValidateRunner_NoAlternativesWhenNoneAvailable(t *testing.T) {
+	cfg := &config.Config{Runner: "nonexistent-agent-xyz"}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	lookPath := stubLookPath(map[string]string{})
+	validateRunner(&buf, result, cfg, lookPath)
+
+	if len(result.warnings) == 0 {
+		t.Error("expected warning for missing runner")
+	}
+	for _, errMsg := range result.warnings {
+		if strings.Contains(errMsg, "alternatives") {
+			t.Errorf("expected no alternatives when none available, got: %s", errMsg)
+		}
+	}
+}
+
+func TestValidateRunner_PiFoundNoError(t *testing.T) {
+	cfg := &config.Config{Runner: "pi"}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	lookPath := stubLookPath(map[string]string{"pi": "/usr/local/bin/pi"})
+	validateRunner(&buf, result, cfg, lookPath)
+
+	if result.hasErrors() {
+		t.Errorf("expected no errors when pi is found, got: %v", result.errors)
+	}
+	output := buf.String()
+	if !strings.Contains(output, "✓ runner: pi") {
+		t.Errorf("expected '✓ runner: pi' line, got: %s", output)
+	}
+}
+
+func TestValidateRunner_OpencodeFoundNoError(t *testing.T) {
+	cfg := &config.Config{Runner: "opencode"}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	lookPath := stubLookPath(map[string]string{"opencode": "/usr/local/bin/opencode"})
+	validateRunner(&buf, result, cfg, lookPath)
+
+	if result.hasErrors() {
+		t.Errorf("expected no errors when opencode is found, got: %v", result.errors)
+	}
+	output := buf.String()
+	if !strings.Contains(output, "✓ runner: opencode") {
+		t.Errorf("expected '✓ runner: opencode' line, got: %s", output)
+	}
+}
+
+func TestRunValidate_WithRunnerCheck(t *testing.T) {
+	cfg := &config.Config{
+		TicketSource: "github",
+		Mode:         "autonomous",
+		Model:        "claude-sonnet-4-20250514",
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := runValidate(&stdout, &stderr, cfg, "")
+	if err != nil {
+		t.Fatalf("runValidate() error: %v\nstdout: %s\nstderr: %s", err, stdout.String(), stderr.String())
+	}
+
+	combined := stdout.String() + stderr.String()
+	// Runner check appears in stdout (✓) when found, or stderr (⚠ warning) when missing.
+	if !strings.Contains(combined, "runner:") {
+		t.Errorf("expected runner line in validate output, got stdout: %s\nstderr: %s", stdout.String(), stderr.String())
 	}
 }

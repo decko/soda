@@ -13,6 +13,7 @@ import (
 	"github.com/decko/soda/internal/config"
 	"github.com/decko/soda/internal/git"
 	"github.com/decko/soda/internal/pipeline"
+	"github.com/decko/soda/internal/runner"
 	"github.com/decko/soda/schemas"
 	"github.com/spf13/cobra"
 )
@@ -101,6 +102,9 @@ func runValidate(w io.Writer, errW io.Writer, cfg *config.Config, pipelineName s
 
 	// Stage 8: Transcript config
 	validateTranscript(w, result, cfg)
+
+	// Stage 9: Runner binary
+	validateRunner(w, result, cfg, exec.LookPath)
 
 	// Print summary
 	fmt.Fprintln(w)
@@ -526,6 +530,62 @@ func truncateVersion(version string, maxLen int) string {
 		return version
 	}
 	return version[:maxLen]
+}
+
+// validateRunner checks that the configured runner binary is available in PATH.
+// Reports available alternatives when the configured runner is not found.
+// The lookPath parameter follows the injection pattern used by doctorEnv.LookPath
+// so tests can fully control binary resolution.
+func validateRunner(w io.Writer, result *validationResult, cfg *config.Config, lookPath func(string) (string, error)) {
+	runnerName := cfg.Runner
+	if runnerName == "" {
+		runnerName = "claude" // default runner
+	}
+
+	// Resolve the effective binary: runner-specific config overrides the default.
+	binaryName := ""
+	switch runnerName {
+	case "pi":
+		binaryName = cfg.Pi.Binary
+	case "opencode":
+		binaryName = cfg.Opencode.Binary
+	}
+
+	info := runner.AgentByName(runnerName)
+	if binaryName == "" && info != nil {
+		binaryName = info.Binary
+	}
+	if binaryName == "" {
+		binaryName = runnerName
+	}
+
+	_, err := lookPath(binaryName)
+	if err != nil {
+		hint := runner.InstallHint(info)
+		errMsg := fmt.Sprintf("runner: %s (%s) not found in PATH", runnerName, binaryName)
+		if hint != "" {
+			errMsg += fmt.Sprintf("; install: %s", hint)
+		}
+
+		// Report available alternatives.
+		var alternatives []string
+		for _, agent := range runner.KnownAgents {
+			if agent.Name == runnerName {
+				continue
+			}
+			if _, lookErr := lookPath(agent.Binary); lookErr == nil {
+				alternatives = append(alternatives, agent.Name)
+			}
+		}
+		if len(alternatives) > 0 {
+			errMsg += fmt.Sprintf("; available alternatives: %s", strings.Join(alternatives, ", "))
+		}
+
+		result.addWarning("%s", errMsg)
+		return
+	}
+
+	fmt.Fprintf(w, "✓ runner: %s (%s)\n", runnerName, binaryName)
 }
 
 // validateTranscript checks that the transcript level is a recognized value.

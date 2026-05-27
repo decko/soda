@@ -8,12 +8,15 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/decko/soda/internal/config"
 	"github.com/decko/soda/internal/detect"
+	"github.com/decko/soda/internal/runner"
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 )
@@ -27,6 +30,42 @@ type initOptions struct {
 	Phases      bool
 	NoGitignore bool
 	Yes         bool
+}
+
+// initEnv provides dependency injection for init-time agent detection,
+// enabling unit tests without requiring real binaries.
+type initEnv struct {
+	LookPath func(file string) (string, error)
+	RunCmd   func(name string, args ...string) (string, error)
+}
+
+// defaultInitEnv returns an initEnv wired to the real OS.
+func defaultInitEnv() *initEnv {
+	return &initEnv{
+		LookPath: exec.LookPath,
+		RunCmd: func(name string, args ...string) (string, error) {
+			out, err := exec.Command(name, args...).CombinedOutput()
+			return strings.TrimSpace(string(out)), err
+		},
+	}
+}
+
+// detectedAgent holds info about an agent found during init detection.
+type detectedAgent struct {
+	Name    string
+	Version string
+}
+
+// detectInstalledAgents scans for all known agents available in PATH.
+func detectInstalledAgents(env *initEnv) []detectedAgent {
+	var found []detectedAgent
+	for _, agent := range runner.KnownAgents {
+		_, version, err := runner.DetectAgent(env.LookPath, env.RunCmd, agent.Name)
+		if err == nil {
+			found = append(found, detectedAgent{Name: agent.Name, Version: version})
+		}
+	}
+	return found
 }
 
 func newInitCmd() *cobra.Command {
@@ -46,7 +85,7 @@ refuses to overwrite an existing file unless --force is given.`,
 			noGitignore, _ := cmd.Flags().GetBool("no-gitignore")
 			yes, _ := cmd.Flags().GetBool("yes")
 			isTTY := isatty.IsTerminal(os.Stdin.Fd()) || isatty.IsCygwinTerminal(os.Stdin.Fd())
-			return runInit(cmd.OutOrStdout(), cmd.InOrStdin(), isTTY, initOptions{
+			return runInit(cmd.OutOrStdout(), cmd.InOrStdin(), isTTY, defaultInitEnv(), initOptions{
 				Output:      output,
 				Force:       force,
 				DryRun:      dryRun,
@@ -74,7 +113,7 @@ refuses to overwrite an existing file unless --force is given.`,
 // When isTTY is true and opts.Yes is false a confirmation prompt is shown before writing.
 // When isTTY is false (non-interactive) the file is written without prompting.
 // Extracted for testability — accepts an io.Writer for output and io.Reader for stdin.
-func runInit(w io.Writer, stdin io.Reader, isTTY bool, opts initOptions) error {
+func runInit(w io.Writer, stdin io.Reader, isTTY bool, iEnv *initEnv, opts initOptions) error {
 	// Auto-detect project stack. Detection is best-effort: if it fails
 	// we fall back to DefaultConfig with placeholder values.
 	cfg := config.DefaultConfig()
@@ -91,6 +130,18 @@ func runInit(w io.Writer, stdin io.Reader, isTTY bool, opts initOptions) error {
 	// Set pipelines_path so generated configs use the .pipelines/ convention
 	// by default. The directory is created after writing the config file.
 	cfg.PipelinesPath = ".pipelines/"
+
+	// Agent detection: in interactive mode, detect installed agents and
+	// let the user pick which one to use as the runner.
+	if isTTY && !opts.Yes && iEnv != nil {
+		agents := detectInstalledAgents(iEnv)
+		if len(agents) > 0 {
+			chosenRunner := promptRunnerSelection(w, stdin, agents)
+			if chosenRunner != "" {
+				cfg.Runner = chosenRunner
+			}
+		}
+	}
 
 	data, err := config.Marshal(cfg)
 	if err != nil {
@@ -360,4 +411,44 @@ func resolveInitPath(output string) (string, error) {
 		return "", fmt.Errorf("init: resolve path: %w", err)
 	}
 	return abs, nil
+}
+
+// promptRunnerSelection displays detected agents and asks the user to
+// pick one. Returns the chosen runner name, or "" if the user accepts
+// the default (claude). The first agent in the list is pre-selected.
+func promptRunnerSelection(w io.Writer, stdin io.Reader, agents []detectedAgent) string {
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Detected coding agents:")
+	defaultIdx := 0
+	for idx, agent := range agents {
+		label := fmt.Sprintf("  %d) %s", idx+1, agent.Name)
+		if agent.Version != "" {
+			label += fmt.Sprintf(" (%s)", agent.Version)
+		}
+		if agent.Name == "claude" {
+			label += " ← recommended"
+			defaultIdx = idx
+		}
+		fmt.Fprintln(w, label)
+	}
+	fmt.Fprintf(w, "Select runner [%d]: ", defaultIdx+1)
+
+	reader := bufio.NewReader(stdin)
+	line, err := reader.ReadString('\n')
+	if err != nil && err.Error() != "EOF" {
+		return agents[defaultIdx].Name
+	}
+	line = strings.TrimSpace(line)
+
+	if line == "" {
+		return agents[defaultIdx].Name
+	}
+
+	choice, parseErr := strconv.Atoi(line)
+	if parseErr != nil || choice < 1 || choice > len(agents) {
+		fmt.Fprintf(w, "Invalid choice %q, using default (%s)\n", line, agents[defaultIdx].Name)
+		return agents[defaultIdx].Name
+	}
+
+	return agents[choice-1].Name
 }
