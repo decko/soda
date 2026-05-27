@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -17,7 +18,7 @@ func TestRunInit_WritesDefaultConfig(t *testing.T) {
 	dest := filepath.Join(dir, "soda.yaml")
 
 	var buf bytes.Buffer
-	if err := runInit(&buf, strings.NewReader(""), false, initOptions{Output: dest, NoGitignore: true}); err != nil {
+	if err := runInit(&buf, strings.NewReader(""), false, nil, initOptions{Output: dest, NoGitignore: true}); err != nil {
 		t.Fatalf("runInit() error: %v", err)
 	}
 
@@ -52,7 +53,7 @@ func TestRunInit_CreatesParentDirs(t *testing.T) {
 	dir := t.TempDir()
 	dest := filepath.Join(dir, "deep", "nested", "soda.yaml")
 
-	if err := runInit(io.Discard, strings.NewReader(""), false, initOptions{Output: dest, NoGitignore: true}); err != nil {
+	if err := runInit(io.Discard, strings.NewReader(""), false, nil, initOptions{Output: dest, NoGitignore: true}); err != nil {
 		t.Fatalf("runInit() error: %v", err)
 	}
 
@@ -70,7 +71,7 @@ func TestRunInit_RefusesOverwrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := runInit(io.Discard, strings.NewReader(""), false, initOptions{Output: dest, NoGitignore: true})
+	err := runInit(io.Discard, strings.NewReader(""), false, nil, initOptions{Output: dest, NoGitignore: true})
 	if err == nil {
 		t.Fatal("expected error when file exists, got nil")
 	}
@@ -94,7 +95,7 @@ func TestRunInit_ForceOverwrites(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := runInit(io.Discard, strings.NewReader(""), false, initOptions{Output: dest, Force: true, NoGitignore: true}); err != nil {
+	if err := runInit(io.Discard, strings.NewReader(""), false, nil, initOptions{Output: dest, Force: true, NoGitignore: true}); err != nil {
 		t.Fatalf("runInit(force=true) error: %v", err)
 	}
 
@@ -119,7 +120,7 @@ func TestRunInit_StatErrorNotErrNotExist(t *testing.T) {
 	t.Cleanup(func() { os.Chmod(noPerms, 0755) })
 
 	dest := filepath.Join(noPerms, "soda.yaml")
-	err := runInit(io.Discard, strings.NewReader(""), false, initOptions{Output: dest, NoGitignore: true})
+	err := runInit(io.Discard, strings.NewReader(""), false, nil, initOptions{Output: dest, NoGitignore: true})
 	if err == nil {
 		t.Fatal("expected error for inaccessible path, got nil")
 	}
@@ -159,7 +160,7 @@ func TestRunInit_DryRun(t *testing.T) {
 	dest := filepath.Join(dir, "soda.yaml")
 
 	var buf bytes.Buffer
-	if err := runInit(&buf, strings.NewReader(""), false, initOptions{Output: dest, DryRun: true, NoGitignore: true}); err != nil {
+	if err := runInit(&buf, strings.NewReader(""), false, nil, initOptions{Output: dest, DryRun: true, NoGitignore: true}); err != nil {
 		t.Fatalf("runInit(dryRun=true) error: %v", err)
 	}
 
@@ -183,7 +184,7 @@ func TestRunInit_PhasesWritten(t *testing.T) {
 	dest := filepath.Join(dir, "soda.yaml")
 
 	var buf bytes.Buffer
-	if err := runInit(&buf, strings.NewReader(""), false, initOptions{Output: dest, Phases: true, NoGitignore: true}); err != nil {
+	if err := runInit(&buf, strings.NewReader(""), false, nil, initOptions{Output: dest, Phases: true, NoGitignore: true}); err != nil {
 		t.Fatalf("runInit(phases=true) error: %v", err)
 	}
 
@@ -222,7 +223,7 @@ func TestRunInit_PhasesRefusesOverwrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := runInit(io.Discard, strings.NewReader(""), false, initOptions{Output: dest, Phases: true, NoGitignore: true})
+	err := runInit(io.Discard, strings.NewReader(""), false, nil, initOptions{Output: dest, Phases: true, NoGitignore: true})
 	if err == nil {
 		t.Fatal("expected error when phases.yaml exists, got nil")
 	}
@@ -247,7 +248,7 @@ func TestRunInit_PhasesForceOverwrites(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := runInit(io.Discard, strings.NewReader(""), false, initOptions{Output: dest, Force: true, Phases: true, NoGitignore: true}); err != nil {
+	if err := runInit(io.Discard, strings.NewReader(""), false, nil, initOptions{Output: dest, Force: true, Phases: true, NoGitignore: true}); err != nil {
 		t.Fatalf("runInit(force=true, phases=true) error: %v", err)
 	}
 
@@ -270,7 +271,7 @@ func TestRunInit_GitignoreCreated(t *testing.T) {
 
 	var buf bytes.Buffer
 	// NoGitignore=false → should create/update .gitignore
-	if err := runInit(&buf, strings.NewReader(""), false, initOptions{Output: dest}); err != nil {
+	if err := runInit(&buf, strings.NewReader(""), false, nil, initOptions{Output: dest}); err != nil {
 		t.Fatalf("runInit() error: %v", err)
 	}
 
@@ -298,7 +299,7 @@ func TestRunInit_GitignoreSkippedWithFlag(t *testing.T) {
 	dest := filepath.Join(dir, "soda.yaml")
 
 	// NoGitignore=true → should NOT create .gitignore
-	if err := runInit(io.Discard, strings.NewReader(""), false, initOptions{Output: dest, NoGitignore: true}); err != nil {
+	if err := runInit(io.Discard, strings.NewReader(""), false, nil, initOptions{Output: dest, NoGitignore: true}); err != nil {
 		t.Fatalf("runInit() error: %v", err)
 	}
 
@@ -319,7 +320,7 @@ func TestRunInit_GitignoreAppendsWithoutDuplication(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := runInit(&buf, strings.NewReader(""), false, initOptions{Output: dest}); err != nil {
+	if err := runInit(&buf, strings.NewReader(""), false, nil, initOptions{Output: dest}); err != nil {
 		t.Fatalf("runInit() error: %v", err)
 	}
 
@@ -467,7 +468,7 @@ func TestRunInit_ConfirmationPromptYes(t *testing.T) {
 	dest := filepath.Join(dir, "soda.yaml")
 
 	var buf bytes.Buffer
-	if err := runInit(&buf, strings.NewReader("y\n"), true, initOptions{Output: dest, NoGitignore: true}); err != nil {
+	if err := runInit(&buf, strings.NewReader("y\n"), true, nil, initOptions{Output: dest, NoGitignore: true}); err != nil {
 		t.Fatalf("runInit() error: %v", err)
 	}
 
@@ -486,7 +487,7 @@ func TestRunInit_ConfirmationPromptNo(t *testing.T) {
 	dest := filepath.Join(dir, "soda.yaml")
 
 	var buf bytes.Buffer
-	if err := runInit(&buf, strings.NewReader("n\n"), true, initOptions{Output: dest, NoGitignore: true}); err != nil {
+	if err := runInit(&buf, strings.NewReader("n\n"), true, nil, initOptions{Output: dest, NoGitignore: true}); err != nil {
 		t.Fatalf("runInit() error: %v", err)
 	}
 
@@ -505,7 +506,7 @@ func TestRunInit_YesSkipsPrompt(t *testing.T) {
 	dest := filepath.Join(dir, "soda.yaml")
 
 	var buf bytes.Buffer
-	if err := runInit(&buf, strings.NewReader(""), true, initOptions{Output: dest, NoGitignore: true, Yes: true}); err != nil {
+	if err := runInit(&buf, strings.NewReader(""), true, nil, initOptions{Output: dest, NoGitignore: true, Yes: true}); err != nil {
 		t.Fatalf("runInit(yes=true) error: %v", err)
 	}
 
@@ -524,7 +525,7 @@ func TestRunInit_NonTTYAutoWrites(t *testing.T) {
 	dest := filepath.Join(dir, "soda.yaml")
 
 	var buf bytes.Buffer
-	if err := runInit(&buf, strings.NewReader(""), false, initOptions{Output: dest, NoGitignore: true}); err != nil {
+	if err := runInit(&buf, strings.NewReader(""), false, nil, initOptions{Output: dest, NoGitignore: true}); err != nil {
 		t.Fatalf("runInit(isTTY=false) error: %v", err)
 	}
 
@@ -565,7 +566,7 @@ func TestRunInit_ColorOutput(t *testing.T) {
 	dest := filepath.Join(dir, "soda.yaml")
 
 	var buf bytes.Buffer
-	if err := runInit(&buf, strings.NewReader(""), false, initOptions{Output: dest, NoGitignore: true}); err != nil {
+	if err := runInit(&buf, strings.NewReader(""), false, nil, initOptions{Output: dest, NoGitignore: true}); err != nil {
 		t.Fatalf("runInit() error: %v", err)
 	}
 
@@ -581,7 +582,7 @@ func TestRunInit_NoColorEnv(t *testing.T) {
 	dest := filepath.Join(dir, "soda.yaml")
 
 	var buf bytes.Buffer
-	if err := runInit(&buf, strings.NewReader(""), false, initOptions{Output: dest, NoGitignore: true}); err != nil {
+	if err := runInit(&buf, strings.NewReader(""), false, nil, initOptions{Output: dest, NoGitignore: true}); err != nil {
 		t.Fatalf("runInit() error: %v", err)
 	}
 
@@ -595,7 +596,7 @@ func TestRunInit_PipelinesPathSet(t *testing.T) {
 	dest := filepath.Join(dir, "soda.yaml")
 
 	var buf bytes.Buffer
-	if err := runInit(&buf, strings.NewReader(""), false, initOptions{Output: dest, NoGitignore: true}); err != nil {
+	if err := runInit(&buf, strings.NewReader(""), false, nil, initOptions{Output: dest, NoGitignore: true}); err != nil {
 		t.Fatalf("runInit() error: %v", err)
 	}
 
@@ -613,7 +614,7 @@ func TestRunInit_PipelinesDirCreated(t *testing.T) {
 	dest := filepath.Join(dir, "soda.yaml")
 
 	var buf bytes.Buffer
-	if err := runInit(&buf, strings.NewReader(""), false, initOptions{Output: dest, NoGitignore: true}); err != nil {
+	if err := runInit(&buf, strings.NewReader(""), false, nil, initOptions{Output: dest, NoGitignore: true}); err != nil {
 		t.Fatalf("runInit() error: %v", err)
 	}
 
@@ -637,7 +638,7 @@ func TestRunInit_DryRunSkipsPipelinesDir(t *testing.T) {
 	dest := filepath.Join(dir, "soda.yaml")
 
 	var buf bytes.Buffer
-	if err := runInit(&buf, strings.NewReader(""), false, initOptions{Output: dest, DryRun: true, NoGitignore: true}); err != nil {
+	if err := runInit(&buf, strings.NewReader(""), false, nil, initOptions{Output: dest, DryRun: true, NoGitignore: true}); err != nil {
 		t.Fatalf("runInit(dryRun=true) error: %v", err)
 	}
 
@@ -698,5 +699,173 @@ func TestConfigFromDetected_GitLab(t *testing.T) {
 	}
 	if cfg.Repos[0].PushTo != "team/backend" {
 		t.Errorf("Repos[0].PushTo = %q, want %q", cfg.Repos[0].PushTo, "team/backend")
+	}
+}
+
+// --- Init agent detection tests ---
+
+func TestRunInit_DetectsAgentsInTTYMode(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "soda.yaml")
+
+	env := &initEnv{
+		LookPath: func(file string) (string, error) {
+			if file == "claude" || file == "pi" {
+				return "/usr/bin/" + file, nil
+			}
+			return "", errors.New("not found")
+		},
+		RunCmd: func(name string, args ...string) (string, error) {
+			if name == "claude" {
+				return "claude 2.1.81", nil
+			}
+			if name == "pi" {
+				return "pi 0.5.0", nil
+			}
+			return "", nil
+		},
+	}
+
+	// isTTY=true, user picks "2" (pi). We also need "y\n" for the write confirmation.
+	var buf bytes.Buffer
+	err := runInit(&buf, strings.NewReader("2\ny\n"), true, env, initOptions{Output: dest})
+	if err != nil {
+		t.Fatalf("runInit() error: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "Detected coding agents") {
+		t.Errorf("expected agent list in output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "claude") {
+		t.Errorf("expected claude in agent list, got:\n%s", out)
+	}
+	if !strings.Contains(out, "pi") {
+		t.Errorf("expected pi in agent list, got:\n%s", out)
+	}
+
+	// Read the written config and verify runner is "pi".
+	cfg, loadErr := config.Load(dest)
+	if loadErr != nil {
+		t.Fatalf("Load() error: %v", loadErr)
+	}
+	if cfg.Runner != "pi" {
+		t.Errorf("expected runner=pi, got %q", cfg.Runner)
+	}
+}
+
+func TestRunInit_SkipsAgentDetectionWithYes(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "soda.yaml")
+
+	env := &initEnv{
+		LookPath: func(file string) (string, error) {
+			return "/usr/bin/" + file, nil
+		},
+		RunCmd: func(name string, args ...string) (string, error) {
+			return name + " 1.0.0", nil
+		},
+	}
+
+	// --yes skips the agent prompt.
+	var buf bytes.Buffer
+	err := runInit(&buf, strings.NewReader(""), false, env, initOptions{Output: dest, Yes: true, NoGitignore: true})
+	if err != nil {
+		t.Fatalf("runInit() error: %v", err)
+	}
+
+	out := buf.String()
+	if strings.Contains(out, "Detected coding agents") {
+		t.Errorf("expected no agent prompt with --yes, got:\n%s", out)
+	}
+}
+
+func TestRunInit_SkipsAgentDetectionInNonTTY(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "soda.yaml")
+
+	env := &initEnv{
+		LookPath: func(file string) (string, error) {
+			return "/usr/bin/" + file, nil
+		},
+		RunCmd: func(name string, args ...string) (string, error) {
+			return name + " 1.0.0", nil
+		},
+	}
+
+	// isTTY=false — should not show agent prompt.
+	var buf bytes.Buffer
+	err := runInit(&buf, strings.NewReader(""), false, env, initOptions{Output: dest, NoGitignore: true})
+	if err != nil {
+		t.Fatalf("runInit() error: %v", err)
+	}
+
+	out := buf.String()
+	if strings.Contains(out, "Detected coding agents") {
+		t.Errorf("expected no agent prompt in non-TTY mode, got:\n%s", out)
+	}
+}
+
+func TestRunInit_DefaultSelectionIsClaude(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "soda.yaml")
+
+	env := &initEnv{
+		LookPath: func(file string) (string, error) {
+			if file == "claude" || file == "opencode" {
+				return "/usr/bin/" + file, nil
+			}
+			return "", errors.New("not found")
+		},
+		RunCmd: func(name string, args ...string) (string, error) {
+			return name + " 1.0.0", nil
+		},
+	}
+
+	// User presses Enter (empty input) — should pick claude (recommended).
+	// Then "y" for write confirmation.
+	var buf bytes.Buffer
+	err := runInit(&buf, strings.NewReader("\ny\n"), true, env, initOptions{Output: dest, NoGitignore: true})
+	if err != nil {
+		t.Fatalf("runInit() error: %v", err)
+	}
+
+	cfg, loadErr := config.Load(dest)
+	if loadErr != nil {
+		t.Fatalf("Load() error: %v", loadErr)
+	}
+	// claude is default runner, so cfg.Runner may be "" or "claude"
+	if cfg.Runner != "" && cfg.Runner != "claude" {
+		t.Errorf("expected runner=claude (or empty for default), got %q", cfg.Runner)
+	}
+}
+
+func TestDetectInstalledAgents_NoneFound(t *testing.T) {
+	env := &initEnv{
+		LookPath: func(file string) (string, error) {
+			return "", errors.New("not found")
+		},
+		RunCmd: func(name string, args ...string) (string, error) {
+			return "", nil
+		},
+	}
+	agents := detectInstalledAgents(env)
+	if len(agents) != 0 {
+		t.Errorf("expected no agents when none in PATH, got %d", len(agents))
+	}
+}
+
+func TestDetectInstalledAgents_AllFound(t *testing.T) {
+	env := &initEnv{
+		LookPath: func(file string) (string, error) {
+			return "/usr/bin/" + file, nil
+		},
+		RunCmd: func(name string, args ...string) (string, error) {
+			return name + " 1.0.0", nil
+		},
+	}
+	agents := detectInstalledAgents(env)
+	if len(agents) != 3 {
+		t.Errorf("expected 3 agents (claude, pi, opencode), got %d", len(agents))
 	}
 }
