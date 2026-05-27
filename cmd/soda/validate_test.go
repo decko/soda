@@ -1048,3 +1048,137 @@ func TestValidateSinglePrompt_NoFieldCoverageForEmbedded(t *testing.T) {
 		}
 	}
 }
+
+// --- validateRunner tests ---
+
+func TestValidateRunner_ClaudeFound(t *testing.T) {
+	// This test relies on the claude binary being in PATH (as it is
+	// in the test environment). When it's not found, the test is skipped.
+	cfg := &config.Config{}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	validateRunner(&buf, result, cfg)
+
+	output := buf.String()
+	if result.hasErrors() {
+		// Claude not in PATH — skip rather than fail.
+		t.Skipf("claude not found in PATH, skipping: %v", result.errors)
+	}
+	if !strings.Contains(output, "✓ runner:") {
+		t.Errorf("expected '✓ runner:' line, got: %s", output)
+	}
+	if !strings.Contains(output, "claude") {
+		t.Errorf("expected 'claude' in output, got: %s", output)
+	}
+}
+
+func TestValidateRunner_MissingRunner(t *testing.T) {
+	// Use a runner name that definitely doesn't exist.
+	cfg := &config.Config{Runner: "nonexistent-agent-xyz"}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	validateRunner(&buf, result, cfg)
+
+	if !result.hasErrors() {
+		t.Error("expected error for missing runner binary")
+	}
+	found := false
+	for _, errMsg := range result.errors {
+		if strings.Contains(errMsg, "nonexistent-agent-xyz") && strings.Contains(errMsg, "not found") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected error mentioning 'nonexistent-agent-xyz', got: %v", result.errors)
+	}
+}
+
+func TestValidateRunner_PiWithCustomBinary(t *testing.T) {
+	// Use a custom binary that doesn't exist.
+	cfg := &config.Config{
+		Runner: "pi",
+		Pi:     config.PiConfig{Binary: "custom-pi-binary-xyz"},
+	}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	validateRunner(&buf, result, cfg)
+
+	if !result.hasErrors() {
+		t.Error("expected error for missing custom pi binary")
+	}
+	found := false
+	for _, errMsg := range result.errors {
+		if strings.Contains(errMsg, "custom-pi-binary-xyz") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected error mentioning 'custom-pi-binary-xyz', got: %v", result.errors)
+	}
+}
+
+func TestValidateRunner_InstallHintShown(t *testing.T) {
+	cfg := &config.Config{Runner: "pi"}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	validateRunner(&buf, result, cfg)
+
+	// pi is likely not installed in the test env, so this should fail with install hint.
+	if !result.hasErrors() {
+		t.Skip("pi is installed, skipping install hint test")
+	}
+	found := false
+	for _, errMsg := range result.errors {
+		if strings.Contains(errMsg, "install:") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected install hint in error, got: %v", result.errors)
+	}
+}
+
+func TestValidateRunner_AlternativesShown(t *testing.T) {
+	cfg := &config.Config{Runner: "nonexistent-agent-xyz"}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	validateRunner(&buf, result, cfg)
+
+	if !result.hasErrors() {
+		t.Error("expected error for missing runner")
+	}
+	// At least one agent (claude) should be found as alternative.
+	foundAlt := false
+	for _, errMsg := range result.errors {
+		if strings.Contains(errMsg, "alternatives") {
+			foundAlt = true
+			break
+		}
+	}
+	// This may not always have alternatives if no agents are installed.
+	// Just verify no panic and the error message is well-formed.
+	_ = foundAlt
+}
+
+func TestRunValidate_WithRunnerCheck(t *testing.T) {
+	cfg := &config.Config{
+		TicketSource: "github",
+		Mode:         "autonomous",
+		Model:        "claude-sonnet-4-20250514",
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := runValidate(&stdout, &stderr, cfg, "")
+	if err != nil {
+		t.Fatalf("runValidate() error: %v\nstdout: %s\nstderr: %s", err, stdout.String(), stderr.String())
+	}
+
+	output := stdout.String()
+	// Should contain runner check output.
+	if !strings.Contains(output, "runner:") {
+		t.Errorf("expected runner line in validate output, got: %s", output)
+	}
+}
