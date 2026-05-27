@@ -581,7 +581,7 @@ func validateRunner(w io.Writer, result *validationResult, cfg *config.Config, l
 			errMsg += fmt.Sprintf("; available alternatives: %s", strings.Join(alternatives, ", "))
 		}
 
-		result.addError("%s", errMsg)
+		result.addWarning("%s", errMsg)
 		return
 	}
 

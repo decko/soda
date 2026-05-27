@@ -1090,18 +1090,18 @@ func TestValidateRunner_MissingRunner(t *testing.T) {
 	lookPath := stubLookPath(map[string]string{})
 	validateRunner(&buf, result, cfg, lookPath)
 
-	if !result.hasErrors() {
-		t.Error("expected error for missing runner binary")
+	if len(result.warnings) == 0 {
+		t.Error("expected warning for missing runner binary")
 	}
 	found := false
-	for _, errMsg := range result.errors {
+	for _, errMsg := range result.warnings {
 		if strings.Contains(errMsg, "nonexistent-agent-xyz") && strings.Contains(errMsg, "not found") {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("expected error mentioning 'nonexistent-agent-xyz', got: %v", result.errors)
+		t.Errorf("expected warning mentioning 'nonexistent-agent-xyz', got: %v", result.warnings)
 	}
 }
 
@@ -1115,18 +1115,18 @@ func TestValidateRunner_PiWithCustomBinary(t *testing.T) {
 	lookPath := stubLookPath(map[string]string{})
 	validateRunner(&buf, result, cfg, lookPath)
 
-	if !result.hasErrors() {
-		t.Error("expected error for missing custom pi binary")
+	if len(result.warnings) == 0 {
+		t.Error("expected warning for missing custom pi binary")
 	}
 	found := false
-	for _, errMsg := range result.errors {
+	for _, errMsg := range result.warnings {
 		if strings.Contains(errMsg, "custom-pi-binary-xyz") {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("expected error mentioning 'custom-pi-binary-xyz', got: %v", result.errors)
+		t.Errorf("expected warning mentioning 'custom-pi-binary-xyz', got: %v", result.warnings)
 	}
 }
 
@@ -1137,18 +1137,18 @@ func TestValidateRunner_InstallHintShown(t *testing.T) {
 	lookPath := stubLookPath(map[string]string{})
 	validateRunner(&buf, result, cfg, lookPath)
 
-	if !result.hasErrors() {
-		t.Error("expected error for missing pi binary")
+	if len(result.warnings) == 0 {
+		t.Error("expected warning for missing pi binary")
 	}
 	found := false
-	for _, errMsg := range result.errors {
+	for _, errMsg := range result.warnings {
 		if strings.Contains(errMsg, "install:") {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("expected install hint in error, got: %v", result.errors)
+		t.Errorf("expected install hint in error, got: %v", result.warnings)
 	}
 }
 
@@ -1160,18 +1160,18 @@ func TestValidateRunner_AlternativesShown(t *testing.T) {
 	lookPath := stubLookPath(map[string]string{"claude": "/usr/bin/claude"})
 	validateRunner(&buf, result, cfg, lookPath)
 
-	if !result.hasErrors() {
-		t.Error("expected error for missing runner")
+	if len(result.warnings) == 0 {
+		t.Error("expected warning for missing runner")
 	}
 	foundAlt := false
-	for _, errMsg := range result.errors {
+	for _, errMsg := range result.warnings {
 		if strings.Contains(errMsg, "alternatives") && strings.Contains(errMsg, "claude") {
 			foundAlt = true
 			break
 		}
 	}
 	if !foundAlt {
-		t.Errorf("expected alternatives mentioning claude, got: %v", result.errors)
+		t.Errorf("expected alternatives mentioning claude, got: %v", result.warnings)
 	}
 }
 
@@ -1182,10 +1182,10 @@ func TestValidateRunner_NoAlternativesWhenNoneAvailable(t *testing.T) {
 	lookPath := stubLookPath(map[string]string{})
 	validateRunner(&buf, result, cfg, lookPath)
 
-	if !result.hasErrors() {
-		t.Error("expected error for missing runner")
+	if len(result.warnings) == 0 {
+		t.Error("expected warning for missing runner")
 	}
-	for _, errMsg := range result.errors {
+	for _, errMsg := range result.warnings {
 		if strings.Contains(errMsg, "alternatives") {
 			t.Errorf("expected no alternatives when none available, got: %s", errMsg)
 		}
@@ -1237,9 +1237,9 @@ func TestRunValidate_WithRunnerCheck(t *testing.T) {
 		t.Fatalf("runValidate() error: %v\nstdout: %s\nstderr: %s", err, stdout.String(), stderr.String())
 	}
 
-	output := stdout.String()
-	// Should contain runner check output.
-	if !strings.Contains(output, "runner:") {
-		t.Errorf("expected runner line in validate output, got: %s", output)
+	combined := stdout.String() + stderr.String()
+	// Runner check appears in stdout (✓) when found, or stderr (⚠ warning) when missing.
+	if !strings.Contains(combined, "runner:") {
+		t.Errorf("expected runner line in validate output, got stdout: %s\nstderr: %s", stdout.String(), stderr.String())
 	}
 }
