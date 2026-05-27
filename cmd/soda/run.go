@@ -118,7 +118,15 @@ func newRunCmd() *cobra.Command {
 func runPipeline(cfg *config.Config, opts pipelineOpts) error {
 	// Fail fast: run lightweight prerequisite checks before any expensive
 	// work (ticket fetching, worktree setup, runner creation, etc.).
-	if err := runPreflight(defaultDoctorEnv(), opts.useMock, cfg.Runner); err != nil {
+	// Compute effective binary from runner-specific config overrides.
+	var binaryOverride string
+	switch cfg.Runner {
+	case "pi":
+		binaryOverride = cfg.Pi.Binary
+	case "opencode":
+		binaryOverride = cfg.Opencode.Binary
+	}
+	if err := runPreflightFull(defaultDoctorEnv(), opts.useMock, cfg.Runner, binaryOverride); err != nil {
 		return err
 	}
 

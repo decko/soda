@@ -346,3 +346,127 @@ func TestRunPreflight_ChecksClaudeForDefaultRunner(t *testing.T) {
 		t.Error("expected claude failure in PreflightError for default runner")
 	}
 }
+
+func TestRunPreflight_PiRunnerMissingBinary(t *testing.T) {
+	env := allPassEnv()
+	env.LookPath = func(file string) (string, error) {
+		if file == "pi" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + file, nil
+	}
+	err := runPreflight(env, false, "pi")
+	if err == nil {
+		t.Fatal("expected error when pi binary is missing")
+	}
+	var pe *PreflightError
+	if !errors.As(err, &pe) {
+		t.Fatalf("expected PreflightError, got %T", err)
+	}
+	found := false
+	for _, f := range pe.Failures {
+		if f.name == "pi" {
+			found = true
+			if !strings.Contains(f.fix, "soda doctor") {
+				t.Errorf("expected fix to mention 'soda doctor', got: %q", f.fix)
+			}
+		}
+	}
+	if !found {
+		t.Error("expected pi failure in PreflightError")
+	}
+}
+
+func TestRunPreflight_OpencodeRunnerMissingBinary(t *testing.T) {
+	env := allPassEnv()
+	env.LookPath = func(file string) (string, error) {
+		if file == "opencode" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + file, nil
+	}
+	err := runPreflight(env, false, "opencode")
+	if err == nil {
+		t.Fatal("expected error when opencode binary is missing")
+	}
+	var pe *PreflightError
+	if !errors.As(err, &pe) {
+		t.Fatalf("expected PreflightError, got %T", err)
+	}
+	found := false
+	for _, f := range pe.Failures {
+		if f.name == "opencode" {
+			found = true
+			if !strings.Contains(f.fix, "soda doctor") {
+				t.Errorf("expected fix to mention 'soda doctor', got: %q", f.fix)
+			}
+		}
+	}
+	if !found {
+		t.Error("expected opencode failure in PreflightError")
+	}
+}
+
+func TestRunPreflight_PiRunnerBinaryPresent(t *testing.T) {
+	env := allPassEnv()
+	err := runPreflight(env, false, "pi")
+	if err != nil {
+		t.Fatalf("expected no error when pi binary is present, got: %v", err)
+	}
+}
+
+func TestRunPreflight_OpencodeRunnerBinaryPresent(t *testing.T) {
+	env := allPassEnv()
+	err := runPreflight(env, false, "opencode")
+	if err != nil {
+		t.Fatalf("expected no error when opencode binary is present, got: %v", err)
+	}
+}
+
+func TestRunPreflightFull_CustomBinaryOverride(t *testing.T) {
+	env := allPassEnv()
+	env.LookPath = func(file string) (string, error) {
+		if file == "custom-pi" {
+			return "/usr/local/bin/custom-pi", nil
+		}
+		if file == "pi" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + file, nil
+	}
+	// With binaryOverride="custom-pi", preflight should look for custom-pi instead of pi.
+	err := runPreflightFull(env, false, "pi", "custom-pi")
+	if err != nil {
+		t.Fatalf("expected no error with custom binary override, got: %v", err)
+	}
+}
+
+func TestRunPreflightFull_CustomBinaryMissing(t *testing.T) {
+	env := allPassEnv()
+	env.LookPath = func(file string) (string, error) {
+		if file == "custom-pi" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + file, nil
+	}
+	err := runPreflightFull(env, false, "pi", "custom-pi")
+	if err == nil {
+		t.Fatal("expected error when custom binary is missing")
+	}
+	var pe *PreflightError
+	if !errors.As(err, &pe) {
+		t.Fatalf("expected PreflightError, got %T", err)
+	}
+	found := false
+	for _, f := range pe.Failures {
+		if f.name == "pi" {
+			found = true
+			if !strings.Contains(f.detail, "custom-pi") {
+				t.Errorf("expected detail to mention custom-pi, got: %q", f.detail)
+			}
+		}
+	}
+	if !found {
+		t.Error("expected pi failure in PreflightError")
+	}
+}
