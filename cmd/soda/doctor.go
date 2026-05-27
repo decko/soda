@@ -11,6 +11,7 @@ import (
 
 	"github.com/decko/soda/internal/claude"
 	"github.com/decko/soda/internal/config"
+	"github.com/decko/soda/internal/runner"
 	"github.com/spf13/cobra"
 )
 
@@ -115,6 +116,8 @@ func runDoctor(w io.Writer, env *doctorEnv) error {
 		checkBranchProtection,
 		checkCommitSigning,
 		checkNode,
+		checkPi,
+		checkOpencode,
 	}
 
 	var failed int
@@ -782,6 +785,48 @@ func checkCommitSigningGPG(env *doctorEnv, signingKey string) checkResult {
 		passed: true,
 		detail: fmt.Sprintf("gpg signing configured (key: %s)", signingKey),
 	}
+}
+
+// checkAgentCLI verifies that a coding agent CLI is available in PATH.
+// This is always an optional (warning-only) check since the user may not
+// be using that particular agent.
+func checkAgentCLI(env *doctorEnv, agentName string) checkResult {
+	info := runner.AgentByName(agentName)
+	if info == nil {
+		return checkResult{
+			name:   agentName,
+			passed: false,
+			detail: "unknown agent",
+		}
+	}
+
+	path, err := env.LookPath(info.Binary)
+	if err != nil {
+		hint := runner.InstallHint(info)
+		return checkResult{
+			name:     agentName,
+			passed:   false,
+			required: false,
+			detail:   "not found in PATH (optional)",
+			fix:      hint,
+		}
+	}
+	return checkResult{
+		name:     agentName,
+		passed:   true,
+		required: false,
+		detail:   path,
+	}
+}
+
+// checkPi verifies that the Pi coding agent CLI is available in PATH.
+func checkPi(env *doctorEnv) checkResult {
+	return checkAgentCLI(env, "pi")
+}
+
+// checkOpencode verifies that the Opencode coding agent CLI is available in PATH.
+func checkOpencode(env *doctorEnv) checkResult {
+	return checkAgentCLI(env, "opencode")
 }
 
 // checkNode verifies that Node.js is available in PATH (optional).

@@ -11,6 +11,7 @@ import (
 
 	"github.com/decko/soda/internal/claude"
 	"github.com/decko/soda/internal/config"
+	"github.com/decko/soda/internal/runner"
 )
 
 // mockFileInfo implements os.FileInfo for tests.
@@ -2191,5 +2192,99 @@ func TestCheckCommitSigning_SSHBareInlineKeySK(t *testing.T) {
 	}
 	if !strings.Contains(r.detail, "inline") {
 		t.Errorf("expected detail to mention inline, got: %q", r.detail)
+	}
+}
+
+// --- checkPi tests ---
+
+func TestCheckPi_Found(t *testing.T) {
+	env := allPassEnv()
+	r := checkPi(env)
+	if !r.passed {
+		t.Error("expected pi check to pass")
+	}
+	if r.name != "pi" {
+		t.Errorf("expected name 'pi', got %q", r.name)
+	}
+}
+
+func TestCheckPi_NotFound(t *testing.T) {
+	env := allPassEnv()
+	env.LookPath = func(file string) (string, error) {
+		if file == "pi" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + file, nil
+	}
+	r := checkPi(env)
+	if r.passed {
+		t.Error("expected pi check to fail")
+	}
+	if r.required {
+		t.Error("expected pi check to be optional (required=false)")
+	}
+	if !strings.Contains(r.detail, "optional") {
+		t.Errorf("expected detail to mention optional, got: %q", r.detail)
+	}
+	piInfo := runner.AgentByName("pi")
+	expectedFix := runner.InstallHint(piInfo)
+	if r.fix != expectedFix {
+		t.Errorf("expected fix %q, got %q", expectedFix, r.fix)
+	}
+}
+
+// --- checkOpencode tests ---
+
+func TestCheckOpencode_Found(t *testing.T) {
+	env := allPassEnv()
+	r := checkOpencode(env)
+	if !r.passed {
+		t.Error("expected opencode check to pass")
+	}
+	if r.name != "opencode" {
+		t.Errorf("expected name 'opencode', got %q", r.name)
+	}
+}
+
+func TestCheckOpencode_NotFound(t *testing.T) {
+	env := allPassEnv()
+	env.LookPath = func(file string) (string, error) {
+		if file == "opencode" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + file, nil
+	}
+	r := checkOpencode(env)
+	if r.passed {
+		t.Error("expected opencode check to fail")
+	}
+	if r.required {
+		t.Error("expected opencode check to be optional (required=false)")
+	}
+	if !strings.Contains(r.detail, "optional") {
+		t.Errorf("expected detail to mention optional, got: %q", r.detail)
+	}
+	ocInfo := runner.AgentByName("opencode")
+	expectedFix := runner.InstallHint(ocInfo)
+	if r.fix != expectedFix {
+		t.Errorf("expected fix %q, got %q", expectedFix, r.fix)
+	}
+}
+
+// --- runDoctor shows pi/opencode lines ---
+
+func TestRunDoctor_ShowsPiAndOpencodeLines(t *testing.T) {
+	env := allPassEnv()
+	var buf bytes.Buffer
+	err := runDoctor(&buf, env)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "pi:") {
+		t.Errorf("expected pi line in doctor output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "opencode:") {
+		t.Errorf("expected opencode line in doctor output, got:\n%s", out)
 	}
 }
