@@ -2289,6 +2289,36 @@ func TestRunDoctor_ShowsPiAndOpencodeLines(t *testing.T) {
 	}
 }
 
+// TestCheckAgentCLI_IncludesVersionInDetail verifies that when the agent binary
+// is found and returns a version string, checkAgentCLI includes the version
+// in parentheses in the detail field (e.g. '/usr/bin/pi (1.2.3)').
+func TestCheckAgentCLI_IncludesVersionInDetail(t *testing.T) {
+	env := &doctorEnv{
+		LookPath: func(file string) (string, error) {
+			if file == "pi" {
+				return "/usr/bin/pi", nil
+			}
+			return "", errors.New("not found")
+		},
+		RunCmd: func(name string, args ...string) (string, error) {
+			if name == "pi" && len(args) > 0 && args[0] == "--version" {
+				return "pi 1.2.3", nil
+			}
+			return "", nil
+		},
+	}
+	r := checkPi(env)
+	if !r.passed {
+		t.Fatalf("expected pi check to pass, got detail: %q", r.detail)
+	}
+	if !strings.Contains(r.detail, "(1.2.3)") {
+		t.Errorf("expected version in detail, got: %q", r.detail)
+	}
+	if !strings.Contains(r.detail, "/usr/bin/pi") {
+		t.Errorf("expected path in detail, got: %q", r.detail)
+	}
+}
+
 // --- runDoctorFull --install tests ---
 
 func TestRunDoctorInstall_PromptsOnMissingAgent(t *testing.T) {

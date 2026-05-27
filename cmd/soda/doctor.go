@@ -884,7 +884,8 @@ func checkCommitSigningGPG(env *doctorEnv, signingKey string) checkResult {
 	}
 }
 
-// checkAgentCLI verifies that a coding agent CLI is available in PATH.
+// checkAgentCLI verifies that a coding agent CLI is available in PATH
+// and reports its version when available.
 // This is always an optional (warning-only) check since the user may not
 // be using that particular agent.
 func checkAgentCLI(env *doctorEnv, agentName string) checkResult {
@@ -897,7 +898,7 @@ func checkAgentCLI(env *doctorEnv, agentName string) checkResult {
 		}
 	}
 
-	path, err := env.LookPath(info.Binary)
+	path, version, err := runner.DetectAgent(env.LookPath, env.RunCmd, agentName)
 	if err != nil {
 		hint := runner.InstallHint(info)
 		return checkResult{
@@ -908,11 +909,15 @@ func checkAgentCLI(env *doctorEnv, agentName string) checkResult {
 			fix:      hint,
 		}
 	}
+	detail := path
+	if version != "" {
+		detail = fmt.Sprintf("%s (%s)", path, version)
+	}
 	return checkResult{
 		name:     agentName,
 		passed:   true,
 		required: false,
-		detail:   path,
+		detail:   detail,
 	}
 }
 
