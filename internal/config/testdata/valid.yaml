@@ -34,6 +34,16 @@ sandbox:
     memory_mb: 2048
     cpu_percent: 200
     max_pids: 256
+mcp:
+  servers:
+    jira:
+      command: wtmcp
+      args: [jira]
+      env:
+        JIRA_URL: "https://jira.example.com"
+    github:
+      command: wtmcp
+      args: [github]
 limits:
   max_cost_per_ticket: 15.00
   max_cost_per_phase: 8.00

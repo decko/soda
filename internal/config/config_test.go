@@ -122,6 +122,36 @@ func TestLoad(t *testing.T) {
 				if cfg.GitHub.Plan.EndMarker != "<!-- plan:end -->" {
 					t.Errorf("GitHub.Plan.EndMarker = %q, want %q", cfg.GitHub.Plan.EndMarker, "<!-- plan:end -->")
 				}
+				// MCP config
+				if len(cfg.MCP.Servers) != 2 {
+					t.Fatalf("len(MCP.Servers) = %d, want 2", len(cfg.MCP.Servers))
+				}
+				jira, ok := cfg.MCP.Servers["jira"]
+				if !ok {
+					t.Fatal("MCP.Servers[jira] not found")
+				}
+				if jira.Command != "wtmcp" {
+					t.Errorf("MCP.Servers[jira].Command = %q, want %q", jira.Command, "wtmcp")
+				}
+				if len(jira.Args) != 1 || jira.Args[0] != "jira" {
+					t.Errorf("MCP.Servers[jira].Args = %v, want [jira]", jira.Args)
+				}
+				if jira.Env["JIRA_URL"] != "https://jira.example.com" {
+					t.Errorf("MCP.Servers[jira].Env[JIRA_URL] = %q, want %q", jira.Env["JIRA_URL"], "https://jira.example.com")
+				}
+				gh, ok := cfg.MCP.Servers["github"]
+				if !ok {
+					t.Fatal("MCP.Servers[github] not found")
+				}
+				if gh.Command != "wtmcp" {
+					t.Errorf("MCP.Servers[github].Command = %q, want %q", gh.Command, "wtmcp")
+				}
+				if len(gh.Args) != 1 || gh.Args[0] != "github" {
+					t.Errorf("MCP.Servers[github].Args = %v, want [github]", gh.Args)
+				}
+				if len(gh.Env) != 0 {
+					t.Errorf("MCP.Servers[github].Env = %v, want empty", gh.Env)
+				}
 				// Monitor config
 				if cfg.Monitor.Profile != "smart" {
 					t.Errorf("Monitor.Profile = %q, want %q", cfg.Monitor.Profile, "smart")
