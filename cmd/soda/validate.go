@@ -14,6 +14,7 @@ import (
 	"github.com/decko/soda/internal/git"
 	"github.com/decko/soda/internal/pipeline"
 	"github.com/decko/soda/internal/runner"
+	"github.com/decko/soda/internal/sandbox"
 	"github.com/decko/soda/schemas"
 	"github.com/spf13/cobra"
 )
@@ -105,6 +106,9 @@ func runValidate(w io.Writer, errW io.Writer, cfg *config.Config, pipelineName s
 
 	// Stage 9: Runner binary
 	validateRunner(w, result, cfg, exec.LookPath)
+
+	// Stage 10: Sandbox wrapper binary
+	validateSandboxWrapper(w, result, cfg, sandbox.WrapperBinaryPath)
 
 	// Print summary
 	fmt.Fprintln(w)
@@ -586,6 +590,22 @@ func validateRunner(w io.Writer, result *validationResult, cfg *config.Config, l
 	}
 
 	fmt.Fprintf(w, "✓ runner: %s (%s)\n", runnerName, binaryName)
+}
+
+// validateSandboxWrapper checks that the arapuca wrapper binary is present
+// when sandbox mode is enabled. The wrapper is required for Landlock/seccomp
+// enforcement. Skipped cleanly when sandbox is disabled.
+func validateSandboxWrapper(w io.Writer, result *validationResult, cfg *config.Config, wrapperPath func() string) {
+	if !cfg.Sandbox.Enabled {
+		fmt.Fprintln(w, "✓ sandbox-wrapper: not needed (sandbox disabled)")
+		return
+	}
+	path := wrapperPath()
+	if path == "" {
+		result.addError("sandbox-wrapper: arapuca wrapper binary not found — Landlock/seccomp enforcement will not work; install: sudo dnf install arapuca")
+		return
+	}
+	fmt.Fprintf(w, "✓ sandbox-wrapper: %s\n", path)
 }
 
 // validateTranscript checks that the transcript level is a recognized value.
