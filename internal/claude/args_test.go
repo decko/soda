@@ -112,6 +112,37 @@ func TestBuildArgs(t *testing.T) {
 				"--settings-path",
 			},
 		},
+		{
+			name:  "mcp_config_path_emits_flag",
+			model: "",
+			opts: RunOpts{
+				MCPConfigPath: "/tmp/mcp-config.json",
+			},
+			contains: []string{
+				"--mcp-config", "/tmp/mcp-config.json",
+			},
+		},
+		{
+			name:  "strict_mcp_config_emits_flag",
+			model: "",
+			opts: RunOpts{
+				MCPConfigPath:   "/tmp/mcp-config.json",
+				StrictMCPConfig: true,
+			},
+			contains: []string{
+				"--mcp-config", "/tmp/mcp-config.json",
+				"--strict-mcp-config",
+			},
+		},
+		{
+			name:  "empty_mcp_config_omits_flags",
+			model: "",
+			opts:  RunOpts{},
+			excludes: []string{
+				"--mcp-config",
+				"--strict-mcp-config",
+			},
+		},
 	}
 
 	for _, tt := range tests {

@@ -105,5 +105,12 @@ func BuildArgs(opts RunOpts, model string) []string {
 	// and log warnings for unknown tools. Not blocking — the CLI
 	// rejects unknown tools at runtime.
 
+	if opts.MCPConfigPath != "" {
+		args = append(args, "--mcp-config", opts.MCPConfigPath)
+	}
+	if opts.StrictMCPConfig {
+		args = append(args, "--strict-mcp-config")
+	}
+
 	return args
 }
