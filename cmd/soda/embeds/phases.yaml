@@ -20,7 +20,7 @@ phases:
       - Grep
       - Bash(git:*)
       - Bash(ls:*)
-    timeout: 3m
+    timeout: 8m
     retry:
       transient: 2
       parse: 1
@@ -194,30 +194,3 @@ phases:
     depends_on:
       - review
       - submit
-
-  - name: monitor
-    prompt: prompts/monitor.md
-    type: polling
-    tools:
-      - Read
-      - Write
-      - Edit
-      - Glob
-      - Grep
-      - Bash
-    timeout: 10m
-    polling:
-      initial_interval: 2m
-      max_interval: 5m
-      escalate_after: 30m
-      max_duration: 4h
-      max_response_rounds: 3
-      respond_to_comments: false  # enable to classify and respond to PR comments (requires self_user)
-      auto_merge: false           # enable to auto-merge when CI green + approved (see #338)
-    retry:
-      transient: 2
-      parse: 1
-      semantic: 0
-    depends_on:
-      - submit
-      - plan

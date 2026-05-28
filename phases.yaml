@@ -19,7 +19,7 @@ phases:
       - Grep
       - Bash(git:*)
       - Bash(ls:*)
-    timeout: 3m
+    timeout: 8m
     retry:
       transient: 2
       parse: 1
@@ -171,7 +171,7 @@ phases:
       - Bash(git:*)
       - Bash(gh:*)
       - Bash(glab:*)
-    timeout: 3m
+    timeout: 8m
     retry:
       transient: 2
       parse: 1
@@ -187,7 +187,7 @@ phases:
     # schema: generated from schemas.FollowUpOutput (go generate ./schemas/...)
     tools:
       - Bash(gh:*)
-    timeout: 3m
+    timeout: 8m
     retry:
       transient: 2
       parse: 1
@@ -196,30 +196,3 @@ phases:
       - review
       - submit
 
-  - name: monitor
-    prompt: prompts/monitor.md
-    # schema: generated from schemas.MonitorOutput (go generate ./schemas/...)
-    type: polling     # not one-shot
-    tools:
-      - Read
-      - Write
-      - Edit
-      - Glob
-      - Grep
-      - Bash
-    timeout: 10m      # per-response session timeout
-    polling:
-      initial_interval: 2m
-      max_interval: 5m
-      escalate_after: 30m
-      max_duration: 4h
-      max_response_rounds: 3
-      respond_to_comments: true
-      auto_merge: false           # enable to auto-merge when CI green + approved
-    retry:
-      transient: 2
-      parse: 1
-      semantic: 0
-    depends_on:
-      - submit
-      - plan

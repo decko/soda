@@ -68,12 +68,12 @@ func TestLoadPipeline(t *testing.T) {
 			}
 		}
 
-		// First phase must be triage, last must be monitor.
+		// First phase must be triage, last must be follow-up.
 		if first := pipeline.Phases[0].Name; first != "triage" {
 			t.Errorf("first phase = %q, want %q", first, "triage")
 		}
-		if last := pipeline.Phases[len(pipeline.Phases)-1].Name; last != "monitor" {
-			t.Errorf("last phase = %q, want %q", last, "monitor")
+		if last := pipeline.Phases[len(pipeline.Phases)-1].Name; last != "follow-up" {
+			t.Errorf("last phase = %q, want %q", last, "follow-up")
 		}
 
 		// triage: no dependencies, correct timeout and retry.
@@ -81,8 +81,8 @@ func TestLoadPipeline(t *testing.T) {
 		if !ok {
 			t.Fatal("triage phase not found")
 		}
-		if triage.Timeout.Duration != 3*time.Minute {
-			t.Errorf("triage timeout = %v, want 3m", triage.Timeout.Duration)
+		if triage.Timeout.Duration != 8*time.Minute {
+			t.Errorf("triage timeout = %v, want 8m", triage.Timeout.Duration)
 		}
 		if triage.Retry.Transient != 2 {
 			t.Errorf("triage retry.transient = %d, want 2", triage.Retry.Transient)
@@ -177,23 +177,7 @@ func TestLoadPipeline(t *testing.T) {
 			}
 		}
 
-		// monitor: polling type with expected config.
-		monitor, ok := byName["monitor"]
-		if !ok {
-			t.Fatal("monitor phase not found")
-		}
-		if monitor.Type != "polling" {
-			t.Errorf("monitor type = %q, want %q", monitor.Type, "polling")
-		}
-		if monitor.Polling == nil {
-			t.Fatal("monitor polling config should not be nil")
-		}
-		if monitor.Polling.MaxResponseRounds != 3 {
-			t.Errorf("monitor max_response_rounds = %d, want 3", monitor.Polling.MaxResponseRounds)
-		}
-		if monitor.Polling.MaxDuration.Duration != 4*time.Hour {
-			t.Errorf("monitor max_duration = %v, want 4h", monitor.Polling.MaxDuration.Duration)
-		}
+		// monitor phase removed from default pipeline (users add it via named pipelines).
 	})
 
 	t.Run("resolves_generated_schemas", func(t *testing.T) {
