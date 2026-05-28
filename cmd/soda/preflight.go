@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/decko/soda/internal/runner"
@@ -106,6 +107,7 @@ func runPreflightFull(env *doctorEnv, useMock bool, runnerName string, binaryOve
 		checks = append(checks, func(env *doctorEnv) checkResult {
 			return arapucaWrapperCheck(env)
 		})
+		checks = append(checks, checkArapucaWrapperVersion)
 	}
 
 	// Config checks (checkConfig, checkConfigValid) are intentionally
@@ -122,6 +124,8 @@ func runPreflightFull(env *doctorEnv, useMock bool, runnerName string, binaryOve
 		}
 		if !result.passed && result.required {
 			failures = append(failures, result)
+		} else if !result.passed && !result.required {
+			fmt.Fprintf(os.Stderr, "Warning: %s: %s\n", result.name, result.detail)
 		}
 	}
 

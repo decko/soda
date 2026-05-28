@@ -606,6 +606,13 @@ func validateSandboxWrapper(w io.Writer, result *validationResult, cfg *config.C
 		return
 	}
 	fmt.Fprintf(w, "✓ sandbox-wrapper: %s\n", path)
+	if libVer := sandbox.ArapucaLibraryVersion; libVer != "" {
+		if out, cmdErr := exec.Command("arapuca", "--version").CombinedOutput(); cmdErr == nil {
+			if wver := extractSemver(string(out)); wver != "" && compareSemver(wver, libVer) < 0 {
+				result.addWarning("sandbox-wrapper: wrapper %s older than library %s — upgrade: sudo dnf upgrade arapuca", wver, libVer)
+			}
+		}
+	}
 }
 
 // validateTranscript checks that the transcript level is a recognized value.

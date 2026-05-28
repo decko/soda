@@ -144,6 +144,7 @@ func runDoctorFull(w io.Writer, stdin io.Reader, env *doctorEnv, install bool) e
 		checkConfig,
 		checkConfigValid,
 		checkArapucaWrapper,
+		checkArapucaWrapperVersion,
 		checkClaudeAuth,
 		checkGh,
 		checkGhAuth,
@@ -1099,4 +1100,31 @@ func checkArapucaWrapper(env *doctorEnv) checkResult {
 		}
 	}
 	return arapucaWrapperCheck(env)
+}
+
+// checkArapucaWrapperVersion warns when the installed arapuca wrapper binary
+// is older than the go-arapuca library soda was linked against. Skipped when
+// sandbox is disabled, the wrapper is absent, or versions cannot be determined.
+func checkArapucaWrapperVersion(env *doctorEnv) checkResult {
+	if env.ParsedConfig != nil && !env.ParsedConfig.Sandbox.Enabled {
+		return checkResult{name: "arapuca-wrapper-version", skipped: true, detail: "skipped (sandbox not enabled)"}
+	}
+	if env.ArapucaWrapperPath == nil || env.ArapucaWrapperPath() == "" {
+		return checkResult{name: "arapuca-wrapper-version", skipped: true, detail: "skipped (wrapper not found)"}
+	}
+	libVer := sandbox.ArapucaLibraryVersion
+	out, _ := env.RunCmd("arapuca", "--version")
+	wrapperVer := extractSemver(out)
+	if wrapperVer == "" {
+		return checkResult{name: "arapuca-wrapper-version", skipped: true, detail: "skipped (wrapper version unreadable)"}
+	}
+	if compareSemver(wrapperVer, libVer) < 0 {
+		return checkResult{
+			name:   "arapuca-wrapper-version",
+			passed: false,
+			detail: fmt.Sprintf("wrapper %s older than library %s — upgrade for compatibility", wrapperVer, libVer),
+			fix:    "sudo dnf upgrade arapuca",
+		}
+	}
+	return checkResult{name: "arapuca-wrapper-version", passed: true, detail: fmt.Sprintf("wrapper %s (library: %s)", wrapperVer, libVer)}
 }

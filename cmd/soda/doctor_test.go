@@ -2521,3 +2521,63 @@ func TestRunDoctor_ArapucaWrapperFailsWhenSandboxEnabled(t *testing.T) {
 		t.Errorf("expected failed arapuca-wrapper line, got:\n%s", out)
 	}
 }
+
+// --- checkArapucaWrapperVersion tests ---
+
+func TestCheckArapucaWrapperVersion_SkippedWhenSandboxDisabled(t *testing.T) {
+	env := allPassEnv()
+	env.ParsedConfig = &config.Config{Sandbox: config.SandboxConfig{Enabled: false}}
+	env.ArapucaWrapperPath = func() string { return "/usr/bin/arapuca" }
+	r := checkArapucaWrapperVersion(env)
+	if !r.skipped {
+		t.Error("expected check to be skipped when sandbox disabled")
+	}
+}
+
+func TestCheckArapucaWrapperVersion_SkippedWhenWrapperMissing(t *testing.T) {
+	env := allPassEnv()
+	env.ParsedConfig = &config.Config{Sandbox: config.SandboxConfig{Enabled: true}}
+	env.ArapucaWrapperPath = func() string { return "" }
+	r := checkArapucaWrapperVersion(env)
+	if !r.skipped {
+		t.Error("expected check to be skipped when wrapper missing")
+	}
+}
+
+func TestCheckArapucaWrapperVersion_WarnsWhenWrapperOlder(t *testing.T) {
+	env := allPassEnv()
+	env.ParsedConfig = &config.Config{Sandbox: config.SandboxConfig{Enabled: true}}
+	env.ArapucaWrapperPath = func() string { return "/usr/bin/arapuca" }
+	env.RunCmd = func(name string, args ...string) (string, error) {
+		if name == "arapuca" {
+			return "arapuca 0.1.0", nil
+		}
+		return allPassEnv().RunCmd(name, args...)
+	}
+	r := checkArapucaWrapperVersion(env)
+	if r.passed {
+		t.Error("expected check to warn (not pass) when wrapper is older than library")
+	}
+	if r.skipped {
+		t.Error("expected check to run, not skip")
+	}
+	if !strings.Contains(r.detail, "older") {
+		t.Errorf("expected 'older' in detail, got: %q", r.detail)
+	}
+}
+
+func TestCheckArapucaWrapperVersion_PassesWhenVersionCurrent(t *testing.T) {
+	env := allPassEnv()
+	env.ParsedConfig = &config.Config{Sandbox: config.SandboxConfig{Enabled: true}}
+	env.ArapucaWrapperPath = func() string { return "/usr/bin/arapuca" }
+	env.RunCmd = func(name string, args ...string) (string, error) {
+		if name == "arapuca" {
+			return "arapuca 0.2.0", nil
+		}
+		return allPassEnv().RunCmd(name, args...)
+	}
+	r := checkArapucaWrapperVersion(env)
+	if !r.passed {
+		t.Errorf("expected check to pass when wrapper version matches library, got detail: %q", r.detail)
+	}
+}
