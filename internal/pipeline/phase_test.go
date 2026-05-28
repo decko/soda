@@ -1175,6 +1175,60 @@ func TestLoadPipeline(t *testing.T) {
 		}
 	})
 
+	t.Run("mcp_servers_and_allowed_mcp_tools_parsed", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "phases.yaml")
+		content := `phases:
+  - name: triage
+    prompt: prompts/triage.md
+    timeout: 1m
+    mcp_servers: [jira]
+    allowed_mcp_tools:
+      - "mcp__jira__search"
+`
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		pipeline, err := LoadPipeline(path)
+		if err != nil {
+			t.Fatalf("LoadPipeline: %v", err)
+		}
+
+		phase := pipeline.Phases[0]
+		if len(phase.MCPServers) != 1 || phase.MCPServers[0] != "jira" {
+			t.Errorf("MCPServers = %v, want [jira]", phase.MCPServers)
+		}
+		if len(phase.AllowedMCPTools) != 1 || phase.AllowedMCPTools[0] != "mcp__jira__search" {
+			t.Errorf("AllowedMCPTools = %v, want [mcp__jira__search]", phase.AllowedMCPTools)
+		}
+	})
+
+	t.Run("mcp_servers_empty_when_absent", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "phases.yaml")
+		content := `phases:
+  - name: triage
+    prompt: prompts/triage.md
+    timeout: 1m
+`
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		pipeline, err := LoadPipeline(path)
+		if err != nil {
+			t.Fatalf("LoadPipeline: %v", err)
+		}
+
+		if len(pipeline.Phases[0].MCPServers) != 0 {
+			t.Errorf("MCPServers = %v, want empty", pipeline.Phases[0].MCPServers)
+		}
+		if len(pipeline.Phases[0].AllowedMCPTools) != 0 {
+			t.Errorf("AllowedMCPTools = %v, want empty", pipeline.Phases[0].AllowedMCPTools)
+		}
+	})
+
 	t.Run("errors_on_invalid_timeout_override_condition", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "phases.yaml")
