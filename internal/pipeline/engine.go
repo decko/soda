@@ -73,8 +73,23 @@ type EngineConfig struct {
 	MergeMethod             string            // merge method: "merge", "squash", "rebase"; defaults to "squash"
 	MergeLabels             []string          // required PR labels before auto-merge proceeds
 	AutoMergeTimeout        time.Duration     // max wait after approval before giving up; defaults to 30m
+	MCPConfig               MCPConfig         // MCP server declarations; phases opt in via mcp_servers
 	TranscriptLevel         transcript.Level  // transcript capture level; empty/"off" disables
 	Force                   bool              // when true, schema version mismatches warn instead of blocking resume
+}
+
+// MCPServerConfig holds the definition of a single MCP server process.
+// Mirrors config.MCPServerConfig — kept separate to avoid cross-package imports.
+type MCPServerConfig struct {
+	Command string
+	Args    []string
+	Env     map[string]string
+}
+
+// MCPConfig holds MCP server declarations available to pipeline phases.
+// Mirrors config.MCPConfig — kept separate to avoid cross-package imports.
+type MCPConfig struct {
+	Servers map[string]MCPServerConfig
 }
 
 // TokenBudgetConfig configures the prompt-size estimation check.
@@ -839,12 +854,34 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 	// Resolve effective timeout: evaluate timeout_overrides (first-match wins)
 	// before falling back to the phase default.
 	resolvedTimeout := e.resolvePhaseTimeout(phase)
+
+	// Resolve MCP servers: map phase-declared server names to their
+	// definitions from the global MCPConfig. Unknown names produce a
+	// warning but do not block execution.
+	var mcpServers map[string]runner.MCPServerConfig
+	if len(phase.MCPServers) > 0 {
+		mcpServers = make(map[string]runner.MCPServerConfig, len(phase.MCPServers))
+		for _, name := range phase.MCPServers {
+			if def, ok := e.config.MCPConfig.Servers[name]; ok {
+				mcpServers[name] = runner.MCPServerConfig{
+					Command: def.Command,
+					Args:    def.Args,
+					Env:     def.Env,
+				}
+			} else {
+				fmt.Fprintf(e.config.Stderr, "engine: warning: MCP server %q in phase %q not in global config\n", name, phase.Name)
+			}
+		}
+	}
+
 	opts := runner.RunOpts{
 		Phase:           phase.Name,
 		SystemPrompt:    rendered,
 		UserPrompt:      "Execute the task described in the system prompt.",
 		OutputSchema:    phase.Schema,
 		AllowedTools:    phase.Tools,
+		MCPServers:      mcpServers,
+		AllowedMCPTools: phase.AllowedMCPTools,
 		MaxBudgetUSD:    remaining,
 		WorkDir:         e.workDir(phase),
 		Model:           model,

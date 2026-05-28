@@ -479,6 +479,8 @@ func runPipeline(cfg *config.Config, opts pipelineOpts) error {
 		effectiveModel = cfg.Pi.Model
 	}
 
+	mcpConfig := convertMCPConfig(cfg.MCP)
+
 	engineCfg := pipeline.EngineConfig{
 		Pipeline:               pl,
 		Loader:                 loader,
@@ -504,6 +506,7 @@ func runPipeline(cfg *config.Config, opts pipelineOpts) error {
 			BytesPerToken: cfg.Limits.TokenBudget.BytesPerToken,
 		},
 		ContextBudget:     cfg.Limits.ContextBudget,
+		MCPConfig:         mcpConfig,
 		Notify:            convertNotifyConfig(cfg.Notify),
 		ApiKeyHelper:      cfg.Auth.ApiKeyHelper,
 		Mode:              mode,
@@ -1095,6 +1098,12 @@ func runDryRun(cfg *config.Config, pl *pipeline.PhasePipeline, loader *pipeline.
 			fmt.Printf("\n=== Token Estimate ===\n")
 			fmt.Printf("  Prompt bytes:     %s\n", formatTokenCount(int64(len(rendered))))
 			fmt.Printf("  Estimated tokens: %s%s\n", formatTokenCount(estimatedTokens), warning)
+			if len(phase.MCPServers) > 0 {
+				mcpTokens := int64(len(phase.MCPServers)) * 500
+				estimatedTokens += mcpTokens
+				totalTokens += mcpTokens
+				fmt.Printf("  MCP servers: %d (~%s tokens)\n", len(phase.MCPServers), formatTokenCount(mcpTokens))
+			}
 		}
 
 		fmt.Println()
@@ -1610,6 +1619,22 @@ func convertNotifyHookConfig(cfg *config.NotifyHookConfig) *pipeline.NotifyHookC
 		}
 	}
 	return &hc
+}
+
+// convertMCPConfig converts a config.MCPConfig to a pipeline.MCPConfig.
+func convertMCPConfig(cfg config.MCPConfig) pipeline.MCPConfig {
+	if len(cfg.Servers) == 0 {
+		return pipeline.MCPConfig{}
+	}
+	servers := make(map[string]pipeline.MCPServerConfig, len(cfg.Servers))
+	for name, srv := range cfg.Servers {
+		servers[name] = pipeline.MCPServerConfig{
+			Command: srv.Command,
+			Args:    srv.Args,
+			Env:     srv.Env,
+		}
+	}
+	return pipeline.MCPConfig{Servers: servers}
 }
 
 // resolveLastPhase finds the last running or failed phase in pipeline order.
