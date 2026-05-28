@@ -13,6 +13,7 @@ import (
 	"github.com/decko/soda/internal/claude"
 	"github.com/decko/soda/internal/config"
 	"github.com/decko/soda/internal/runner"
+	"github.com/decko/soda/internal/sandbox"
 	"github.com/spf13/cobra"
 )
 
@@ -29,14 +30,15 @@ type checkResult struct {
 // doctorEnv provides dependency injection for doctor checks, enabling
 // unit tests without requiring real binaries or filesystem state.
 type doctorEnv struct {
-	LookPath       func(file string) (string, error)
-	RunCmd         func(name string, args ...string) (string, error)
-	Stat           func(name string) (os.FileInfo, error)
-	LoadConfig     func(path string) (*config.Config, error)
-	UserConfigDir  func() (string, error)
-	UserHomeDir    func() (string, error)
-	Getenv         func(key string) string // injectable os.Getenv for testable env checks
-	ExecInstallCmd func(cmd string) error  // runs an install command (sh -c); nil = default
+	LookPath           func(file string) (string, error)
+	RunCmd             func(name string, args ...string) (string, error)
+	Stat               func(name string) (os.FileInfo, error)
+	LoadConfig         func(path string) (*config.Config, error)
+	UserConfigDir      func() (string, error)
+	UserHomeDir        func() (string, error)
+	Getenv             func(key string) string // injectable os.Getenv for testable env checks
+	ExecInstallCmd     func(cmd string) error  // runs an install command (sh -c); nil = default
+	ArapucaWrapperPath func() string           // returns path to arapuca wrapper binary; "" = not found
 
 	// ParsedConfig is populated by checkConfigValid on success.
 	// Downstream checks use it to adjust their required status.
@@ -77,6 +79,7 @@ func defaultDoctorEnv() *doctorEnv {
 			c.Stderr = os.Stderr
 			return c.Run()
 		},
+		ArapucaWrapperPath: sandbox.WrapperBinaryPath,
 	}
 }
 
@@ -140,6 +143,7 @@ func runDoctorFull(w io.Writer, stdin io.Reader, env *doctorEnv, install bool) e
 		checkClaudeVersion,
 		checkConfig,
 		checkConfigValid,
+		checkArapucaWrapper,
 		checkClaudeAuth,
 		checkGh,
 		checkGhAuth,
@@ -1051,4 +1055,48 @@ func checkConfigValid(env *doctorEnv) checkResult {
 		required: true,
 		detail:   fmt.Sprintf("%s parses successfully", loc.path),
 	}
+}
+
+// arapucaWrapperCheck is the core check for the arapuca wrapper binary.
+// It is nil-guarded on ArapucaWrapperPath and returns a required error
+// with Landlock/seccomp impact when the wrapper is missing.
+func arapucaWrapperCheck(env *doctorEnv) checkResult {
+	if env.ArapucaWrapperPath == nil {
+		return checkResult{
+			name:     "arapuca-wrapper",
+			passed:   false,
+			required: true,
+			detail:   "wrapper path function not available (cgo disabled?)",
+			fix:      "rebuild with CGO_ENABLED=1 and install arapuca: sudo dnf install arapuca",
+		}
+	}
+	path := env.ArapucaWrapperPath()
+	if path == "" {
+		return checkResult{
+			name:     "arapuca-wrapper",
+			passed:   false,
+			required: true,
+			detail:   "arapuca wrapper binary not found — Landlock/seccomp enforcement will not work",
+			fix:      "install arapuca: sudo dnf install arapuca",
+		}
+	}
+	return checkResult{
+		name:     "arapuca-wrapper",
+		passed:   true,
+		required: true,
+		detail:   path,
+	}
+}
+
+// checkArapucaWrapper verifies the arapuca wrapper binary is present.
+// Skipped when no config is parsed or sandbox is not enabled.
+func checkArapucaWrapper(env *doctorEnv) checkResult {
+	if env.ParsedConfig == nil || !env.ParsedConfig.Sandbox.Enabled {
+		return checkResult{
+			name:    "arapuca-wrapper",
+			skipped: true,
+			detail:  "skipped (sandbox not enabled)",
+		}
+	}
+	return arapucaWrapperCheck(env)
 }
