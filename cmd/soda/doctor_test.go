@@ -94,13 +94,13 @@ func TestRunDoctor_AllPass(t *testing.T) {
 	if !strings.Contains(out, "All checks passed") {
 		t.Errorf("expected 'All checks passed', got:\n%s", out)
 	}
-	// Every line before the summary should start with ✓
+	// Every line before the summary should start with ✓ or - (skipped)
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 		if line == "" || line == "All checks passed" {
 			continue
 		}
-		if !strings.HasPrefix(line, "✓") {
-			t.Errorf("expected ✓ prefix, got: %s", line)
+		if !strings.HasPrefix(line, "✓") && !strings.HasPrefix(line, "-") {
+			t.Errorf("expected ✓ or - prefix, got: %s", line)
 		}
 	}
 }
@@ -2426,5 +2426,158 @@ func TestRunDoctorInstall_EmptyInputDeclines(t *testing.T) {
 	}
 	if installCalled {
 		t.Error("expected install command NOT to be called on empty input")
+	}
+}
+
+// --- checkArapucaWrapper tests ---
+
+func TestCheckArapucaWrapper_SkippedWhenNoConfig(t *testing.T) {
+	env := allPassEnv()
+	env.ParsedConfig = nil
+	r := checkArapucaWrapper(env)
+	if !r.skipped {
+		t.Error("expected skipped when ParsedConfig is nil")
+	}
+	if r.name != "arapuca-wrapper" {
+		t.Errorf("expected name 'arapuca-wrapper', got %q", r.name)
+	}
+}
+
+func TestCheckArapucaWrapper_SkippedWhenSandboxDisabled(t *testing.T) {
+	env := allPassEnv()
+	env.ParsedConfig = &config.Config{Sandbox: config.SandboxConfig{Enabled: false}}
+	r := checkArapucaWrapper(env)
+	if !r.skipped {
+		t.Error("expected skipped when sandbox is disabled")
+	}
+}
+
+func TestCheckArapucaWrapper_FailsWhenMissing(t *testing.T) {
+	env := allPassEnv()
+	env.ParsedConfig = &config.Config{Sandbox: config.SandboxConfig{Enabled: true}}
+	env.ArapucaWrapperPath = func() string { return "" }
+	r := checkArapucaWrapper(env)
+	if r.passed {
+		t.Error("expected check to fail when wrapper is missing")
+	}
+	if !r.required {
+		t.Error("expected check to be required")
+	}
+	if !strings.Contains(r.detail, "Landlock/seccomp") {
+		t.Errorf("expected detail to mention Landlock/seccomp, got: %q", r.detail)
+	}
+	if !strings.Contains(r.fix, "dnf install arapuca") {
+		t.Errorf("expected fix to include install instructions, got: %q", r.fix)
+	}
+}
+
+func TestCheckArapucaWrapper_PassesWhenPresent(t *testing.T) {
+	env := allPassEnv()
+	env.ParsedConfig = &config.Config{Sandbox: config.SandboxConfig{Enabled: true}}
+	env.ArapucaWrapperPath = func() string { return "/usr/bin/arapuca" }
+	r := checkArapucaWrapper(env)
+	if !r.passed {
+		t.Error("expected check to pass when wrapper is present")
+	}
+	if r.detail != "/usr/bin/arapuca" {
+		t.Errorf("expected detail to be wrapper path, got: %q", r.detail)
+	}
+}
+
+func TestRunDoctor_ArapucaWrapperSkippedBySandboxDisabled(t *testing.T) {
+	env := allPassEnv()
+	// allPassEnv returns a config without Sandbox.Enabled, so the
+	// arapuca-wrapper check should be skipped (shown as "-").
+	var buf bytes.Buffer
+	err := runDoctor(&buf, env)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "- arapuca-wrapper:") {
+		t.Errorf("expected skipped arapuca-wrapper line, got:\n%s", out)
+	}
+}
+
+func TestRunDoctor_ArapucaWrapperFailsWhenSandboxEnabled(t *testing.T) {
+	env := allPassEnv()
+	env.LoadConfig = func(path string) (*config.Config, error) {
+		return &config.Config{
+			Sandbox: config.SandboxConfig{Enabled: true},
+			GitHub: config.GitHubTicketConfig{
+				Owner: "test-org",
+				Repo:  "test-repo",
+			},
+		}, nil
+	}
+	env.ArapucaWrapperPath = func() string { return "" }
+	var buf bytes.Buffer
+	err := runDoctor(&buf, env)
+	if err == nil {
+		t.Fatal("expected error when sandbox enabled and wrapper missing")
+	}
+	out := buf.String()
+	if !strings.Contains(out, "✗ arapuca-wrapper:") {
+		t.Errorf("expected failed arapuca-wrapper line, got:\n%s", out)
+	}
+}
+
+// --- checkArapucaWrapperVersion tests ---
+
+func TestCheckArapucaWrapperVersion_SkippedWhenSandboxDisabled(t *testing.T) {
+	env := allPassEnv()
+	env.ParsedConfig = &config.Config{Sandbox: config.SandboxConfig{Enabled: false}}
+	env.ArapucaWrapperPath = func() string { return "/usr/bin/arapuca" }
+	r := checkArapucaWrapperVersion(env)
+	if !r.skipped {
+		t.Error("expected check to be skipped when sandbox disabled")
+	}
+}
+
+func TestCheckArapucaWrapperVersion_SkippedWhenWrapperMissing(t *testing.T) {
+	env := allPassEnv()
+	env.ParsedConfig = &config.Config{Sandbox: config.SandboxConfig{Enabled: true}}
+	env.ArapucaWrapperPath = func() string { return "" }
+	r := checkArapucaWrapperVersion(env)
+	if !r.skipped {
+		t.Error("expected check to be skipped when wrapper missing")
+	}
+}
+
+func TestCheckArapucaWrapperVersion_WarnsWhenWrapperOlder(t *testing.T) {
+	env := allPassEnv()
+	env.ParsedConfig = &config.Config{Sandbox: config.SandboxConfig{Enabled: true}}
+	env.ArapucaWrapperPath = func() string { return "/usr/bin/arapuca" }
+	env.RunCmd = func(name string, args ...string) (string, error) {
+		if name == "arapuca" {
+			return "arapuca 0.1.0", nil
+		}
+		return allPassEnv().RunCmd(name, args...)
+	}
+	r := checkArapucaWrapperVersion(env)
+	if r.passed {
+		t.Error("expected check to warn (not pass) when wrapper is older than library")
+	}
+	if r.skipped {
+		t.Error("expected check to run, not skip")
+	}
+	if !strings.Contains(r.detail, "older") {
+		t.Errorf("expected 'older' in detail, got: %q", r.detail)
+	}
+}
+
+func TestCheckArapucaWrapperVersion_PassesWhenVersionCurrent(t *testing.T) {
+	env := allPassEnv()
+	env.ParsedConfig = &config.Config{Sandbox: config.SandboxConfig{Enabled: true}}
+	env.ArapucaWrapperPath = func() string { return "/usr/bin/arapuca" }
+	env.RunCmd = func(name string, args ...string) (string, error) {
+		if name == "arapuca" {
+			return "arapuca 0.2.0", nil
+		}
+		return allPassEnv().RunCmd(name, args...)
+	}
+	r := checkArapucaWrapperVersion(env)
+	if !r.passed {
+		t.Errorf("expected check to pass when wrapper version matches library, got detail: %q", r.detail)
 	}
 }

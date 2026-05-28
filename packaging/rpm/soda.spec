@@ -16,6 +16,7 @@ BuildRequires:  golang >= 1.24
 BuildRequires:  gcc
 BuildRequires:  git-core
 BuildRequires:  arapuca-devel
+Requires:       arapuca
 
 Conflicts:      soda-minimal
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/decko/soda/internal/runner"
@@ -76,12 +77,13 @@ func checkRunnerBinary(env *doctorEnv, runnerName, binaryName string) checkResul
 // Claude CLI checks are also skipped because those runners don't invoke
 // the Claude Code CLI; instead the runner-specific binary is checked.
 func runPreflight(env *doctorEnv, useMock bool, runnerName string) error {
-	return runPreflightFull(env, useMock, runnerName, "")
+	return runPreflightFull(env, useMock, runnerName, "", false)
 }
 
 // runPreflightFull is the extended version of runPreflight that accepts
-// a binaryOverride for the runner binary (e.g. from cfg.Pi.Binary).
-func runPreflightFull(env *doctorEnv, useMock bool, runnerName string, binaryOverride string) error {
+// a binaryOverride for the runner binary (e.g. from cfg.Pi.Binary) and
+// sandboxEnabled to gate the arapuca wrapper check.
+func runPreflightFull(env *doctorEnv, useMock bool, runnerName string, binaryOverride string, sandboxEnabled bool) error {
 	checks := []func(*doctorEnv) checkResult{
 		checkGit,
 		checkGitRepo,
@@ -101,6 +103,13 @@ func runPreflightFull(env *doctorEnv, useMock bool, runnerName string, binaryOve
 		}
 	}
 
+	if sandboxEnabled && !useMock {
+		checks = append(checks, func(env *doctorEnv) checkResult {
+			return arapucaWrapperCheck(env)
+		})
+		checks = append(checks, checkArapucaWrapperVersion)
+	}
+
 	// Config checks (checkConfig, checkConfigValid) are intentionally
 	// omitted here. loadConfig already validated the configuration
 	// (respecting --config) before runPipeline was called, so
@@ -115,6 +124,8 @@ func runPreflightFull(env *doctorEnv, useMock bool, runnerName string, binaryOve
 		}
 		if !result.passed && result.required {
 			failures = append(failures, result)
+		} else if !result.passed && !result.required {
+			fmt.Fprintf(os.Stderr, "Warning: %s: %s\n", result.name, result.detail)
 		}
 	}
 

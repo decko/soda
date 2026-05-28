@@ -435,7 +435,7 @@ func TestRunPreflightFull_CustomBinaryOverride(t *testing.T) {
 		return "/usr/bin/" + file, nil
 	}
 	// With binaryOverride="custom-pi", preflight should look for custom-pi instead of pi.
-	err := runPreflightFull(env, false, "pi", "custom-pi")
+	err := runPreflightFull(env, false, "pi", "custom-pi", false)
 	if err != nil {
 		t.Fatalf("expected no error with custom binary override, got: %v", err)
 	}
@@ -449,7 +449,7 @@ func TestRunPreflightFull_CustomBinaryMissing(t *testing.T) {
 		}
 		return "/usr/bin/" + file, nil
 	}
-	err := runPreflightFull(env, false, "pi", "custom-pi")
+	err := runPreflightFull(env, false, "pi", "custom-pi", false)
 	if err == nil {
 		t.Fatal("expected error when custom binary is missing")
 	}
@@ -468,5 +468,51 @@ func TestRunPreflightFull_CustomBinaryMissing(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected pi failure in PreflightError")
+	}
+}
+
+// --- sandbox preflight tests ---
+
+func TestRunPreflight_SandboxEnabledWrapperMissing(t *testing.T) {
+	env := allPassEnv()
+	env.ArapucaWrapperPath = func() string { return "" }
+	err := runPreflightFull(env, false, "", "", true)
+	if err == nil {
+		t.Fatal("expected error when sandbox enabled and wrapper missing")
+	}
+	var pe *PreflightError
+	if !errors.As(err, &pe) {
+		t.Fatalf("expected PreflightError, got %T", err)
+	}
+	found := false
+	for _, f := range pe.Failures {
+		if f.name == "arapuca-wrapper" {
+			found = true
+			if !strings.Contains(f.detail, "Landlock/seccomp") {
+				t.Errorf("expected detail to mention Landlock/seccomp, got: %q", f.detail)
+			}
+		}
+	}
+	if !found {
+		t.Error("expected arapuca-wrapper failure in PreflightError")
+	}
+}
+
+func TestRunPreflight_SandboxEnabledWrapperPresent(t *testing.T) {
+	env := allPassEnv()
+	env.ArapucaWrapperPath = func() string { return "/usr/bin/arapuca" }
+	err := runPreflightFull(env, false, "", "", true)
+	if err != nil {
+		t.Fatalf("expected no error when wrapper is present, got: %v", err)
+	}
+}
+
+func TestRunPreflight_SandboxDisabledNoWrapperCheck(t *testing.T) {
+	env := allPassEnv()
+	env.ArapucaWrapperPath = func() string { return "" }
+	// sandboxEnabled=false, so wrapper check should not run.
+	err := runPreflightFull(env, false, "", "", false)
+	if err != nil {
+		t.Fatalf("expected no error when sandbox disabled, got: %v", err)
 	}
 }

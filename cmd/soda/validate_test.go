@@ -1243,3 +1243,56 @@ func TestRunValidate_WithRunnerCheck(t *testing.T) {
 		t.Errorf("expected runner line in validate output, got stdout: %s\nstderr: %s", stdout.String(), stderr.String())
 	}
 }
+
+// --- validateSandboxWrapper tests ---
+
+func TestValidateSandboxWrapper_Disabled(t *testing.T) {
+	cfg := &config.Config{Sandbox: config.SandboxConfig{Enabled: false}}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	validateSandboxWrapper(&buf, result, cfg, func() string { return "" })
+
+	if result.hasErrors() {
+		t.Errorf("expected no errors when sandbox disabled, got: %v", result.errors)
+	}
+	output := buf.String()
+	if !strings.Contains(output, "✓ sandbox-wrapper: not needed") {
+		t.Errorf("expected 'not needed' message, got: %s", output)
+	}
+}
+
+func TestValidateSandboxWrapper_EnabledButMissing(t *testing.T) {
+	cfg := &config.Config{Sandbox: config.SandboxConfig{Enabled: true}}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	validateSandboxWrapper(&buf, result, cfg, func() string { return "" })
+
+	if !result.hasErrors() {
+		t.Error("expected error when sandbox enabled and wrapper missing")
+	}
+	found := false
+	for _, errMsg := range result.errors {
+		if strings.Contains(errMsg, "arapuca wrapper binary not found") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected error mentioning wrapper not found, got: %v", result.errors)
+	}
+}
+
+func TestValidateSandboxWrapper_EnabledAndPresent(t *testing.T) {
+	cfg := &config.Config{Sandbox: config.SandboxConfig{Enabled: true}}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	validateSandboxWrapper(&buf, result, cfg, func() string { return "/usr/bin/arapuca" })
+
+	if result.hasErrors() {
+		t.Errorf("expected no errors, got: %v", result.errors)
+	}
+	output := buf.String()
+	if !strings.Contains(output, "✓ sandbox-wrapper: /usr/bin/arapuca") {
+		t.Errorf("expected path in output, got: %s", output)
+	}
+}
