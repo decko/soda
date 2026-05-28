@@ -13,6 +13,9 @@ phases:
   - name: triage
     prompt: prompts/triage.md
     # schema: generated from schemas.TriageOutput (go generate ./schemas/...)
+    # mcp_servers: [jira, github]   # opt-in to MCP servers declared in soda.yaml
+    # allowed_mcp_tools:             # scope to specific tools; empty = all tools from declared servers
+    #   - "mcp__jira__jira_get_issues"
     tools:
       - Read
       - Glob
