@@ -76,12 +76,13 @@ func checkRunnerBinary(env *doctorEnv, runnerName, binaryName string) checkResul
 // Claude CLI checks are also skipped because those runners don't invoke
 // the Claude Code CLI; instead the runner-specific binary is checked.
 func runPreflight(env *doctorEnv, useMock bool, runnerName string) error {
-	return runPreflightFull(env, useMock, runnerName, "")
+	return runPreflightFull(env, useMock, runnerName, "", false)
 }
 
 // runPreflightFull is the extended version of runPreflight that accepts
-// a binaryOverride for the runner binary (e.g. from cfg.Pi.Binary).
-func runPreflightFull(env *doctorEnv, useMock bool, runnerName string, binaryOverride string) error {
+// a binaryOverride for the runner binary (e.g. from cfg.Pi.Binary) and
+// sandboxEnabled to gate the arapuca wrapper check.
+func runPreflightFull(env *doctorEnv, useMock bool, runnerName string, binaryOverride string, sandboxEnabled bool) error {
 	checks := []func(*doctorEnv) checkResult{
 		checkGit,
 		checkGitRepo,
@@ -99,6 +100,12 @@ func runPreflightFull(env *doctorEnv, useMock bool, runnerName string, binaryOve
 		default:
 			checks = append(checks, checkClaude, checkClaudeVersion)
 		}
+	}
+
+	if sandboxEnabled && !useMock {
+		checks = append(checks, func(env *doctorEnv) checkResult {
+			return arapucaWrapperCheck(env)
+		})
 	}
 
 	// Config checks (checkConfig, checkConfigValid) are intentionally

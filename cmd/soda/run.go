@@ -126,7 +126,7 @@ func runPipeline(cfg *config.Config, opts pipelineOpts) error {
 	case "opencode":
 		binaryOverride = cfg.Opencode.Binary
 	}
-	if err := runPreflightFull(defaultDoctorEnv(), opts.useMock, cfg.Runner, binaryOverride); err != nil {
+	if err := runPreflightFull(defaultDoctorEnv(), opts.useMock, cfg.Runner, binaryOverride, cfg.Sandbox.Enabled); err != nil {
 		return err
 	}
 
