@@ -49,6 +49,18 @@ model: claude-opus-4-6
 #   binary: opencode           # path to opencode binary; empty = exec.LookPath("opencode")
 #   model: claude-sonnet-4-20250514  # model override; empty = use top-level model
 
+# MCP server declarations — available to phases that opt in via mcp_servers
+# mcp:
+#   servers:
+#     jira:
+#       command: wtmcp
+#       args: [jira]
+#       env:
+#         JIRA_URL: "https://jira.example.com"
+#     github:
+#       command: wtmcp
+#       args: [github]
+
 # Authentication — optional keychain/vault-based credential injection.
 # When api_key_helper is set, SODA writes a Claude Code settings file
 # with apiKeyHelper pointing to this script. The script must print a

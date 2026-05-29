@@ -28,6 +28,7 @@ type Config struct {
 	Sandbox             SandboxConfig       `yaml:"sandbox"`
 	Pi                  PiConfig            `yaml:"pi,omitempty"`
 	Opencode            OpencodeConfig      `yaml:"opencode,omitempty"`
+	MCP                 MCPConfig           `yaml:"mcp,omitempty"`
 	Limits              LimitsConfig        `yaml:"limits"`
 	PhasesPath          string              `yaml:"phases_path"`    // explicit path to pipeline YAML; overrides CWD discovery
 	PipelinesPath       string              `yaml:"pipelines_path"` // directory for named pipeline YAML files (e.g. ".pipelines/"); checked before CWD discovery
@@ -53,6 +54,19 @@ type PiConfig struct {
 type OpencodeConfig struct {
 	Binary string `yaml:"binary,omitempty"` // path to opencode binary; empty = exec.LookPath("opencode")
 	Model  string `yaml:"model,omitempty"`  // model override for Opencode; empty = use top-level Model
+}
+
+// MCPServerConfig holds the definition of a single MCP server process.
+type MCPServerConfig struct {
+	Command string            `yaml:"command"`
+	Args    []string          `yaml:"args,omitempty"`
+	Env     map[string]string `yaml:"env,omitempty"`
+}
+
+// MCPConfig holds MCP server declarations available to pipeline phases.
+// Phases opt in to specific servers via their mcp_servers field.
+type MCPConfig struct {
+	Servers map[string]MCPServerConfig `yaml:"servers,omitempty"`
 }
 
 // TranscriptConfig controls agent transcript persistence.

@@ -53,6 +53,21 @@ func (r *ClaudeRunner) Run(ctx context.Context, opts RunOpts) (*RunResult, error
 		claudeOpts.SettingsPath = settingsPath
 	}
 
+	// When MCP servers are declared, write a temp config file and pass its
+	// path via --mcp-config + --strict-mcp-config. AllowedMCPTools are
+	// appended to the allowed-tools list so the CLI permits MCP tool calls.
+	if len(opts.MCPServers) > 0 {
+		mcpPath, mcpCleanup, mcpErr := writeMCPConfigFile(opts.WorkDir, opts.MCPServers)
+		if mcpErr != nil {
+			fmt.Fprintf(os.Stderr, "claude runner: warning: MCP config write failed: %v; continuing without MCP\n", mcpErr)
+		} else {
+			defer mcpCleanup()
+			claudeOpts.MCPConfigPath = mcpPath
+			claudeOpts.StrictMCPConfig = true
+		}
+		claudeOpts.AllowedTools = append(claudeOpts.AllowedTools, opts.AllowedMCPTools...)
+	}
+
 	// claude.Runner expects a file path for the system prompt, not content.
 	// Write content to a temp file and clean up after.
 	if opts.SystemPrompt != "" {

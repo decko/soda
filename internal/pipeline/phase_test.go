@@ -68,12 +68,12 @@ func TestLoadPipeline(t *testing.T) {
 			}
 		}
 
-		// First phase must be triage, last must be monitor.
+		// First phase must be triage, last must be follow-up.
 		if first := pipeline.Phases[0].Name; first != "triage" {
 			t.Errorf("first phase = %q, want %q", first, "triage")
 		}
-		if last := pipeline.Phases[len(pipeline.Phases)-1].Name; last != "monitor" {
-			t.Errorf("last phase = %q, want %q", last, "monitor")
+		if last := pipeline.Phases[len(pipeline.Phases)-1].Name; last != "follow-up" {
+			t.Errorf("last phase = %q, want %q", last, "follow-up")
 		}
 
 		// triage: no dependencies, correct timeout and retry.
@@ -81,8 +81,8 @@ func TestLoadPipeline(t *testing.T) {
 		if !ok {
 			t.Fatal("triage phase not found")
 		}
-		if triage.Timeout.Duration != 3*time.Minute {
-			t.Errorf("triage timeout = %v, want 3m", triage.Timeout.Duration)
+		if triage.Timeout.Duration != 8*time.Minute {
+			t.Errorf("triage timeout = %v, want 8m", triage.Timeout.Duration)
 		}
 		if triage.Retry.Transient != 2 {
 			t.Errorf("triage retry.transient = %d, want 2", triage.Retry.Transient)
@@ -177,23 +177,7 @@ func TestLoadPipeline(t *testing.T) {
 			}
 		}
 
-		// monitor: polling type with expected config.
-		monitor, ok := byName["monitor"]
-		if !ok {
-			t.Fatal("monitor phase not found")
-		}
-		if monitor.Type != "polling" {
-			t.Errorf("monitor type = %q, want %q", monitor.Type, "polling")
-		}
-		if monitor.Polling == nil {
-			t.Fatal("monitor polling config should not be nil")
-		}
-		if monitor.Polling.MaxResponseRounds != 3 {
-			t.Errorf("monitor max_response_rounds = %d, want 3", monitor.Polling.MaxResponseRounds)
-		}
-		if monitor.Polling.MaxDuration.Duration != 4*time.Hour {
-			t.Errorf("monitor max_duration = %v, want 4h", monitor.Polling.MaxDuration.Duration)
-		}
+		// monitor phase removed from default pipeline (users add it via named pipelines).
 	})
 
 	t.Run("resolves_generated_schemas", func(t *testing.T) {
@@ -1188,6 +1172,60 @@ func TestLoadPipeline(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "implement") {
 			t.Errorf("error = %q, want mention of phase name", err)
+		}
+	})
+
+	t.Run("mcp_servers_and_allowed_mcp_tools_parsed", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "phases.yaml")
+		content := `phases:
+  - name: triage
+    prompt: prompts/triage.md
+    timeout: 1m
+    mcp_servers: [jira]
+    allowed_mcp_tools:
+      - "mcp__jira__search"
+`
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		pipeline, err := LoadPipeline(path)
+		if err != nil {
+			t.Fatalf("LoadPipeline: %v", err)
+		}
+
+		phase := pipeline.Phases[0]
+		if len(phase.MCPServers) != 1 || phase.MCPServers[0] != "jira" {
+			t.Errorf("MCPServers = %v, want [jira]", phase.MCPServers)
+		}
+		if len(phase.AllowedMCPTools) != 1 || phase.AllowedMCPTools[0] != "mcp__jira__search" {
+			t.Errorf("AllowedMCPTools = %v, want [mcp__jira__search]", phase.AllowedMCPTools)
+		}
+	})
+
+	t.Run("mcp_servers_empty_when_absent", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "phases.yaml")
+		content := `phases:
+  - name: triage
+    prompt: prompts/triage.md
+    timeout: 1m
+`
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		pipeline, err := LoadPipeline(path)
+		if err != nil {
+			t.Fatalf("LoadPipeline: %v", err)
+		}
+
+		if len(pipeline.Phases[0].MCPServers) != 0 {
+			t.Errorf("MCPServers = %v, want empty", pipeline.Phases[0].MCPServers)
+		}
+		if len(pipeline.Phases[0].AllowedMCPTools) != 0 {
+			t.Errorf("AllowedMCPTools = %v, want empty", pipeline.Phases[0].AllowedMCPTools)
 		}
 	})
 

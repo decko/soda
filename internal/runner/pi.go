@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -67,6 +68,17 @@ func (r *PiRunner) Run(ctx context.Context, opts RunOpts) (*RunResult, error) {
 			return nil, fmt.Errorf("pi runner: write system prompt: %w", err)
 		}
 		defer cleanup()
+	}
+
+	// Pi does not support MCP servers; emit a warning so the operator
+	// knows the declaration has no effect.
+	if len(opts.MCPServers) > 0 {
+		names := make([]string, 0, len(opts.MCPServers))
+		for name := range opts.MCPServers {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		fmt.Fprintf(os.Stderr, "pi runner: warning: MCP servers %v declared but Pi does not support MCP; ignoring\n", names)
 	}
 
 	args := buildPiArgs(opts, r.model)

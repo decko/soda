@@ -55,9 +55,11 @@ type PhaseConfig struct {
 	MinReviewers     int               `yaml:"min_reviewers,omitempty"` // minimum successful reviewers required; 0 means all must succeed
 	Rework           *ReworkConfig     `yaml:"rework,omitempty"`
 	Corrective       *CorrectiveConfig `yaml:"corrective,omitempty"`
-	FeedbackFrom     []string          `yaml:"feedback_from,omitempty"` // ordered feedback sources injected into prompt
-	ContextBudget    int               `yaml:"prompt_budget,omitempty"` // max prompt tokens for adaptive fitting; 0 uses global default
-	Condition        string            `yaml:"condition,omitempty"`     // Go text/template evaluated at runtime; output "false" skips the phase
+	FeedbackFrom     []string          `yaml:"feedback_from,omitempty"`     // ordered feedback sources injected into prompt
+	MCPServers       []string          `yaml:"mcp_servers,omitempty"`       // opt-in to MCP servers declared in soda.yaml
+	AllowedMCPTools  []string          `yaml:"allowed_mcp_tools,omitempty"` // scope to specific MCP tools; empty = all tools from declared servers
+	ContextBudget    int               `yaml:"prompt_budget,omitempty"`     // max prompt tokens for adaptive fitting; 0 uses global default
+	Condition        string            `yaml:"condition,omitempty"`         // Go text/template evaluated at runtime; output "false" skips the phase
 }
 
 // ReworkConfig configures rework routing for a phase. When a phase with
