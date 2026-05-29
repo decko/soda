@@ -36,11 +36,7 @@ func writeMCPConfigFile(dir string, servers map[string]MCPServerConfig) (string,
 		MCPServers: make(map[string]mcpServerEntry, len(servers)),
 	}
 	for name, srv := range servers {
-		envelope.MCPServers[name] = mcpServerEntry{
-			Command: srv.Command,
-			Args:    srv.Args,
-			Env:     srv.Env,
-		}
+		envelope.MCPServers[name] = mcpServerEntry(srv)
 	}
 
 	data, err := json.Marshal(envelope)
@@ -73,11 +69,8 @@ func writeMCPConfigFile(dir string, servers map[string]MCPServerConfig) (string,
 	return f.Name(), cleanup, nil
 }
 
-// opencodeMCPEnvelope is the JSON structure for Opencode's .opencode.json
-// with MCP server declarations.
-type opencodeMCPEnvelope struct {
-	MCPServers map[string]mcpServerEntry `json:"mcpServers"`
-}
+// mcpServerEntry has the same fields as config.MCPServerConfig, enabling
+// direct type conversion. The separate type exists for JSON tag control.
 
 // writeOpencodeMCPConfig writes (or merges) MCP server declarations into
 // {workDir}/.opencode.json. If the file already exists, the mcpServers key
@@ -103,11 +96,7 @@ func writeOpencodeMCPConfig(workDir string, servers map[string]MCPServerConfig) 
 	// Build the MCP servers map.
 	mcpEntries := make(map[string]mcpServerEntry, len(servers))
 	for name, srv := range servers {
-		mcpEntries[name] = mcpServerEntry{
-			Command: srv.Command,
-			Args:    srv.Args,
-			Env:     srv.Env,
-		}
+		mcpEntries[name] = mcpServerEntry(srv)
 	}
 
 	// Merge into existing JSON or create fresh.
