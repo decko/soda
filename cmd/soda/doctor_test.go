@@ -3,8 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -14,6 +16,43 @@ import (
 	"github.com/decko/soda/internal/config"
 	"github.com/decko/soda/internal/runner"
 )
+
+// TestMain is the subprocess entry point. When TEST_MCP_SERVER is set,
+// this binary acts as a minimal mock MCP server for defaultProbeMCPServer tests.
+func TestMain(m *testing.M) {
+	if os.Getenv("TEST_MCP_SERVER") != "" {
+		runMockMCPServer()
+		return
+	}
+	os.Exit(m.Run())
+}
+
+// runMockMCPServer handles the JSON-RPC initialize/tools-list handshake.
+func runMockMCPServer() {
+	dec := json.NewDecoder(os.Stdin)
+	enc := json.NewEncoder(os.Stdout)
+	var req jsonRPCRequest
+	if err := dec.Decode(&req); err != nil {
+		os.Exit(1)
+	}
+	_ = enc.Encode(jsonRPCResponse{
+		JSONRPC: "2.0",
+		ID:      req.ID,
+		Result:  json.RawMessage(`{"capabilities":{"tools":{}},"protocolVersion":"2024-11-05"}`),
+	})
+	var notif map[string]interface{}
+	_ = dec.Decode(&notif)
+	var toolsReq jsonRPCRequest
+	if err := dec.Decode(&toolsReq); err != nil {
+		os.Exit(1)
+	}
+	_ = enc.Encode(jsonRPCResponse{
+		JSONRPC: "2.0",
+		ID:      toolsReq.ID,
+		Result:  json.RawMessage(`{"tools":[{},{},{}]}`),
+	})
+	_, _ = io.Copy(io.Discard, os.Stdin)
+}
 
 // mockFileInfo implements os.FileInfo for tests.
 type mockFileInfo struct {
@@ -2817,5 +2856,19 @@ func TestDefaultProbeMCPServer_ContextCancelled(t *testing.T) {
 	result := defaultProbeMCPServer(ctx, "echo", nil, nil)
 	if result.Err == nil {
 		t.Fatal("expected error for cancelled context")
+	}
+}
+
+// TestDefaultProbeMCPServer_Handshake exercises the full JSON-RPC initialize
+// handshake and tools/list path using this test binary as a mock MCP server.
+func TestDefaultProbeMCPServer_Handshake(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	result := defaultProbeMCPServer(ctx, os.Args[0], nil, map[string]string{"TEST_MCP_SERVER": "1"})
+	if result.Err != nil {
+		t.Fatalf("expected no error, got: %v", result.Err)
+	}
+	if result.ToolCount != 3 {
+		t.Errorf("expected 3 tools, got %d", result.ToolCount)
 	}
 }
