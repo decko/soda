@@ -87,12 +87,15 @@ func (a *ClaudeAdapter) BuildArgs(opts runner.RunOpts, tmpDir string) ([]string,
 		sf.Close()
 	}
 
-	// When MCP servers are declared, write a temp config file into tmpDir
-	// and pass its path via --mcp-config + --strict-mcp-config. The file
-	// is cleaned up when tmpDir is removed, so no explicit defer is needed.
+	// When MCP servers are declared, resolve commands to absolute paths so
+	// the agent spawns them without relying on the sandbox's restricted PATH,
+	// then write a temp config file into tmpDir and pass its path via
+	// --mcp-config + --strict-mcp-config. The file is cleaned up when tmpDir
+	// is removed, so no explicit defer is needed.
 	var mcpConfigPath string
 	if len(opts.MCPServers) > 0 {
-		mcpPath, _, mcpErr := runner.WriteMCPConfigFile(tmpDir, opts.MCPServers)
+		resolvedServers := resolveMCPCommands(opts.MCPServers)
+		mcpPath, _, mcpErr := runner.WriteMCPConfigFile(tmpDir, resolvedServers)
 		if mcpErr != nil {
 			fmt.Fprintf(os.Stderr, "sandbox: warning: MCP config write failed: %v; continuing without MCP\n", mcpErr)
 		} else {

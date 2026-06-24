@@ -70,11 +70,14 @@ func (a *OpencodeAdapter) BuildArgs(opts runner.RunOpts, tmpDir string) ([]strin
 		}
 	}
 
-	// When MCP servers are declared, write them into {tmpDir}/.opencode.json
-	// so Opencode discovers them via HOME=tmpDir. The file is cleaned up
-	// when tmpDir is removed, so no explicit cleanup is needed.
+	// When MCP servers are declared, resolve commands to absolute paths so
+	// the agent spawns them without relying on the sandbox's restricted PATH,
+	// then write them into {tmpDir}/.opencode.json so Opencode discovers them
+	// via HOME=tmpDir. The file is cleaned up when tmpDir is removed, so no
+	// explicit cleanup is needed.
 	if len(opts.MCPServers) > 0 {
-		_, mcpErr := runner.WriteOpencodeMCPConfig(tmpDir, opts.MCPServers)
+		resolvedServers := resolveMCPCommands(opts.MCPServers)
+		_, mcpErr := runner.WriteOpencodeMCPConfig(tmpDir, resolvedServers)
 		if mcpErr != nil {
 			fmt.Fprintf(os.Stderr, "sandbox: warning: opencode MCP config write failed: %v; continuing without MCP\n", mcpErr)
 		}

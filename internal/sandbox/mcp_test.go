@@ -26,6 +26,14 @@ func TestClaudeAdapterBuildArgsMCP(t *testing.T) {
 	}
 
 	t.Run("writes_mcp_config_to_tmpdir", func(t *testing.T) {
+		// Create a fake MCP binary so resolveMCPCommands can resolve it.
+		mcpDir := t.TempDir()
+		fakeMCP := filepath.Join(mcpDir, "jira-mcp")
+		if err := os.WriteFile(fakeMCP, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatalf("write fake mcp binary: %v", err)
+		}
+		t.Setenv("PATH", mcpDir+":"+binDir+":"+os.Getenv("PATH"))
+
 		tmpDir := t.TempDir()
 		opts := runner.RunOpts{
 			UserPrompt: "do the thing",
@@ -79,8 +87,12 @@ func TestClaudeAdapterBuildArgsMCP(t *testing.T) {
 		if !ok {
 			t.Fatal("jira server not found in MCP config JSON")
 		}
-		if jira.Command != "jira-mcp" {
-			t.Errorf("jira.Command = %q, want %q", jira.Command, "jira-mcp")
+		// Command should be resolved to absolute path by resolveMCPCommands.
+		if !filepath.IsAbs(jira.Command) {
+			t.Errorf("jira.Command = %q, want absolute path", jira.Command)
+		}
+		if filepath.Base(jira.Command) != "jira-mcp" {
+			t.Errorf("jira.Command base = %q, want %q", filepath.Base(jira.Command), "jira-mcp")
 		}
 		if jira.Env["JIRA_URL"] != "https://jira.example.com" {
 			t.Errorf("jira.Env[JIRA_URL] = %q, want %q", jira.Env["JIRA_URL"], "https://jira.example.com")
@@ -148,6 +160,14 @@ func TestOpencodeAdapterBuildArgsMCP(t *testing.T) {
 	}
 
 	t.Run("writes_opencode_json_to_tmpdir", func(t *testing.T) {
+		// Create a fake MCP binary so resolveMCPCommands can resolve it.
+		mcpDir := t.TempDir()
+		fakeMCP := filepath.Join(mcpDir, "gh-mcp")
+		if err := os.WriteFile(fakeMCP, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatalf("write fake mcp binary: %v", err)
+		}
+		t.Setenv("PATH", mcpDir+":"+binDir+":"+os.Getenv("PATH"))
+
 		tmpDir := t.TempDir()
 		opts := runner.RunOpts{
 			Phase:      "implement",
@@ -191,8 +211,12 @@ func TestOpencodeAdapterBuildArgsMCP(t *testing.T) {
 		if !ok {
 			t.Fatal("github server not found in .opencode.json")
 		}
-		if gh.Command != "gh-mcp" {
-			t.Errorf("github.Command = %q, want %q", gh.Command, "gh-mcp")
+		// Command should be resolved to absolute path by resolveMCPCommands.
+		if !filepath.IsAbs(gh.Command) {
+			t.Errorf("github.Command = %q, want absolute path", gh.Command)
+		}
+		if filepath.Base(gh.Command) != "gh-mcp" {
+			t.Errorf("github.Command base = %q, want %q", filepath.Base(gh.Command), "gh-mcp")
 		}
 	})
 

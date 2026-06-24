@@ -57,6 +57,41 @@ func resolveMCPBinaryReadPaths(servers map[string]runner.MCPServerConfig) []stri
 	return paths
 }
 
+// resolveMCPCommands returns a copy of servers with each Command resolved to
+// an absolute path via exec.LookPath + filepath.EvalSymlinks. This ensures the
+// agent spawns MCP server binaries via absolute paths, avoiding PATH lookup
+// failures inside the sandbox (where PATH is constructed from scratch and may
+// not include the MCP binary directory). Missing binaries emit a warning to
+// stderr and retain their original (unresolved) command — the agent will fail
+// at spawn time with a clear error.
+func resolveMCPCommands(servers map[string]runner.MCPServerConfig) map[string]runner.MCPServerConfig {
+	if len(servers) == 0 {
+		return servers
+	}
+	resolved := make(map[string]runner.MCPServerConfig, len(servers))
+	for name, srv := range servers {
+		if srv.Command == "" {
+			resolved[name] = srv
+			continue
+		}
+		absPath, err := exec.LookPath(srv.Command)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "sandbox: warning: MCP server %q binary %q not found in PATH, keeping as-is\n", name, srv.Command)
+			resolved[name] = srv
+			continue
+		}
+		absPath, err = filepath.EvalSymlinks(absPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "sandbox: warning: MCP server %q binary %q symlink resolve failed, keeping as-is\n", name, srv.Command)
+			resolved[name] = srv
+			continue
+		}
+		srv.Command = absPath
+		resolved[name] = srv
+	}
+	return resolved
+}
+
 func envOrDefault(key, fallback string) string {
 	if val := os.Getenv(key); val != "" {
 		return val
