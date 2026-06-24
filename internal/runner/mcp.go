@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 )
 
@@ -36,7 +37,9 @@ func WriteMCPConfigFile(dir string, servers map[string]MCPServerConfig) (string,
 		MCPServers: make(map[string]mcpServerEntry, len(servers)),
 	}
 	for name, srv := range servers {
-		envelope.MCPServers[name] = mcpServerEntry(srv)
+		entry := mcpServerEntry(srv)
+		entry.Command = resolveMCPCommand(srv.Command)
+		envelope.MCPServers[name] = entry
 	}
 
 	data, err := json.Marshal(envelope)
@@ -93,10 +96,13 @@ func WriteOpencodeMCPConfig(workDir string, servers map[string]MCPServerConfig) 
 	existing, readErr := os.ReadFile(configPath)
 	hadExisting := readErr == nil
 
-	// Build the MCP servers map.
+	// Build the MCP servers map. Resolve bare command names to absolute
+	// paths so the agent process can find them without relying on PATH.
 	mcpEntries := make(map[string]mcpServerEntry, len(servers))
 	for name, srv := range servers {
-		mcpEntries[name] = mcpServerEntry(srv)
+		entry := mcpServerEntry(srv)
+		entry.Command = resolveMCPCommand(srv.Command)
+		mcpEntries[name] = entry
 	}
 
 	// Merge into existing JSON or create fresh.
@@ -128,4 +134,25 @@ func WriteOpencodeMCPConfig(workDir string, servers map[string]MCPServerConfig) 
 		}
 	}
 	return cleanup, nil
+}
+
+// resolveMCPCommand resolves a bare MCP server command name to its absolute
+// path via exec.LookPath + filepath.EvalSymlinks. This ensures the agent
+// process inside the sandbox can execute the binary without relying on PATH
+// (the sandbox PATH may not include the directory containing the binary).
+// If the command is already absolute, empty, or cannot be resolved, the
+// original value is returned unchanged.
+func resolveMCPCommand(command string) string {
+	if command == "" || filepath.IsAbs(command) {
+		return command
+	}
+	resolved, err := exec.LookPath(command)
+	if err != nil {
+		return command
+	}
+	resolved, err = filepath.EvalSymlinks(resolved)
+	if err != nil {
+		return command
+	}
+	return resolved
 }
