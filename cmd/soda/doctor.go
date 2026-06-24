@@ -1229,6 +1229,14 @@ type jsonRPCRequest struct {
 	Params  interface{} `json:"params,omitempty"`
 }
 
+// jsonRPCNotification is a JSON-RPC 2.0 notification envelope.
+// Notifications must not include an id field per the spec.
+type jsonRPCNotification struct {
+	JSONRPC string      `json:"jsonrpc"`
+	Method  string      `json:"method"`
+	Params  interface{} `json:"params,omitempty"`
+}
+
 // jsonRPCResponse is a minimal JSON-RPC 2.0 response envelope.
 type jsonRPCResponse struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -1324,9 +1332,9 @@ func defaultProbeMCPServer(ctx context.Context, command string, args []string, e
 	}
 
 	// Send initialized notification (required by MCP protocol).
-	initializedNotif := jsonRPCRequest{
+	// Notifications must not include an id field per JSON-RPC 2.0 spec.
+	initializedNotif := jsonRPCNotification{
 		JSONRPC: "2.0",
-		ID:      0,
 		Method:  "notifications/initialized",
 	}
 	_ = encoder.Encode(initializedNotif)
