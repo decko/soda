@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -2579,5 +2580,242 @@ func TestCheckArapucaWrapperVersion_PassesWhenVersionCurrent(t *testing.T) {
 	r := checkArapucaWrapperVersion(env)
 	if !r.passed {
 		t.Errorf("expected check to pass when wrapper version matches library, got detail: %q", r.detail)
+	}
+}
+
+// --- checkMCPServers tests ---
+
+func TestCheckMCPServers_SkippedWhenNoConfig(t *testing.T) {
+	env := allPassEnv()
+	env.ParsedConfig = nil
+	r := checkMCPServers(env)
+	if !r.skipped {
+		t.Error("expected skipped when ParsedConfig is nil")
+	}
+	if r.name != "mcp-servers" {
+		t.Errorf("expected name 'mcp-servers', got %q", r.name)
+	}
+}
+
+func TestCheckMCPServers_SkippedWhenNoServers(t *testing.T) {
+	env := allPassEnv()
+	env.ParsedConfig = &config.Config{}
+	r := checkMCPServers(env)
+	if !r.skipped {
+		t.Error("expected skipped when no MCP servers configured")
+	}
+	if !strings.Contains(r.detail, "no MCP servers") {
+		t.Errorf("expected detail to mention no MCP servers, got: %q", r.detail)
+	}
+}
+
+func TestCheckMCPServers_CommandNotFound(t *testing.T) {
+	env := allPassEnv()
+	env.ParsedConfig = &config.Config{
+		MCP: config.MCPConfig{
+			Servers: map[string]config.MCPServerConfig{
+				"jira": {Command: "wtmcp", Args: []string{"jira"}},
+			},
+		},
+	}
+	env.LookPath = func(file string) (string, error) {
+		if file == "wtmcp" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + file, nil
+	}
+	r := checkMCPServers(env)
+	if r.passed {
+		t.Error("expected check to fail when command not found")
+	}
+	if r.required {
+		t.Error("expected check to be optional (required=false)")
+	}
+	if !strings.Contains(r.detail, "not found in PATH") {
+		t.Errorf("expected detail to mention not found in PATH, got: %q", r.detail)
+	}
+}
+
+func TestCheckMCPServers_ProbeSuccess(t *testing.T) {
+	env := allPassEnv()
+	env.ParsedConfig = &config.Config{
+		MCP: config.MCPConfig{
+			Servers: map[string]config.MCPServerConfig{
+				"jira": {Command: "wtmcp", Args: []string{"jira"}},
+			},
+		},
+	}
+	env.ProbeMCPServer = func(ctx context.Context, command string, args []string, envVars map[string]string) mcpProbeResult {
+		return mcpProbeResult{ToolCount: 12, Duration: 500 * time.Millisecond}
+	}
+	r := checkMCPServers(env)
+	if !r.passed {
+		t.Errorf("expected check to pass, got detail: %q", r.detail)
+	}
+	if r.required {
+		t.Error("expected check to be optional (required=false)")
+	}
+	if !strings.Contains(r.detail, "12 tools") {
+		t.Errorf("expected '12 tools' in detail, got: %q", r.detail)
+	}
+}
+
+func TestCheckMCPServers_ProbeFailure(t *testing.T) {
+	env := allPassEnv()
+	env.ParsedConfig = &config.Config{
+		MCP: config.MCPConfig{
+			Servers: map[string]config.MCPServerConfig{
+				"jira": {Command: "wtmcp", Args: []string{"jira"}},
+			},
+		},
+	}
+	env.ProbeMCPServer = func(ctx context.Context, command string, args []string, envVars map[string]string) mcpProbeResult {
+		return mcpProbeResult{ToolCount: -1, Duration: 100 * time.Millisecond, Err: fmt.Errorf("connection refused")}
+	}
+	r := checkMCPServers(env)
+	if r.passed {
+		t.Error("expected check to fail when probe fails")
+	}
+	if r.required {
+		t.Error("expected check to be optional (required=false)")
+	}
+	if !strings.Contains(r.detail, "connection refused") {
+		t.Errorf("expected 'connection refused' in detail, got: %q", r.detail)
+	}
+}
+
+func TestCheckMCPServers_ProbeError(t *testing.T) {
+	env := allPassEnv()
+	env.ParsedConfig = &config.Config{
+		MCP: config.MCPConfig{
+			Servers: map[string]config.MCPServerConfig{
+				"slow": {Command: "wtmcp", Args: []string{"slow"}},
+			},
+		},
+	}
+	env.ProbeMCPServer = func(ctx context.Context, command string, args []string, envVars map[string]string) mcpProbeResult {
+		return mcpProbeResult{ToolCount: -1, Duration: 5 * time.Second, Err: fmt.Errorf("probe failed")}
+	}
+	r := checkMCPServers(env)
+	if r.passed {
+		t.Error("expected check to fail on error")
+	}
+	if !strings.Contains(r.detail, "probe failed") {
+		t.Errorf("expected 'probe failed' in detail, got: %q", r.detail)
+	}
+}
+
+func TestCheckMCPServers_MultipleServers(t *testing.T) {
+	env := allPassEnv()
+	env.ParsedConfig = &config.Config{
+		MCP: config.MCPConfig{
+			Servers: map[string]config.MCPServerConfig{
+				"jira":   {Command: "wtmcp", Args: []string{"jira"}},
+				"github": {Command: "gh-mcp", Args: []string{"serve"}},
+			},
+		},
+	}
+	env.ProbeMCPServer = func(ctx context.Context, command string, args []string, envVars map[string]string) mcpProbeResult {
+		if command == "wtmcp" {
+			return mcpProbeResult{ToolCount: 5, Duration: 200 * time.Millisecond}
+		}
+		return mcpProbeResult{ToolCount: 3, Duration: 300 * time.Millisecond}
+	}
+	r := checkMCPServers(env)
+	if !r.passed {
+		t.Errorf("expected check to pass when all probes succeed, got detail: %q", r.detail)
+	}
+	// Both server names should appear in detail.
+	if !strings.Contains(r.detail, "jira") || !strings.Contains(r.detail, "github") {
+		t.Errorf("expected both server names in detail, got: %q", r.detail)
+	}
+}
+
+func TestCheckMCPServers_ToolCountUnknown(t *testing.T) {
+	env := allPassEnv()
+	env.ParsedConfig = &config.Config{
+		MCP: config.MCPConfig{
+			Servers: map[string]config.MCPServerConfig{
+				"custom": {Command: "my-mcp"},
+			},
+		},
+	}
+	env.ProbeMCPServer = func(ctx context.Context, command string, args []string, envVars map[string]string) mcpProbeResult {
+		return mcpProbeResult{ToolCount: -1, Duration: 100 * time.Millisecond}
+	}
+	r := checkMCPServers(env)
+	if !r.passed {
+		t.Errorf("expected check to pass, got detail: %q", r.detail)
+	}
+	if !strings.Contains(r.detail, "tools unknown") {
+		t.Errorf("expected 'tools unknown' in detail, got: %q", r.detail)
+	}
+}
+
+func TestRunDoctor_MCPServersSkippedWhenNoConfig(t *testing.T) {
+	env := allPassEnv()
+	var buf bytes.Buffer
+	err := runDoctor(&buf, env)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	out := buf.String()
+	// MCP servers should appear as skipped.
+	if !strings.Contains(out, "mcp-servers:") {
+		t.Errorf("expected mcp-servers line in doctor output, got:\n%s", out)
+	}
+}
+
+func TestRunDoctor_MCPServersProbeSuccess(t *testing.T) {
+	env := allPassEnv()
+	env.LoadConfig = func(path string) (*config.Config, error) {
+		return &config.Config{
+			MCP: config.MCPConfig{
+				Servers: map[string]config.MCPServerConfig{
+					"jira": {Command: "wtmcp", Args: []string{"jira"}},
+				},
+			},
+			GitHub: config.GitHubTicketConfig{
+				Owner: "test-org",
+				Repo:  "test-repo",
+			},
+		}, nil
+	}
+	env.ProbeMCPServer = func(ctx context.Context, command string, args []string, envVars map[string]string) mcpProbeResult {
+		return mcpProbeResult{ToolCount: 8, Duration: 300 * time.Millisecond}
+	}
+	var buf bytes.Buffer
+	err := runDoctor(&buf, env)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "✓ mcp-servers:") {
+		t.Errorf("expected ✓ mcp-servers line, got:\n%s", out)
+	}
+	if !strings.Contains(out, "8 tools") {
+		t.Errorf("expected '8 tools' in output, got:\n%s", out)
+	}
+}
+
+// --- defaultProbeMCPServer tests ---
+
+func TestDefaultProbeMCPServer_CommandNotFound(t *testing.T) {
+	ctx := context.Background()
+	result := defaultProbeMCPServer(ctx, "nonexistent-mcp-binary-xyz", nil, nil)
+	if result.Err == nil {
+		t.Fatal("expected error for nonexistent command")
+	}
+	if result.ToolCount != -1 {
+		t.Errorf("expected ToolCount -1, got %d", result.ToolCount)
+	}
+}
+
+func TestDefaultProbeMCPServer_ContextCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately.
+	result := defaultProbeMCPServer(ctx, "echo", nil, nil)
+	if result.Err == nil {
+		t.Fatal("expected error for cancelled context")
 	}
 }
