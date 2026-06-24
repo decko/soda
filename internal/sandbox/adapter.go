@@ -10,4 +10,5 @@ type AgentAdapter interface {
 	BuildEnv(opts runner.RunOpts, tmpDir string, proxyURL string) []string
 	ParseOutput(stdout []byte, opts runner.RunOpts) (*runner.RunResult, error)
 	ExtraPaths(opts runner.RunOpts) (read []string, write []string)
+	MCPExtraPaths(servers map[string]runner.MCPServerConfig) (read []string, write []string)
 }
