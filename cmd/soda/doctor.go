@@ -43,6 +43,7 @@ type doctorEnv struct {
 	ExecInstallCmd     func(cmd string) error                                                                         // runs an install command (sh -c); nil = default
 	ArapucaWrapperPath func() string                                                                                  // returns path to arapuca wrapper binary; "" = not found
 	ProbeMCPServer     func(ctx context.Context, command string, args []string, env map[string]string) mcpProbeResult // probes an MCP server; nil = use defaultProbeMCPServer
+	MCPProbeTimeout    time.Duration                                                                                  // timeout per MCP server probe; 0 = use mcpProbeTimeout default
 
 	// ParsedConfig is populated by checkConfigValid on success.
 	// Downstream checks use it to adjust their required status.
@@ -113,11 +114,15 @@ Use --install to be prompted to auto-install missing agent CLIs.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			env := defaultDoctorEnv()
 			install, _ := cmd.Flags().GetBool("install")
+			if timeout, err := cmd.Flags().GetDuration("timeout"); err == nil && timeout > 0 {
+				env.MCPProbeTimeout = timeout
+			}
 			return runDoctorFull(cmd.OutOrStdout(), cmd.InOrStdin(), env, install)
 		},
 	}
 
 	cmd.Flags().Bool("install", false, "prompt to install missing agent CLIs")
+	cmd.Flags().Duration("timeout", mcpProbeTimeout, "timeout per MCP server probe")
 
 	return cmd
 }
@@ -1173,6 +1178,11 @@ func checkMCPServers(env *doctorEnv) checkResult {
 		probeFn = defaultProbeMCPServer
 	}
 
+	probeTimeout := env.MCPProbeTimeout
+	if probeTimeout <= 0 {
+		probeTimeout = mcpProbeTimeout
+	}
+
 	var details []string
 	allPassed := true
 	for name, server := range servers {
@@ -1183,13 +1193,13 @@ func checkMCPServers(env *doctorEnv) checkResult {
 			continue
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), mcpProbeTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
 		result := probeFn(ctx, server.Command, server.Args, server.Env)
 		cancel()
 
 		if result.Err != nil {
 			if ctx.Err() == context.DeadlineExceeded {
-				details = append(details, fmt.Sprintf("%s: timeout after %s", name, mcpProbeTimeout))
+				details = append(details, fmt.Sprintf("%s: timeout after %s", name, probeTimeout))
 			} else {
 				details = append(details, fmt.Sprintf("%s: %v", name, result.Err))
 			}
