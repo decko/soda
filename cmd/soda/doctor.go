@@ -1142,8 +1142,8 @@ type mcpProbeResult struct {
 	Err       error         // nil on success
 }
 
-// mcpProbeTimeout is the context timeout for each MCP server probe.
-const mcpProbeTimeout = 10 * time.Second
+// mcpProbeTimeout is the default context timeout for each MCP server probe.
+const mcpProbeTimeout = 5 * time.Second
 
 // checkMCPServers verifies configured MCP servers by probing each one.
 // Returns a single aggregate checkResult with all server statuses in
