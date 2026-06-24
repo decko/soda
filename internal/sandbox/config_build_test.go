@@ -166,6 +166,74 @@ func TestProxyConfigFields(t *testing.T) {
 	}
 }
 
+func TestEffectiveUseNetNS(t *testing.T) {
+	tests := []struct {
+		name       string
+		configured bool
+		servers    map[string]runner.MCPServerConfig
+		want       bool
+	}{
+		{
+			name:       "nil_servers_returns_configured_true",
+			configured: true,
+			servers:    nil,
+			want:       true,
+		},
+		{
+			name:       "nil_servers_returns_configured_false",
+			configured: false,
+			servers:    nil,
+			want:       false,
+		},
+		{
+			name:       "empty_servers_returns_configured_true",
+			configured: true,
+			servers:    map[string]runner.MCPServerConfig{},
+			want:       true,
+		},
+		{
+			name:       "non_empty_servers_forces_false",
+			configured: true,
+			servers: map[string]runner.MCPServerConfig{
+				"jira": {Command: "jira-mcp"},
+			},
+			want: false,
+		},
+		{
+			name:       "non_empty_servers_configured_false",
+			configured: false,
+			servers: map[string]runner.MCPServerConfig{
+				"github": {Command: "gh-mcp"},
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := effectiveUseNetNS(tt.configured, tt.servers)
+			if got != tt.want {
+				t.Errorf("effectiveUseNetNS(%v, %v) = %v, want %v",
+					tt.configured, tt.servers, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMCPNetworkWarning(t *testing.T) {
+	warning := mcpNetworkWarning("implement")
+
+	if !strings.Contains(warning, "implement") {
+		t.Errorf("warning should contain phase name, got: %s", warning)
+	}
+	if !strings.Contains(warning, "network isolation") {
+		t.Errorf("warning should contain 'network isolation', got: %s", warning)
+	}
+	if !strings.Contains(warning, "MCP") {
+		t.Errorf("warning should contain 'MCP', got: %s", warning)
+	}
+}
+
 // containsPath returns true if paths contains target.
 func containsPath(paths []string, target string) bool {
 	for _, p := range paths {

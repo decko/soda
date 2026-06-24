@@ -70,6 +70,19 @@ func (a *OpencodeAdapter) BuildArgs(opts runner.RunOpts, tmpDir string) ([]strin
 		}
 	}
 
+	// When MCP servers are declared, resolve commands to absolute paths so
+	// the agent spawns them without relying on the sandbox's restricted PATH,
+	// then write them into {tmpDir}/.opencode.json so Opencode discovers them
+	// via HOME=tmpDir. The file is cleaned up when tmpDir is removed, so no
+	// explicit cleanup is needed.
+	if len(opts.MCPServers) > 0 {
+		resolvedServers := resolveMCPCommands(opts.MCPServers)
+		_, mcpErr := runner.WriteOpencodeMCPConfig(tmpDir, resolvedServers)
+		if mcpErr != nil {
+			fmt.Fprintf(os.Stderr, "sandbox: warning: opencode MCP config write failed: %v; continuing without MCP\n", mcpErr)
+		}
+	}
+
 	args := []string{
 		"--print",
 		"--output-format", "stream-json",
@@ -145,6 +158,13 @@ func (a *OpencodeAdapter) ExtraPaths(opts runner.RunOpts) (read []string, write 
 	}
 
 	return read, nil
+}
+
+// MCPExtraPaths returns additional read and write paths required for MCP
+// server binaries. Write paths are nil — MCP servers that need temp files
+// use tmpDir, which buildSandboxPaths already makes a write path.
+func (a *OpencodeAdapter) MCPExtraPaths(servers map[string]runner.MCPServerConfig) (read []string, write []string) {
+	return resolveMCPBinaryReadPaths(servers), nil
 }
 
 // resolveOpencodePaths finds the opencode binary and collects paths needed for

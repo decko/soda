@@ -82,7 +82,7 @@ func (r *OpencodeRunner) Run(ctx context.Context, opts RunOpts) (*RunResult, err
 
 	// When MCP servers are declared, write/merge them into .opencode.json.
 	if len(opts.MCPServers) > 0 {
-		mcpCleanup, mcpErr := writeOpencodeMCPConfig(opts.WorkDir, opts.MCPServers)
+		mcpCleanup, mcpErr := WriteOpencodeMCPConfig(opts.WorkDir, opts.MCPServers)
 		if mcpErr != nil {
 			fmt.Fprintf(os.Stderr, "opencode runner: warning: MCP config write failed: %v; continuing without MCP\n", mcpErr)
 		} else {

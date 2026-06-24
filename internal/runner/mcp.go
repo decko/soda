@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 )
 
@@ -19,11 +20,11 @@ type mcpServerEntry struct {
 	Env     map[string]string `json:"env,omitempty"`
 }
 
-// writeMCPConfigFile writes a Claude Code MCP config JSON file to dir and
+// WriteMCPConfigFile writes a Claude Code MCP config JSON file to dir and
 // returns the file path and a cleanup function. The cleanup function removes
 // the file. The file is created with mode 0600 because env fields may
 // contain API keys or other secrets.
-func writeMCPConfigFile(dir string, servers map[string]MCPServerConfig) (string, func(), error) {
+func WriteMCPConfigFile(dir string, servers map[string]MCPServerConfig) (string, func(), error) {
 	if dir == "" {
 		dir = os.TempDir()
 	}
@@ -36,7 +37,9 @@ func writeMCPConfigFile(dir string, servers map[string]MCPServerConfig) (string,
 		MCPServers: make(map[string]mcpServerEntry, len(servers)),
 	}
 	for name, srv := range servers {
-		envelope.MCPServers[name] = mcpServerEntry(srv)
+		entry := mcpServerEntry(srv)
+		entry.Command = resolveMCPCommand(srv.Command)
+		envelope.MCPServers[name] = entry
 	}
 
 	data, err := json.Marshal(envelope)
@@ -72,13 +75,13 @@ func writeMCPConfigFile(dir string, servers map[string]MCPServerConfig) (string,
 // mcpServerEntry has the same fields as config.MCPServerConfig, enabling
 // direct type conversion. The separate type exists for JSON tag control.
 
-// writeOpencodeMCPConfig writes (or merges) MCP server declarations into
+// WriteOpencodeMCPConfig writes (or merges) MCP server declarations into
 // {workDir}/.opencode.json. If the file already exists, the mcpServers key
 // is merged into the existing JSON, preserving other keys (providers, models,
 // etc.). The file is created with mode 0600 because env fields may contain
 // secrets. The returned cleanup function restores the original file content
 // or removes it if it did not exist prior to the call.
-func writeOpencodeMCPConfig(workDir string, servers map[string]MCPServerConfig) (func(), error) {
+func WriteOpencodeMCPConfig(workDir string, servers map[string]MCPServerConfig) (func(), error) {
 	if workDir == "" {
 		workDir = os.TempDir()
 	}
@@ -93,10 +96,13 @@ func writeOpencodeMCPConfig(workDir string, servers map[string]MCPServerConfig) 
 	existing, readErr := os.ReadFile(configPath)
 	hadExisting := readErr == nil
 
-	// Build the MCP servers map.
+	// Build the MCP servers map. Resolve bare command names to absolute
+	// paths so the agent process can find them without relying on PATH.
 	mcpEntries := make(map[string]mcpServerEntry, len(servers))
 	for name, srv := range servers {
-		mcpEntries[name] = mcpServerEntry(srv)
+		entry := mcpServerEntry(srv)
+		entry.Command = resolveMCPCommand(srv.Command)
+		mcpEntries[name] = entry
 	}
 
 	// Merge into existing JSON or create fresh.
@@ -128,4 +134,25 @@ func writeOpencodeMCPConfig(workDir string, servers map[string]MCPServerConfig) 
 		}
 	}
 	return cleanup, nil
+}
+
+// resolveMCPCommand resolves a bare MCP server command name to its absolute
+// path via exec.LookPath + filepath.EvalSymlinks. This ensures the agent
+// process inside the sandbox can execute the binary without relying on PATH
+// (the sandbox PATH may not include the directory containing the binary).
+// If the command is already absolute, empty, or cannot be resolved, the
+// original value is returned unchanged.
+func resolveMCPCommand(command string) string {
+	if command == "" || filepath.IsAbs(command) {
+		return command
+	}
+	resolved, err := exec.LookPath(command)
+	if err != nil {
+		return command
+	}
+	resolved, err = filepath.EvalSymlinks(resolved)
+	if err != nil {
+		return command
+	}
+	return resolved
 }

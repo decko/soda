@@ -57,7 +57,7 @@ func (r *ClaudeRunner) Run(ctx context.Context, opts RunOpts) (*RunResult, error
 	// path via --mcp-config + --strict-mcp-config. AllowedMCPTools are
 	// appended to the allowed-tools list so the CLI permits MCP tool calls.
 	if len(opts.MCPServers) > 0 {
-		mcpPath, mcpCleanup, mcpErr := writeMCPConfigFile(opts.WorkDir, opts.MCPServers)
+		mcpPath, mcpCleanup, mcpErr := WriteMCPConfigFile(opts.WorkDir, opts.MCPServers)
 		if mcpErr != nil {
 			fmt.Fprintf(os.Stderr, "claude runner: warning: MCP config write failed: %v; continuing without MCP\n", mcpErr)
 		} else {

@@ -87,6 +87,22 @@ func (a *ClaudeAdapter) BuildArgs(opts runner.RunOpts, tmpDir string) ([]string,
 		sf.Close()
 	}
 
+	// When MCP servers are declared, resolve commands to absolute paths so
+	// the agent spawns them without relying on the sandbox's restricted PATH,
+	// then write a temp config file into tmpDir and pass its path via
+	// --mcp-config + --strict-mcp-config. The file is cleaned up when tmpDir
+	// is removed, so no explicit defer is needed.
+	var mcpConfigPath string
+	if len(opts.MCPServers) > 0 {
+		resolvedServers := resolveMCPCommands(opts.MCPServers)
+		mcpPath, _, mcpErr := runner.WriteMCPConfigFile(tmpDir, resolvedServers)
+		if mcpErr != nil {
+			fmt.Fprintf(os.Stderr, "sandbox: warning: MCP config write failed: %v; continuing without MCP\n", mcpErr)
+		} else {
+			mcpConfigPath = mcpPath
+		}
+	}
+
 	// Build Claude CLI args via exported BuildArgs.
 	var budgetPtr *float64
 	if opts.MaxBudgetUSD > 0 {
@@ -95,12 +111,21 @@ func (a *ClaudeAdapter) BuildArgs(opts runner.RunOpts, tmpDir string) ([]string,
 	claudeOpts := claude.RunOpts{
 		SystemPromptPath: sysPromptPath,
 		SettingsPath:     settingsPath,
+		MCPConfigPath:    mcpConfigPath,
+		StrictMCPConfig:  mcpConfigPath != "",
 		OutputSchema:     opts.OutputSchema,
 		AllowedTools:     opts.AllowedTools,
 		MaxBudgetUSD:     budgetPtr,
 		Timeout:          opts.Timeout,
 		TranscriptLevel:  opts.TranscriptLevel,
 	}
+
+	// When MCP servers provide extra tool declarations, append them so
+	// Claude Code's allowlist permits MCP tool calls.
+	if len(opts.AllowedMCPTools) > 0 {
+		claudeOpts.AllowedTools = append(claudeOpts.AllowedTools, opts.AllowedMCPTools...)
+	}
+
 	args := claude.BuildArgs(claudeOpts, opts.Model)
 
 	// Append user prompt as positional arg (stdin workaround — see issue #2 Fix 4).
@@ -155,6 +180,13 @@ func (a *ClaudeAdapter) ExtraPaths(opts runner.RunOpts) (read []string, write []
 	}
 
 	return read, nil
+}
+
+// MCPExtraPaths returns additional read and write paths required for MCP
+// server binaries. Write paths are nil — MCP servers that need temp files
+// use tmpDir, which buildSandboxPaths already makes a write path.
+func (a *ClaudeAdapter) MCPExtraPaths(servers map[string]runner.MCPServerConfig) (read []string, write []string) {
+	return resolveMCPBinaryReadPaths(servers), nil
 }
 
 // resolveClaudePaths finds the claude binary and collects paths

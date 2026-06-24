@@ -80,6 +80,57 @@ When the proxy is enabled, API calls are bridged through a Unix socket. The
 host-side proxy injects credentials, so no API key is needed inside the
 sandbox.
 
+## MCP server support
+
+When a pipeline phase declares MCP servers (via `mcp_servers` in
+`soda.yaml`), the sandbox adapters write the appropriate config files
+into the sandbox temp directory so the agent discovers them
+automatically:
+
+- **Claude Code**: a temp `soda-mcp-config-*.json` file is written to
+  `tmpDir` and passed via `--mcp-config` / `--strict-mcp-config`.
+- **Opencode**: MCP server declarations are merged into
+  `{tmpDir}/.opencode.json` (since `HOME` is overridden to `tmpDir`).
+- **Pi**: MCP is not supported; MCP server declarations are ignored.
+
+### Network isolation trade-offs
+
+MCP servers typically need outbound network access to reach external
+APIs (Jira, GitHub, etc.). When MCP servers are configured for a phase,
+the sandbox **automatically disables network namespace isolation**
+(`UseNetNS` is forced to `false`) and emits a warning to stderr:
+
+```
+sandbox: warning: network isolation disabled for phase "implement" because MCP servers are configured
+```
+
+This means the sandboxed agent process can make arbitrary outbound
+network connections for that phase. The remaining sandbox controls
+(Landlock, seccomp, cgroups) are **not affected** — filesystem and
+resource isolation remain fully enforced.
+
+**Security implications:**
+
+| Control | With MCP | Without MCP |
+|---------|----------|-------------|
+| Landlock (filesystem) | ✅ enforced | ✅ enforced |
+| seccomp (syscalls) | ✅ enforced | ✅ enforced |
+| cgroups (resources) | ✅ enforced | ✅ enforced |
+| Network namespace | ❌ disabled | ✅ enforced |
+
+**Mitigations:**
+
+- MCP server binaries are resolved via `exec.LookPath` and their parent
+  directories are added as read paths — the sandbox does not grant
+  blanket filesystem access.
+- MCP config files go to `tmpDir` (cleaned up by `defer os.RemoveAll`),
+  not to `WorkDir` — they are not visible to the agent's Read tool.
+- The LLM proxy (if enabled) continues to meter API calls and enforce
+  token budgets even when the network namespace is disabled.
+
+**Recommendation:** only declare MCP servers for phases that genuinely
+need them. Phases without MCP servers retain full network isolation.
+
 ## Platform support
 
 | Platform | Sandbox available |

@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -257,6 +258,168 @@ func TestEnvOrDefault(t *testing.T) {
 	if got := envOrDefault("SODA_EMPTY", "fallback"); got != "fallback" {
 		t.Errorf("envOrDefault = %q, want fallback", got)
 	}
+}
+
+func TestResolveMCPBinaryReadPaths(t *testing.T) {
+	t.Run("found_binary_adds_dir", func(t *testing.T) {
+		binDir := t.TempDir()
+		fakeBin := filepath.Join(binDir, "jira-mcp")
+		if err := os.WriteFile(fakeBin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatalf("write fake binary: %v", err)
+		}
+		t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+
+		servers := map[string]runner.MCPServerConfig{
+			"jira": {Command: "jira-mcp"},
+		}
+		paths := resolveMCPBinaryReadPaths(servers)
+
+		if !containsPath(paths, binDir) {
+			t.Errorf("paths %v should contain binary dir %q", paths, binDir)
+		}
+	})
+
+	t.Run("missing_binary_skipped", func(t *testing.T) {
+		// Point PATH at an empty dir so no binary can be found.
+		t.Setenv("PATH", t.TempDir())
+
+		servers := map[string]runner.MCPServerConfig{
+			"missing": {Command: "nonexistent-mcp-server"},
+		}
+		paths := resolveMCPBinaryReadPaths(servers)
+
+		if len(paths) != 0 {
+			t.Errorf("paths = %v, want empty for missing binary", paths)
+		}
+	})
+
+	t.Run("empty_command_skipped", func(t *testing.T) {
+		servers := map[string]runner.MCPServerConfig{
+			"empty": {Command: ""},
+		}
+		paths := resolveMCPBinaryReadPaths(servers)
+
+		if len(paths) != 0 {
+			t.Errorf("paths = %v, want empty for empty command", paths)
+		}
+	})
+
+	t.Run("nil_input_returns_empty", func(t *testing.T) {
+		paths := resolveMCPBinaryReadPaths(nil)
+
+		if len(paths) != 0 {
+			t.Errorf("paths = %v, want empty for nil input", paths)
+		}
+	})
+
+	t.Run("multiple_servers", func(t *testing.T) {
+		binDir := t.TempDir()
+		for _, name := range []string{"jira-mcp", "gh-mcp"} {
+			fakeBin := filepath.Join(binDir, name)
+			if err := os.WriteFile(fakeBin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+				t.Fatalf("write fake binary %s: %v", name, err)
+			}
+		}
+		t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+
+		servers := map[string]runner.MCPServerConfig{
+			"jira":   {Command: "jira-mcp"},
+			"github": {Command: "gh-mcp"},
+		}
+		paths := resolveMCPBinaryReadPaths(servers)
+
+		if len(paths) != 2 {
+			t.Errorf("paths = %v (len %d), want 2 entries", paths, len(paths))
+		}
+		if !containsPath(paths, binDir) {
+			t.Errorf("paths %v should contain binary dir %q", paths, binDir)
+		}
+	})
+}
+
+func TestResolveMCPCommands(t *testing.T) {
+	t.Run("resolves_to_absolute_path", func(t *testing.T) {
+		binDir := t.TempDir()
+		fakeBin := filepath.Join(binDir, "jira-mcp")
+		if err := os.WriteFile(fakeBin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatalf("write fake binary: %v", err)
+		}
+		t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+
+		servers := map[string]runner.MCPServerConfig{
+			"jira": {
+				Command: "jira-mcp",
+				Args:    []string{"--port", "8080"},
+				Env:     map[string]string{"JIRA_URL": "https://jira.example.com"},
+			},
+		}
+		resolved := resolveMCPCommands(servers)
+
+		jira := resolved["jira"]
+		if !filepath.IsAbs(jira.Command) {
+			t.Errorf("resolved command %q should be absolute", jira.Command)
+		}
+		if filepath.Base(jira.Command) != "jira-mcp" {
+			t.Errorf("resolved command base = %q, want jira-mcp", filepath.Base(jira.Command))
+		}
+		// Args and Env should be preserved.
+		if len(jira.Args) != 2 || jira.Args[0] != "--port" {
+			t.Errorf("args = %v, want [--port 8080]", jira.Args)
+		}
+		if jira.Env["JIRA_URL"] != "https://jira.example.com" {
+			t.Errorf("env JIRA_URL = %q, want https://jira.example.com", jira.Env["JIRA_URL"])
+		}
+	})
+
+	t.Run("missing_binary_keeps_original", func(t *testing.T) {
+		t.Setenv("PATH", t.TempDir())
+
+		servers := map[string]runner.MCPServerConfig{
+			"missing": {Command: "nonexistent-mcp"},
+		}
+		resolved := resolveMCPCommands(servers)
+
+		if resolved["missing"].Command != "nonexistent-mcp" {
+			t.Errorf("command = %q, want original 'nonexistent-mcp'", resolved["missing"].Command)
+		}
+	})
+
+	t.Run("empty_command_preserved", func(t *testing.T) {
+		servers := map[string]runner.MCPServerConfig{
+			"empty": {Command: ""},
+		}
+		resolved := resolveMCPCommands(servers)
+
+		if resolved["empty"].Command != "" {
+			t.Errorf("command = %q, want empty", resolved["empty"].Command)
+		}
+	})
+
+	t.Run("nil_input_returns_nil", func(t *testing.T) {
+		resolved := resolveMCPCommands(nil)
+		if resolved != nil {
+			t.Errorf("resolved = %v, want nil", resolved)
+		}
+	})
+
+	t.Run("does_not_mutate_original", func(t *testing.T) {
+		binDir := t.TempDir()
+		fakeBin := filepath.Join(binDir, "jira-mcp")
+		if err := os.WriteFile(fakeBin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatalf("write fake binary: %v", err)
+		}
+		t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+
+		servers := map[string]runner.MCPServerConfig{
+			"jira": {Command: "jira-mcp"},
+		}
+		_ = resolveMCPCommands(servers)
+
+		// Original should be unchanged.
+		if servers["jira"].Command != "jira-mcp" {
+			t.Errorf("original command mutated to %q, want jira-mcp", servers["jira"].Command)
+		}
+	})
 }
 
 func TestSetEnvForLaunchDistinguishesUnsetFromEmpty(t *testing.T) {

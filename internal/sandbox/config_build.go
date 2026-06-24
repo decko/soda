@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/decko/soda/internal/runner"
 )
 
 // sandboxPaths holds the computed read and write paths for a sandbox profile.
@@ -34,6 +36,23 @@ func buildSandboxPaths(workDir, tmpDir string, extraRead, extraWrite []string) s
 	writePaths = append(writePaths, tmpDir)
 
 	return sandboxPaths{ReadPaths: readPaths, WritePaths: writePaths}
+}
+
+// effectiveUseNetNS returns the effective network namespace isolation flag.
+// When MCP servers are configured, network isolation is disabled because MCP
+// servers may need to make outbound connections (e.g. to Jira, GitHub APIs).
+func effectiveUseNetNS(configured bool, servers map[string]runner.MCPServerConfig) bool {
+	if len(servers) > 0 {
+		return false
+	}
+	return configured
+}
+
+// mcpNetworkWarning returns a warning message indicating that network
+// isolation has been disabled for the given phase because MCP servers are
+// configured.
+func mcpNetworkWarning(phase string) string {
+	return fmt.Sprintf("sandbox: warning: network isolation disabled for phase %q because MCP servers are configured\n", phase)
 }
 
 // buildProxyURL formats a proxy base URL from a listener address string

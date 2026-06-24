@@ -105,9 +105,20 @@ func (r *Runner) Run(ctx context.Context, opts runner.RunOpts) (*runner.RunResul
 	combinedExtraWrite := append([]string{}, r.config.ExtraWritePaths...)
 	combinedExtraWrite = append(combinedExtraWrite, adapterWrite...)
 
+	// Add MCP server binary directories to the read path list so the
+	// sandbox can execute them.
+	mcpRead, mcpWrite := r.adapter.MCPExtraPaths(opts.MCPServers)
+	combinedExtraRead = append(combinedExtraRead, mcpRead...)
+	combinedExtraWrite = append(combinedExtraWrite, mcpWrite...)
+
 	sp := buildSandboxPaths(opts.WorkDir, tmpDir, combinedExtraRead, combinedExtraWrite)
 
-	useNetNS := r.config.UseNetNS
+	// Disable network isolation when MCP servers are configured — they
+	// may need outbound connectivity (e.g. Jira, GitHub APIs).
+	useNetNS := effectiveUseNetNS(r.config.UseNetNS, opts.MCPServers)
+	if len(opts.MCPServers) > 0 {
+		fmt.Fprintf(os.Stderr, "%s", mcpNetworkWarning(opts.Phase))
+	}
 	var llmProxy *proxy.Proxy
 	var proxyBaseURL string
 

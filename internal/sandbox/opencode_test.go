@@ -314,6 +314,52 @@ func TestOpencodeAdapterExtraPaths(t *testing.T) {
 	})
 }
 
+func TestOpencodeAdapterMCPExtraPaths(t *testing.T) {
+	binDir := t.TempDir()
+	fakeOpencode := filepath.Join(binDir, "opencode")
+	if err := os.WriteFile(fakeOpencode, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write fake opencode: %v", err)
+	}
+	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+
+	adapter, err := NewOpencodeAdapter(fakeOpencode)
+	if err != nil {
+		t.Fatalf("NewOpencodeAdapter: %v", err)
+	}
+
+	t.Run("found_binary_in_read_paths", func(t *testing.T) {
+		mcpDir := t.TempDir()
+		fakeMCP := filepath.Join(mcpDir, "jira-mcp")
+		if err := os.WriteFile(fakeMCP, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatalf("write fake mcp binary: %v", err)
+		}
+		t.Setenv("PATH", mcpDir+":"+binDir+":"+os.Getenv("PATH"))
+
+		servers := map[string]runner.MCPServerConfig{
+			"jira": {Command: "jira-mcp"},
+		}
+		read, write := adapter.MCPExtraPaths(servers)
+
+		if !containsPath(read, mcpDir) {
+			t.Errorf("read paths %v should contain MCP binary dir %q", read, mcpDir)
+		}
+		if write != nil {
+			t.Errorf("write paths = %v, want nil", write)
+		}
+	})
+
+	t.Run("nil_input_returns_empty", func(t *testing.T) {
+		read, write := adapter.MCPExtraPaths(nil)
+
+		if len(read) != 0 {
+			t.Errorf("read paths = %v, want empty for nil input", read)
+		}
+		if write != nil {
+			t.Errorf("write paths = %v, want nil", write)
+		}
+	})
+}
+
 func TestMapOpencodeParseError(t *testing.T) {
 	t.Run("parse_error_passes_through", func(t *testing.T) {
 		inner := fmt.Errorf("bad JSON")
