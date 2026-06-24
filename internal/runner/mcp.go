@@ -19,11 +19,11 @@ type mcpServerEntry struct {
 	Env     map[string]string `json:"env,omitempty"`
 }
 
-// writeMCPConfigFile writes a Claude Code MCP config JSON file to dir and
+// WriteMCPConfigFile writes a Claude Code MCP config JSON file to dir and
 // returns the file path and a cleanup function. The cleanup function removes
 // the file. The file is created with mode 0600 because env fields may
 // contain API keys or other secrets.
-func writeMCPConfigFile(dir string, servers map[string]MCPServerConfig) (string, func(), error) {
+func WriteMCPConfigFile(dir string, servers map[string]MCPServerConfig) (string, func(), error) {
 	if dir == "" {
 		dir = os.TempDir()
 	}
@@ -72,13 +72,13 @@ func writeMCPConfigFile(dir string, servers map[string]MCPServerConfig) (string,
 // mcpServerEntry has the same fields as config.MCPServerConfig, enabling
 // direct type conversion. The separate type exists for JSON tag control.
 
-// writeOpencodeMCPConfig writes (or merges) MCP server declarations into
+// WriteOpencodeMCPConfig writes (or merges) MCP server declarations into
 // {workDir}/.opencode.json. If the file already exists, the mcpServers key
 // is merged into the existing JSON, preserving other keys (providers, models,
 // etc.). The file is created with mode 0600 because env fields may contain
 // secrets. The returned cleanup function restores the original file content
 // or removes it if it did not exist prior to the call.
-func writeOpencodeMCPConfig(workDir string, servers map[string]MCPServerConfig) (func(), error) {
+func WriteOpencodeMCPConfig(workDir string, servers map[string]MCPServerConfig) (func(), error) {
 	if workDir == "" {
 		workDir = os.TempDir()
 	}

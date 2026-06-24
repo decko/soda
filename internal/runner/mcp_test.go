@@ -22,9 +22,9 @@ func TestWriteMCPConfigFile(t *testing.T) {
 
 	t.Run("creates_valid_json_file", func(t *testing.T) {
 		dir := t.TempDir()
-		path, cleanup, err := writeMCPConfigFile(dir, servers)
+		path, cleanup, err := WriteMCPConfigFile(dir, servers)
 		if err != nil {
-			t.Fatalf("writeMCPConfigFile: %v", err)
+			t.Fatalf("WriteMCPConfigFile: %v", err)
 		}
 		defer cleanup()
 
@@ -77,9 +77,9 @@ func TestWriteMCPConfigFile(t *testing.T) {
 
 	t.Run("file_has_restricted_permissions", func(t *testing.T) {
 		dir := t.TempDir()
-		path, cleanup, err := writeMCPConfigFile(dir, servers)
+		path, cleanup, err := WriteMCPConfigFile(dir, servers)
 		if err != nil {
-			t.Fatalf("writeMCPConfigFile: %v", err)
+			t.Fatalf("WriteMCPConfigFile: %v", err)
 		}
 		defer cleanup()
 
@@ -95,9 +95,9 @@ func TestWriteMCPConfigFile(t *testing.T) {
 
 	t.Run("cleanup_removes_file", func(t *testing.T) {
 		dir := t.TempDir()
-		path, cleanup, err := writeMCPConfigFile(dir, servers)
+		path, cleanup, err := WriteMCPConfigFile(dir, servers)
 		if err != nil {
-			t.Fatalf("writeMCPConfigFile: %v", err)
+			t.Fatalf("WriteMCPConfigFile: %v", err)
 		}
 
 		// File should exist before cleanup.
@@ -114,9 +114,9 @@ func TestWriteMCPConfigFile(t *testing.T) {
 	})
 
 	t.Run("falls_back_to_os_tempdir_when_dir_empty", func(t *testing.T) {
-		path, cleanup, err := writeMCPConfigFile("", servers)
+		path, cleanup, err := WriteMCPConfigFile("", servers)
 		if err != nil {
-			t.Fatalf("writeMCPConfigFile: %v", err)
+			t.Fatalf("WriteMCPConfigFile: %v", err)
 		}
 		defer cleanup()
 
@@ -137,9 +137,9 @@ func TestWriteOpencodeMCPConfig(t *testing.T) {
 
 	t.Run("creates_opencode_json", func(t *testing.T) {
 		dir := t.TempDir()
-		cleanup, err := writeOpencodeMCPConfig(dir, servers)
+		cleanup, err := WriteOpencodeMCPConfig(dir, servers)
 		if err != nil {
-			t.Fatalf("writeOpencodeMCPConfig: %v", err)
+			t.Fatalf("WriteOpencodeMCPConfig: %v", err)
 		}
 		defer cleanup()
 
@@ -161,9 +161,9 @@ func TestWriteOpencodeMCPConfig(t *testing.T) {
 
 	t.Run("file_has_restricted_permissions", func(t *testing.T) {
 		dir := t.TempDir()
-		cleanup, err := writeOpencodeMCPConfig(dir, servers)
+		cleanup, err := WriteOpencodeMCPConfig(dir, servers)
 		if err != nil {
-			t.Fatalf("writeOpencodeMCPConfig: %v", err)
+			t.Fatalf("WriteOpencodeMCPConfig: %v", err)
 		}
 		defer cleanup()
 
@@ -188,9 +188,9 @@ func TestWriteOpencodeMCPConfig(t *testing.T) {
 			t.Fatalf("WriteFile: %v", err)
 		}
 
-		cleanup, err := writeOpencodeMCPConfig(dir, servers)
+		cleanup, err := WriteOpencodeMCPConfig(dir, servers)
 		if err != nil {
-			t.Fatalf("writeOpencodeMCPConfig: %v", err)
+			t.Fatalf("WriteOpencodeMCPConfig: %v", err)
 		}
 		defer cleanup()
 
@@ -220,9 +220,9 @@ func TestWriteOpencodeMCPConfig(t *testing.T) {
 		dir := t.TempDir()
 		configPath := filepath.Join(dir, ".opencode.json")
 
-		cleanup, err := writeOpencodeMCPConfig(dir, servers)
+		cleanup, err := WriteOpencodeMCPConfig(dir, servers)
 		if err != nil {
-			t.Fatalf("writeOpencodeMCPConfig: %v", err)
+			t.Fatalf("WriteOpencodeMCPConfig: %v", err)
 		}
 
 		// File should exist before cleanup.
@@ -247,9 +247,9 @@ func TestWriteOpencodeMCPConfig(t *testing.T) {
 			t.Fatalf("WriteFile: %v", err)
 		}
 
-		cleanup, err := writeOpencodeMCPConfig(dir, servers)
+		cleanup, err := WriteOpencodeMCPConfig(dir, servers)
 		if err != nil {
-			t.Fatalf("writeOpencodeMCPConfig: %v", err)
+			t.Fatalf("WriteOpencodeMCPConfig: %v", err)
 		}
 
 		cleanup()
