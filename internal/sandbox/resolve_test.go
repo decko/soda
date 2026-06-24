@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -257,6 +258,83 @@ func TestEnvOrDefault(t *testing.T) {
 	if got := envOrDefault("SODA_EMPTY", "fallback"); got != "fallback" {
 		t.Errorf("envOrDefault = %q, want fallback", got)
 	}
+}
+
+func TestResolveMCPBinaryReadPaths(t *testing.T) {
+	t.Run("found_binary_adds_dir", func(t *testing.T) {
+		binDir := t.TempDir()
+		fakeBin := filepath.Join(binDir, "jira-mcp")
+		if err := os.WriteFile(fakeBin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatalf("write fake binary: %v", err)
+		}
+		t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+
+		servers := map[string]runner.MCPServerConfig{
+			"jira": {Command: "jira-mcp"},
+		}
+		paths := resolveMCPBinaryReadPaths(servers)
+
+		if !containsPath(paths, binDir) {
+			t.Errorf("paths %v should contain binary dir %q", paths, binDir)
+		}
+	})
+
+	t.Run("missing_binary_skipped", func(t *testing.T) {
+		// Point PATH at an empty dir so no binary can be found.
+		t.Setenv("PATH", t.TempDir())
+
+		servers := map[string]runner.MCPServerConfig{
+			"missing": {Command: "nonexistent-mcp-server"},
+		}
+		paths := resolveMCPBinaryReadPaths(servers)
+
+		if len(paths) != 0 {
+			t.Errorf("paths = %v, want empty for missing binary", paths)
+		}
+	})
+
+	t.Run("empty_command_skipped", func(t *testing.T) {
+		servers := map[string]runner.MCPServerConfig{
+			"empty": {Command: ""},
+		}
+		paths := resolveMCPBinaryReadPaths(servers)
+
+		if len(paths) != 0 {
+			t.Errorf("paths = %v, want empty for empty command", paths)
+		}
+	})
+
+	t.Run("nil_input_returns_empty", func(t *testing.T) {
+		paths := resolveMCPBinaryReadPaths(nil)
+
+		if len(paths) != 0 {
+			t.Errorf("paths = %v, want empty for nil input", paths)
+		}
+	})
+
+	t.Run("multiple_servers", func(t *testing.T) {
+		binDir := t.TempDir()
+		for _, name := range []string{"jira-mcp", "gh-mcp"} {
+			fakeBin := filepath.Join(binDir, name)
+			if err := os.WriteFile(fakeBin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+				t.Fatalf("write fake binary %s: %v", name, err)
+			}
+		}
+		t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+
+		servers := map[string]runner.MCPServerConfig{
+			"jira":   {Command: "jira-mcp"},
+			"github": {Command: "gh-mcp"},
+		}
+		paths := resolveMCPBinaryReadPaths(servers)
+
+		if len(paths) != 2 {
+			t.Errorf("paths = %v (len %d), want 2 entries", paths, len(paths))
+		}
+		if !containsPath(paths, binDir) {
+			t.Errorf("paths %v should contain binary dir %q", paths, binDir)
+		}
+	})
 }
 
 func TestSetEnvForLaunchDistinguishesUnsetFromEmpty(t *testing.T) {

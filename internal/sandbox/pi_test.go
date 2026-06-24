@@ -287,6 +287,46 @@ func TestPiAdapterExtraPaths(t *testing.T) {
 	})
 }
 
+func TestPiAdapterMCPExtraPaths(t *testing.T) {
+	binDir := t.TempDir()
+	fakePi := filepath.Join(binDir, "pi")
+	if err := os.WriteFile(fakePi, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write fake pi: %v", err)
+	}
+	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+
+	adapter, err := NewPiAdapter(fakePi)
+	if err != nil {
+		t.Fatalf("NewPiAdapter: %v", err)
+	}
+
+	t.Run("always_returns_empty", func(t *testing.T) {
+		servers := map[string]runner.MCPServerConfig{
+			"jira":   {Command: "jira-mcp"},
+			"github": {Command: "gh-mcp"},
+		}
+		read, write := adapter.MCPExtraPaths(servers)
+
+		if len(read) != 0 {
+			t.Errorf("read paths = %v, want empty", read)
+		}
+		if len(write) != 0 {
+			t.Errorf("write paths = %v, want empty", write)
+		}
+	})
+
+	t.Run("nil_input_returns_empty", func(t *testing.T) {
+		read, write := adapter.MCPExtraPaths(nil)
+
+		if len(read) != 0 {
+			t.Errorf("read paths = %v, want empty for nil input", read)
+		}
+		if len(write) != 0 {
+			t.Errorf("write paths = %v, want empty for nil input", write)
+		}
+	})
+}
+
 func TestMapPiParseError(t *testing.T) {
 	t.Run("parse_error_passes_through", func(t *testing.T) {
 		inner := fmt.Errorf("bad JSON")
