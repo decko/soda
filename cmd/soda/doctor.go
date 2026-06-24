@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -9,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/decko/soda/internal/claude"
 	"github.com/decko/soda/internal/config"
@@ -36,9 +39,11 @@ type doctorEnv struct {
 	LoadConfig         func(path string) (*config.Config, error)
 	UserConfigDir      func() (string, error)
 	UserHomeDir        func() (string, error)
-	Getenv             func(key string) string // injectable os.Getenv for testable env checks
-	ExecInstallCmd     func(cmd string) error  // runs an install command (sh -c); nil = default
-	ArapucaWrapperPath func() string           // returns path to arapuca wrapper binary; "" = not found
+	Getenv             func(key string) string                                                                        // injectable os.Getenv for testable env checks
+	ExecInstallCmd     func(cmd string) error                                                                         // runs an install command (sh -c); nil = default
+	ArapucaWrapperPath func() string                                                                                  // returns path to arapuca wrapper binary; "" = not found
+	ProbeMCPServer     func(ctx context.Context, command string, args []string, env map[string]string) mcpProbeResult // probes an MCP server; nil = use defaultProbeMCPServer
+	MCPProbeTimeout    time.Duration                                                                                  // timeout per MCP server probe; 0 = use mcpProbeTimeout default
 
 	// ParsedConfig is populated by checkConfigValid on success.
 	// Downstream checks use it to adjust their required status.
@@ -80,6 +85,7 @@ func defaultDoctorEnv() *doctorEnv {
 			return c.Run()
 		},
 		ArapucaWrapperPath: sandbox.WrapperBinaryPath,
+		ProbeMCPServer:     defaultProbeMCPServer,
 	}
 }
 
@@ -108,11 +114,15 @@ Use --install to be prompted to auto-install missing agent CLIs.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			env := defaultDoctorEnv()
 			install, _ := cmd.Flags().GetBool("install")
+			if timeout, err := cmd.Flags().GetDuration("timeout"); err == nil && timeout > 0 {
+				env.MCPProbeTimeout = timeout
+			}
 			return runDoctorFull(cmd.OutOrStdout(), cmd.InOrStdin(), env, install)
 		},
 	}
 
 	cmd.Flags().Bool("install", false, "prompt to install missing agent CLIs")
+	cmd.Flags().Duration("timeout", mcpProbeTimeout, "timeout per MCP server probe")
 
 	return cmd
 }
@@ -155,6 +165,7 @@ func runDoctorFull(w io.Writer, stdin io.Reader, env *doctorEnv, install bool) e
 		checkNode,
 		checkPi,
 		checkOpencode,
+		checkMCPServers,
 	}
 
 	reader := bufio.NewReader(stdin)
@@ -1127,4 +1138,233 @@ func checkArapucaWrapperVersion(env *doctorEnv) checkResult {
 		}
 	}
 	return checkResult{name: "arapuca-wrapper-version", passed: true, detail: fmt.Sprintf("wrapper %s (library: %s)", wrapperVer, libVer)}
+}
+
+// mcpProbeResult holds the outcome of probing a single MCP server.
+type mcpProbeResult struct {
+	ToolCount int           // number of tools reported by tools/list; -1 if unknown
+	Duration  time.Duration // how long the probe took
+	Err       error         // nil on success
+}
+
+// mcpProbeTimeout is the default context timeout for each MCP server probe.
+const mcpProbeTimeout = 5 * time.Second
+
+// checkMCPServers verifies configured MCP servers by probing each one.
+// Returns a single aggregate checkResult with all server statuses in
+// the detail string. Always optional (warning, not required) since
+// env vars and auth may not be present in doctor context.
+// Skipped when no config is parsed or no MCP servers are declared.
+func checkMCPServers(env *doctorEnv) checkResult {
+	if env.ParsedConfig == nil {
+		return checkResult{
+			name:    "mcp-servers",
+			skipped: true,
+			detail:  "skipped (no config parsed)",
+		}
+	}
+
+	servers := env.ParsedConfig.MCP.Servers
+	if len(servers) == 0 {
+		return checkResult{
+			name:    "mcp-servers",
+			skipped: true,
+			detail:  "skipped (no MCP servers configured)",
+		}
+	}
+
+	probeFn := env.ProbeMCPServer
+	if probeFn == nil {
+		probeFn = defaultProbeMCPServer
+	}
+
+	probeTimeout := env.MCPProbeTimeout
+	if probeTimeout <= 0 {
+		probeTimeout = mcpProbeTimeout
+	}
+
+	var details []string
+	allPassed := true
+	for name, server := range servers {
+		// First check that the command exists in PATH.
+		if _, lookErr := env.LookPath(server.Command); lookErr != nil {
+			details = append(details, fmt.Sprintf("%s: command %q not found in PATH", name, server.Command))
+			allPassed = false
+			continue
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+		result := probeFn(ctx, server.Command, server.Args, server.Env)
+		cancel()
+
+		if result.Err != nil {
+			if ctx.Err() == context.DeadlineExceeded {
+				details = append(details, fmt.Sprintf("%s: timeout after %s", name, probeTimeout))
+			} else {
+				details = append(details, fmt.Sprintf("%s: %v", name, result.Err))
+			}
+			allPassed = false
+		} else {
+			toolLabel := fmt.Sprintf("%d tools", result.ToolCount)
+			if result.ToolCount < 0 {
+				toolLabel = "tools unknown"
+			}
+			details = append(details, fmt.Sprintf("%s: %s (%s)", name, toolLabel, result.Duration.Round(100*time.Millisecond)))
+		}
+	}
+
+	return checkResult{
+		name:     "mcp-servers",
+		passed:   allPassed,
+		required: false,
+		detail:   strings.Join(details, "; "),
+	}
+}
+
+// jsonRPCRequest is a minimal JSON-RPC 2.0 request envelope.
+type jsonRPCRequest struct {
+	JSONRPC string      `json:"jsonrpc"`
+	ID      int         `json:"id"`
+	Method  string      `json:"method"`
+	Params  interface{} `json:"params,omitempty"`
+}
+
+// jsonRPCNotification is a JSON-RPC 2.0 notification envelope.
+// Notifications must not include an id field per the spec.
+type jsonRPCNotification struct {
+	JSONRPC string      `json:"jsonrpc"`
+	Method  string      `json:"method"`
+	Params  interface{} `json:"params,omitempty"`
+}
+
+// jsonRPCResponse is a minimal JSON-RPC 2.0 response envelope.
+type jsonRPCResponse struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      int             `json:"id"`
+	Result  json.RawMessage `json:"result,omitempty"`
+	Error   *jsonRPCError   `json:"error,omitempty"`
+}
+
+// jsonRPCError represents the error field of a JSON-RPC response.
+type jsonRPCError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+// initializeResult holds the fields we care about from the MCP initialize response.
+type initializeResult struct {
+	Capabilities struct {
+		Tools *json.RawMessage `json:"tools,omitempty"`
+	} `json:"capabilities"`
+}
+
+// toolsListResult holds the response from tools/list.
+type toolsListResult struct {
+	Tools []json.RawMessage `json:"tools"`
+}
+
+// defaultProbeMCPServer launches the MCP server subprocess, sends a
+// JSON-RPC initialize handshake (protocol 2024-11-05), optionally sends
+// tools/list if tools capability is advertised, then kills the process.
+func defaultProbeMCPServer(ctx context.Context, command string, args []string, env map[string]string) mcpProbeResult {
+	start := time.Now()
+
+	cmd := exec.CommandContext(ctx, command, args...)
+	// Inherit current environment and overlay server-specific vars.
+	cmd.Env = os.Environ()
+	for key, val := range env {
+		cmd.Env = append(cmd.Env, key+"="+val)
+	}
+
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return mcpProbeResult{ToolCount: -1, Duration: time.Since(start), Err: fmt.Errorf("stdin pipe: %w", err)}
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return mcpProbeResult{ToolCount: -1, Duration: time.Since(start), Err: fmt.Errorf("stdout pipe: %w", err)}
+	}
+
+	if err := cmd.Start(); err != nil {
+		return mcpProbeResult{ToolCount: -1, Duration: time.Since(start), Err: fmt.Errorf("start: %w", err)}
+	}
+
+	// Send initialize request.
+	initReq := jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      1,
+		Method:  "initialize",
+		Params: map[string]interface{}{
+			"protocolVersion": "2024-11-05",
+			"capabilities":    map[string]interface{}{},
+			"clientInfo": map[string]string{
+				"name":    "soda-doctor",
+				"version": "1.0.0",
+			},
+		},
+	}
+	encoder := json.NewEncoder(stdin)
+	if err := encoder.Encode(initReq); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return mcpProbeResult{ToolCount: -1, Duration: time.Since(start), Err: fmt.Errorf("send initialize: %w", err)}
+	}
+
+	// Read response.
+	decoder := json.NewDecoder(stdout)
+	var initResp jsonRPCResponse
+	if err := decoder.Decode(&initResp); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return mcpProbeResult{ToolCount: -1, Duration: time.Since(start), Err: fmt.Errorf("read initialize response: %w", err)}
+	}
+
+	if initResp.Error != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return mcpProbeResult{ToolCount: -1, Duration: time.Since(start), Err: fmt.Errorf("initialize error: %s", initResp.Error.Message)}
+	}
+
+	// Parse capabilities to check for tools support.
+	var initResult initializeResult
+	if initResp.Result != nil {
+		_ = json.Unmarshal(initResp.Result, &initResult)
+	}
+
+	// Send initialized notification (required by MCP protocol).
+	// Notifications must not include an id field per JSON-RPC 2.0 spec.
+	initializedNotif := jsonRPCNotification{
+		JSONRPC: "2.0",
+		Method:  "notifications/initialized",
+	}
+	_ = encoder.Encode(initializedNotif)
+
+	toolCount := -1
+	if initResult.Capabilities.Tools != nil {
+		// tools capability is advertised — send tools/list.
+		toolsReq := jsonRPCRequest{
+			JSONRPC: "2.0",
+			ID:      2,
+			Method:  "tools/list",
+		}
+		if err := encoder.Encode(toolsReq); err == nil {
+			var toolsResp jsonRPCResponse
+			if err := decoder.Decode(&toolsResp); err == nil && toolsResp.Error == nil && toolsResp.Result != nil {
+				var toolsList toolsListResult
+				if err := json.Unmarshal(toolsResp.Result, &toolsList); err == nil {
+					toolCount = len(toolsList.Tools)
+				}
+			}
+		}
+		if toolCount < 0 {
+			toolCount = 0 // graceful fallback
+		}
+	}
+
+	// Clean up: close stdin and kill the process.
+	_ = stdin.Close()
+	_ = cmd.Process.Kill()
+	_ = cmd.Wait()
+
+	return mcpProbeResult{ToolCount: toolCount, Duration: time.Since(start), Err: nil}
 }

@@ -1296,3 +1296,219 @@ func TestValidateSandboxWrapper_EnabledAndPresent(t *testing.T) {
 		t.Errorf("expected path in output, got: %s", output)
 	}
 }
+
+// --- validateMCP tests ---
+
+func TestValidateMCP_NoServersConfigured(t *testing.T) {
+	cfg := &config.Config{}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	validateMCP(&buf, result, cfg, nil, stubLookPath(map[string]string{}))
+
+	if result.hasErrors() {
+		t.Errorf("expected no errors, got: %v", result.errors)
+	}
+	if len(result.warnings) != 0 {
+		t.Errorf("expected no warnings, got: %v", result.warnings)
+	}
+	output := buf.String()
+	if !strings.Contains(output, "✓ mcp: no servers configured") {
+		t.Errorf("expected 'no servers configured', got: %s", output)
+	}
+}
+
+func TestValidateMCP_ServerFound(t *testing.T) {
+	cfg := &config.Config{
+		MCP: config.MCPConfig{
+			Servers: map[string]config.MCPServerConfig{
+				"jira": {Command: "wtmcp", Args: []string{"jira"}},
+			},
+		},
+	}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	lookPath := stubLookPath(map[string]string{"wtmcp": "/usr/bin/wtmcp"})
+	validateMCP(&buf, result, cfg, nil, lookPath)
+
+	if result.hasErrors() {
+		t.Errorf("expected no errors, got: %v", result.errors)
+	}
+	if len(result.warnings) != 0 {
+		t.Errorf("expected no warnings, got: %v", result.warnings)
+	}
+	output := buf.String()
+	if !strings.Contains(output, "✓ mcp server jira: wtmcp") {
+		t.Errorf("expected '✓ mcp server jira: wtmcp', got: %s", output)
+	}
+}
+
+func TestValidateMCP_ServerNotFound(t *testing.T) {
+	cfg := &config.Config{
+		MCP: config.MCPConfig{
+			Servers: map[string]config.MCPServerConfig{
+				"jira": {Command: "wtmcp", Args: []string{"jira"}},
+			},
+		},
+	}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	lookPath := stubLookPath(map[string]string{})
+	validateMCP(&buf, result, cfg, nil, lookPath)
+
+	if result.hasErrors() {
+		t.Error("expected no errors (warnings only)")
+	}
+	if len(result.warnings) != 1 {
+		t.Fatalf("expected 1 warning, got %d: %v", len(result.warnings), result.warnings)
+	}
+	if !strings.Contains(result.warnings[0], "wtmcp") || !strings.Contains(result.warnings[0], "not found") {
+		t.Errorf("warning should mention command not found, got: %s", result.warnings[0])
+	}
+	output := buf.String()
+	if !strings.Contains(output, "✗ mcp server jira:") {
+		t.Errorf("expected '✗ mcp server jira:' in output, got: %s", output)
+	}
+}
+
+func TestValidateMCP_UndeclaredServerReference(t *testing.T) {
+	cfg := &config.Config{
+		MCP: config.MCPConfig{
+			Servers: map[string]config.MCPServerConfig{
+				"jira": {Command: "wtmcp", Args: []string{"jira"}},
+			},
+		},
+	}
+	pl := &pipeline.PhasePipeline{
+		Phases: []pipeline.PhaseConfig{
+			{Name: "triage", MCPServers: []string{"jira", "slack"}},
+		},
+	}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	lookPath := stubLookPath(map[string]string{"wtmcp": "/usr/bin/wtmcp"})
+	validateMCP(&buf, result, cfg, pl, lookPath)
+
+	if result.hasErrors() {
+		t.Error("expected no errors (warnings only)")
+	}
+	// Should have a warning about undeclared "slack" server.
+	found := false
+	for _, warn := range result.warnings {
+		if strings.Contains(warn, "undeclared") && strings.Contains(warn, "slack") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected warning about undeclared server 'slack', got: %v", result.warnings)
+	}
+}
+
+func TestValidateMCP_AllServersDeclared(t *testing.T) {
+	cfg := &config.Config{
+		MCP: config.MCPConfig{
+			Servers: map[string]config.MCPServerConfig{
+				"jira":   {Command: "wtmcp", Args: []string{"jira"}},
+				"github": {Command: "wtmcp", Args: []string{"github"}},
+			},
+		},
+	}
+	pl := &pipeline.PhasePipeline{
+		Phases: []pipeline.PhaseConfig{
+			{Name: "triage", MCPServers: []string{"jira"}},
+			{Name: "plan", MCPServers: []string{"github"}},
+		},
+	}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	lookPath := stubLookPath(map[string]string{"wtmcp": "/usr/bin/wtmcp"})
+	validateMCP(&buf, result, cfg, pl, lookPath)
+
+	if result.hasErrors() {
+		t.Errorf("expected no errors, got: %v", result.errors)
+	}
+	if len(result.warnings) != 0 {
+		t.Errorf("expected no warnings, got: %v", result.warnings)
+	}
+}
+
+func TestValidateMCP_MultipleServers(t *testing.T) {
+	cfg := &config.Config{
+		MCP: config.MCPConfig{
+			Servers: map[string]config.MCPServerConfig{
+				"jira":   {Command: "wtmcp", Args: []string{"jira"}},
+				"github": {Command: "gh-mcp", Args: []string{"serve"}},
+			},
+		},
+	}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	lookPath := stubLookPath(map[string]string{"wtmcp": "/usr/bin/wtmcp"})
+	validateMCP(&buf, result, cfg, nil, lookPath)
+
+	// jira (wtmcp) should pass, github (gh-mcp) should warn.
+	if result.hasErrors() {
+		t.Error("expected no errors (warnings only)")
+	}
+	if len(result.warnings) != 1 {
+		t.Fatalf("expected 1 warning, got %d: %v", len(result.warnings), result.warnings)
+	}
+	if !strings.Contains(result.warnings[0], "gh-mcp") {
+		t.Errorf("warning should mention gh-mcp, got: %s", result.warnings[0])
+	}
+	output := buf.String()
+	if !strings.Contains(output, "✓ mcp server jira:") {
+		t.Errorf("expected jira to pass, got: %s", output)
+	}
+	if !strings.Contains(output, "✗ mcp server github:") {
+		t.Errorf("expected github to fail, got: %s", output)
+	}
+}
+
+func TestRunValidate_WithMCPServers(t *testing.T) {
+	cfg := &config.Config{
+		TicketSource: "github",
+		Mode:         "autonomous",
+		Model:        "claude-sonnet-4-20250514",
+		MCP: config.MCPConfig{
+			Servers: map[string]config.MCPServerConfig{
+				"jira": {Command: "wtmcp", Args: []string{"jira"}},
+			},
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := runValidate(&stdout, &stderr, cfg, "")
+	if err != nil {
+		t.Fatalf("runValidate() error: %v\nstdout: %s\nstderr: %s", err, stdout.String(), stderr.String())
+	}
+
+	combined := stdout.String() + stderr.String()
+	// MCP check appears in output — either ✓ (when found) or ⚠ warning (when missing).
+	if !strings.Contains(combined, "mcp") {
+		t.Errorf("expected mcp line in validate output, got stdout: %s\nstderr: %s", stdout.String(), stderr.String())
+	}
+}
+
+func TestValidateMCP_NilPipeline(t *testing.T) {
+	cfg := &config.Config{
+		MCP: config.MCPConfig{
+			Servers: map[string]config.MCPServerConfig{
+				"jira": {Command: "wtmcp"},
+			},
+		},
+	}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	lookPath := stubLookPath(map[string]string{"wtmcp": "/usr/bin/wtmcp"})
+	// nil pipeline should not panic — undeclared server check is skipped.
+	validateMCP(&buf, result, cfg, nil, lookPath)
+
+	if result.hasErrors() {
+		t.Errorf("expected no errors, got: %v", result.errors)
+	}
+	output := buf.String()
+	if !strings.Contains(output, "✓ mcp server jira:") {
+		t.Errorf("expected jira pass line, got: %s", output)
+	}
+}

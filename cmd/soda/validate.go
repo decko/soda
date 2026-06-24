@@ -110,6 +110,9 @@ func runValidate(w io.Writer, errW io.Writer, cfg *config.Config, pipelineName s
 	// Stage 10: Sandbox wrapper binary
 	validateSandboxWrapper(w, result, cfg, sandbox.WrapperBinaryPath)
 
+	// Stage 11: MCP servers
+	validateMCP(w, result, cfg, pl, exec.LookPath)
+
 	// Print summary
 	fmt.Fprintln(w)
 	for _, warn := range result.warnings {
@@ -627,5 +630,38 @@ func validateTranscript(w io.Writer, result *validationResult, cfg *config.Confi
 		fmt.Fprintln(w, "✓ transcript: full")
 	default:
 		result.addError("transcript: unknown level %q (expected 'tools', 'full', or 'off')", level)
+	}
+}
+
+// validateMCP checks that each declared MCP server's command binary exists in
+// PATH and warns when a phase references an undeclared MCP server.
+// The lookPath parameter is injected for testability, following the same
+// pattern as validateRunner.
+func validateMCP(w io.Writer, result *validationResult, cfg *config.Config, pl *pipeline.PhasePipeline, lookPath func(string) (string, error)) {
+	if len(cfg.MCP.Servers) == 0 {
+		fmt.Fprintln(w, "✓ mcp: no servers configured")
+		return
+	}
+
+	// Check each declared server's binary.
+	for name, server := range cfg.MCP.Servers {
+		_, err := lookPath(server.Command)
+		if err != nil {
+			result.addWarning("mcp: server %q: command %q not found in PATH", name, server.Command)
+			fmt.Fprintf(w, "  ✗ mcp server %s: %s not found\n", name, server.Command)
+		} else {
+			fmt.Fprintf(w, "  ✓ mcp server %s: %s\n", name, server.Command)
+		}
+	}
+
+	// Warn about phases referencing undeclared servers.
+	if pl != nil {
+		for _, phase := range pl.Phases {
+			for _, serverName := range phase.MCPServers {
+				if _, declared := cfg.MCP.Servers[serverName]; !declared {
+					result.addWarning("mcp: phase %q references undeclared server %q", phase.Name, serverName)
+				}
+			}
+		}
 	}
 }
