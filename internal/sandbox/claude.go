@@ -87,6 +87,19 @@ func (a *ClaudeAdapter) BuildArgs(opts runner.RunOpts, tmpDir string) ([]string,
 		sf.Close()
 	}
 
+	// When MCP servers are declared, write a temp config file into tmpDir
+	// and pass its path via --mcp-config + --strict-mcp-config. The file
+	// is cleaned up when tmpDir is removed, so no explicit defer is needed.
+	var mcpConfigPath string
+	if len(opts.MCPServers) > 0 {
+		mcpPath, _, mcpErr := runner.WriteMCPConfigFile(tmpDir, opts.MCPServers)
+		if mcpErr != nil {
+			fmt.Fprintf(os.Stderr, "sandbox: warning: MCP config write failed: %v; continuing without MCP\n", mcpErr)
+		} else {
+			mcpConfigPath = mcpPath
+		}
+	}
+
 	// Build Claude CLI args via exported BuildArgs.
 	var budgetPtr *float64
 	if opts.MaxBudgetUSD > 0 {
@@ -95,12 +108,21 @@ func (a *ClaudeAdapter) BuildArgs(opts runner.RunOpts, tmpDir string) ([]string,
 	claudeOpts := claude.RunOpts{
 		SystemPromptPath: sysPromptPath,
 		SettingsPath:     settingsPath,
+		MCPConfigPath:    mcpConfigPath,
+		StrictMCPConfig:  mcpConfigPath != "",
 		OutputSchema:     opts.OutputSchema,
 		AllowedTools:     opts.AllowedTools,
 		MaxBudgetUSD:     budgetPtr,
 		Timeout:          opts.Timeout,
 		TranscriptLevel:  opts.TranscriptLevel,
 	}
+
+	// When MCP servers provide extra tool declarations, append them so
+	// Claude Code's allowlist permits MCP tool calls.
+	if len(opts.AllowedMCPTools) > 0 {
+		claudeOpts.AllowedTools = append(claudeOpts.AllowedTools, opts.AllowedMCPTools...)
+	}
+
 	args := claude.BuildArgs(claudeOpts, opts.Model)
 
 	// Append user prompt as positional arg (stdin workaround — see issue #2 Fix 4).
