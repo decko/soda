@@ -147,6 +147,13 @@ func (a *OpencodeAdapter) ExtraPaths(opts runner.RunOpts) (read []string, write 
 	return read, nil
 }
 
+// MCPExtraPaths returns additional read and write paths required for MCP
+// server binaries. Write paths are nil — MCP servers that need temp files
+// use tmpDir, which buildSandboxPaths already makes a write path.
+func (a *OpencodeAdapter) MCPExtraPaths(servers map[string]runner.MCPServerConfig) (read []string, write []string) {
+	return resolveMCPBinaryReadPaths(servers), nil
+}
+
 // resolveOpencodePaths finds the opencode binary and collects paths needed for
 // the sandbox read profile.
 func resolveOpencodePaths(binary string) (resolved string, readPaths []string, err error) {

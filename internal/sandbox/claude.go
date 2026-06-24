@@ -157,6 +157,13 @@ func (a *ClaudeAdapter) ExtraPaths(opts runner.RunOpts) (read []string, write []
 	return read, nil
 }
 
+// MCPExtraPaths returns additional read and write paths required for MCP
+// server binaries. Write paths are nil — MCP servers that need temp files
+// use tmpDir, which buildSandboxPaths already makes a write path.
+func (a *ClaudeAdapter) MCPExtraPaths(servers map[string]runner.MCPServerConfig) (read []string, write []string) {
+	return resolveMCPBinaryReadPaths(servers), nil
+}
+
 // resolveClaudePaths finds the claude binary and collects paths
 // needed for the sandbox read profile (node binary, node_modules, etc.).
 func resolveClaudePaths(binary string) (resolved string, readPaths []string, err error) {

@@ -126,6 +126,11 @@ func (a *PiAdapter) ExtraPaths(opts runner.RunOpts) (read []string, write []stri
 	return read, nil
 }
 
+// MCPExtraPaths returns empty paths — Pi does not support MCP servers.
+func (a *PiAdapter) MCPExtraPaths(_ map[string]runner.MCPServerConfig) (read []string, write []string) {
+	return nil, nil
+}
+
 // resolvePiPaths finds the pi binary and collects paths needed for the
 // sandbox read profile.
 func resolvePiPaths(binary string) (resolved string, readPaths []string, err error) {
