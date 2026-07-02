@@ -158,6 +158,7 @@ jobs:
           cd /tmp/arapuca
           git checkout 124265dde855cbaf369bd8e10c9dc138ed766c60  # v0.2.4
           cargo install cbindgen
+          make package
           make install PREFIX=$HOME/.local
           echo "PKG_CONFIG_PATH=$HOME/.local/lib/pkgconfig" >> "$GITHUB_ENV"
 
