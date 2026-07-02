@@ -161,8 +161,9 @@ jobs:
           make package
           make install PREFIX=$HOME/.local
           cargo build --release --bin arapuca
-          cp target/release/arapuca $HOME/.local/bin/arapuca
+          mkdir -p $HOME/.local/bin && cp target/release/arapuca $HOME/.local/bin/arapuca
           echo "PKG_CONFIG_PATH=$HOME/.local/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Run sandbox integration tests
         env:
