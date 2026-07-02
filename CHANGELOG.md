@@ -7,10 +7,116 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] — "Many Hands" - 2026-07-01
+
+### Added
+
+#### Multi-backend agent support
+- **Pi coding agent backend** (#484) — `runner: pi` in `soda.yaml` routes pipeline
+  phases through the Pi CLI (`earendil-works/pi`). Includes JSONL streaming parser,
+  budget enforcement via context cancel, worktree cleanup, and sandboxed execution
+  via `PiAdapter`.
+- **Opencode agent backend** (#485) — `runner: opencode` routes phases through
+  Opencode. Agent-based system prompt injection, JSON event streaming, tool mapping,
+  and sandbox adapter. Provider/model configured as `openai/gpt-4o` style strings in
+  `opencode.model`.
+- **Agent bootstrap** (#481) — `soda doctor` and `soda validate` check for the
+  configured runner binary, report install hints for missing agents, and surface
+  available alternatives when the configured runner is not found.
+- **AgentAdapter interface** (#482) — refactors sandbox isolation from Claude-specific
+  arg building. `ClaudeAdapter`, `PiAdapter`, and `OpencodeAdapter` each implement
+  `AgentAdapter`, enabling runner-agnostic sandboxing.
+
+#### MCP tool injection
+- **MCP config declaration and arg injection** (#639) — declare MCP servers globally
+  in `soda.yaml` and enable per-phase in `phases.yaml`. Claude Code receives
+  `--mcp-config` + `--strict-mcp-config`; Opencode gets `mcpServers` merged into
+  `.opencode.json`; Pi logs a warning (unsupported). Startup failures are
+  non-blocking — pipeline continues without MCP.
+- **MCP server health checks** (#642) — `soda doctor` runs `claude mcp list` /
+  `opencode mcp list` to verify configured servers start and connect. `soda validate`
+  checks server commands exist in PATH and warns on unknown server references.
+- **MCP server support inside sandbox** (#640) — when a phase declares `mcp_servers`,
+  `UseNetNS` is automatically disabled for that phase so MCP servers retain host
+  network access. Security warning emitted. MCP server binary paths added to sandbox
+  read paths via `MCPExtraPaths` on `AgentAdapter`.
+
+#### Pipeline organization
+- **`.pipelines/` directory convention** (#563) — named pipelines can live in
+  `.pipelines/*.yaml` instead of root-level `phases-*.yaml` files. Discovery searches
+  `.pipelines/` first, then project root. `pipelines_path` config key for custom
+  locations. `soda init --phases` generates `.pipelines/` structure.
+
+#### Prompt template versioning
+- **Prompt drift detection** (#491) — embedded prompts carry
+  `{{/* soda:prompt-version=N */}}` headers. `soda validate` checks user override
+  prompts for version mismatch and missing field coverage. Engine emits
+  `prompt_version_mismatch` events (non-blocking). `ScanPromptDataFields` uses reflect
+  to filter against actual `PromptData` struct fields, avoiding false positives from
+  range variable accesses.
+
+#### Sandbox security
+- **Wrapper binary requirement** (#643) — `soda run`, `soda validate`, and `soda
+  doctor` all enforce that the `arapuca` wrapper binary is installed when
+  `sandbox.enabled: true`. Without the wrapper, Landlock filesystem isolation and
+  seccomp syscall filtering are not applied. Clear error with install instructions.
+- **Baseline seccomp profile** — upgraded to go-arapuca v0.2.2 (libarapuca v0.2.4).
+  Sets `SeccompProfileBaseline` for all sandboxed sessions, allowing Claude Code
+  (Bun runtime) to run without SIGSYS. Baseline blocks only sandbox-escape syscalls;
+  Landlock and netns remain the primary confinement layers.
+- **Wrapper version check** — `soda doctor` compares the installed `arapuca` wrapper
+  version against the linked library version and warns when mismatched.
+
 ### Changed
 
 - **`soda cost --outcomes` renamed to `--by-outcome`** (#529) — aligns flag naming
   with `--by-complexity` for a uniform `by-<noun>` convention.
+- **Monitor phase removed from default pipeline** — monitor is no longer in `phases.yaml`
+  by default. Users who need it can add it via a named pipeline in `.pipelines/`.
+  Eliminates the `phases-no-monitor.yaml` drift problem.
+- **Triage timeout bumped to 8m** — was 3m in the embedded default, which was too tight
+  under API latency. Plan and patch timeouts also bumped to 15m.
+- **go-arapuca upgraded to v0.2.2** — exposes `SeccompProfileKind`, `UsePidNS`,
+  `DnsCapture`, `MaxOpenFiles` fields on the Go sandbox `Profile` struct.
+
+## [0.7.0] — "Open Doors" - 2026-05-25
+
+### Added
+
+- **`soda gc`** (#505) — garbage-collect completed worktrees and session data
+  older than a configurable age.
+- **`--max-cost` CLI flag** (#506) — override the per-ticket cost limit inline
+  without editing `soda.yaml`.
+- **`soda demo`** (#508) — guided first-run experience with a `StaticSource`
+  ticket that doesn't require GitHub/Jira credentials.
+- **GitLab ticket source** (#510) — `ticket_source: gitlab` fetches issues via
+  `glab`. Includes comment extraction, smoke tests, and `soda doctor` / `soda init`
+  integration.
+- **`soda doctor` commit-signing check** (#553) — validates git commit signing
+  config (SSH inline key, GPG) and key reachability.
+- **Phases reference docs** (#567) — `docs/phases.md` comprehensive reference for
+  all built-in phases, config fields, and extension points.
+
+## [0.6.0] — "Deep Context" - 2026-05-15
+
+### Added
+
+- **Triage context bridge** (#504) — inject triage `relevant_files` into implement
+  prompt so the agent sees the files triage identified without spending tokens on
+  rediscovery.
+- **Error classification telemetry** (#507) — structured `failure_category` field
+  on phase failure events. Categories: `timeout`, `budget`, `parse`, `semantic`,
+  `context`, `unknown`.
+- **Rework root cause tagging** (#509) — review findings carry a `category` field
+  (`logic`, `test_pattern`, `convention`, `documentation`, `unknown`). Engine emits
+  category distribution in `rework_feedback_injected` events.
+- **Cost by outcome** (#511) — `soda cost --by-outcome` groups cumulative cost by
+  pipeline result (success, rework, exhausted, failed).
+- **Claude CLI version pin** (#512) — `soda doctor` checks `MinCLIVersion` and
+  `MaxTestedCLIVersion` and warns when the installed CLI falls outside the tested
+  range.
+- **Docs overhaul** (#514) — README, AGENTS.md, and `config.example.yaml` updated
+  to reflect v0.5.0+ features.
 
 ## [0.5.0] — "Sharp Review" - 2026-05-13
 

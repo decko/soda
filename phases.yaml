@@ -42,7 +42,7 @@ phases:
       - Grep
       - Bash(git:*)
       - Bash(ls:*)
-    timeout: 8m
+    timeout: 15m
     retry:
       transient: 2
       parse: 1
@@ -100,7 +100,7 @@ phases:
       - Glob
       - Grep
       - Bash
-    timeout: 8m
+    timeout: 15m
     retry:
       transient: 2
       parse: 1
@@ -118,7 +118,7 @@ phases:
       - Glob
       - Grep
       - Bash
-    timeout: 8m
+    timeout: 15m
     retry:
       transient: 2
       parse: 1
@@ -174,7 +174,7 @@ phases:
       - Bash(git:*)
       - Bash(gh:*)
       - Bash(glab:*)
-    timeout: 8m
+    timeout: 3m
     retry:
       transient: 2
       parse: 1
