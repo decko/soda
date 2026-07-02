@@ -160,6 +160,8 @@ jobs:
           cargo install cbindgen
           make package
           make install PREFIX=$HOME/.local
+          cargo build --release --bin arapuca
+          cp target/release/arapuca $HOME/.local/bin/arapuca
           echo "PKG_CONFIG_PATH=$HOME/.local/lib/pkgconfig" >> "$GITHUB_ENV"
 
       - name: Run sandbox integration tests
