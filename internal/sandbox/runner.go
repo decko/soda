@@ -180,13 +180,14 @@ func (r *Runner) Run(ctx context.Context, opts runner.RunOpts) (*runner.RunResul
 	}
 
 	profile := arapuca.Profile{
-		ReadPaths:     sp.ReadPaths,
-		WritePaths:    sp.WritePaths,
-		MaxMemoryMB:   r.config.MemoryMB,
-		MaxCPUPct:     r.config.CPUPercent,
-		MaxPIDs:       r.config.MaxPIDs,
-		MaxFileSizeMB: r.config.MaxFileSizeMB,
-		UseNetNS:      useNetNS,
+		ReadPaths:      sp.ReadPaths,
+		WritePaths:     sp.WritePaths,
+		MaxMemoryMB:    r.config.MemoryMB,
+		MaxCPUPct:      r.config.CPUPercent,
+		MaxPIDs:        r.config.MaxPIDs,
+		MaxFileSizeMB:  r.config.MaxFileSizeMB,
+		UseNetNS:       useNetNS,
+		SeccompProfile: arapuca.SeccompProfileBaseline,
 	}
 
 	// Set up stdout/stderr pipes. Defer closing both ends as safety net
