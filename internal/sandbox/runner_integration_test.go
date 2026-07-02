@@ -213,8 +213,9 @@ func TestIntegration_ProxyRoundTrip(t *testing.T) {
 
 	cfg := arapuca.Config{
 		Profile: arapuca.Profile{
-			ReadPaths:  readPaths,
-			WritePaths: []string{workDir, tmpDir},
+			ReadPaths:      readPaths,
+			WritePaths:     []string{workDir, tmpDir},
+			SeccompProfile: arapuca.SeccompProfileBaseline, // curl needs AF_INET (blocked by Strict)
 		},
 		TaskID:  "proxy-test",
 		Phase:   "test",
