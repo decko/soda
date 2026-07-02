@@ -2612,7 +2612,7 @@ func TestCheckArapucaWrapperVersion_PassesWhenVersionCurrent(t *testing.T) {
 	env.ArapucaWrapperPath = func() string { return "/usr/bin/arapuca" }
 	env.RunCmd = func(name string, args ...string) (string, error) {
 		if name == "arapuca" {
-			return "arapuca 0.2.0", nil
+			return "arapuca 0.2.2", nil
 		}
 		return allPassEnv().RunCmd(name, args...)
 	}
