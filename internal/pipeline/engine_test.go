@@ -4057,8 +4057,6 @@ func TestEngine_PauseSignalContextCancel(t *testing.T) {
 		},
 	}
 	// Override the Run method to block triage on triageGate.
-	origRun := blockingMock.Run
-	_ = origRun
 	wrappedRunner := &blockingRunner{
 		inner:      blockingMock,
 		blockPhase: "triage",
@@ -4077,19 +4075,36 @@ func TestEngine_PauseSignalContextCancel(t *testing.T) {
 		errCh <- engine.Run(ctx)
 	}()
 
-	// Let Run() start and drainPauseSignal goroutine launch.
-	time.Sleep(50 * time.Millisecond)
-
-	// Pause the engine — drainPauseSignal sets e.paused = true.
+	// Send pause signal. drainPauseSignal goroutine is already running
+	// (started in NewEngine), so it will consume this from the buffered channel.
 	pauseCh <- true
 
-	// Unblock triage so it completes. The engine will then try to start
-	// the plan phase, hitting waitIfPaused which blocks because paused=true.
-	time.Sleep(50 * time.Millisecond)
+	// Poll until drainPauseSignal has actually set e.paused = true.
+	// No timing assumptions — deterministic synchronization.
+	deadline := time.After(5 * time.Second)
+	for {
+		engine.pauseMu.Lock()
+		paused := engine.paused
+		engine.pauseMu.Unlock()
+		if paused {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("drainPauseSignal did not set paused=true within 5s")
+		default:
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+
+	// Now unblock triage. The engine will complete triage and enter
+	// waitIfPaused for plan, which blocks because paused=true.
 	close(triageGate)
 
-	// Give the engine time to complete triage and enter waitIfPaused for plan.
-	time.Sleep(100 * time.Millisecond)
+	// Brief yield to let engine complete triage processing and enter waitIfPaused.
+	// Even if this is insufficient, cancel() below will be caught by ctx.Err()
+	// check at the top of the phase loop — the assertion still holds.
+	time.Sleep(50 * time.Millisecond)
 
 	// Cancel context while engine is blocked in waitIfPaused.
 	cancel()
