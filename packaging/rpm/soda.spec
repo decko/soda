@@ -15,8 +15,8 @@ ExclusiveArch:  x86_64
 BuildRequires:  golang >= 1.24
 BuildRequires:  gcc
 BuildRequires:  git-core
-BuildRequires:  arapuca-devel
-Requires:       arapuca
+BuildRequires:  arapuca-devel >= 0.2.4
+Requires:       arapuca >= 0.2.4
 
 Conflicts:      soda-minimal
 
