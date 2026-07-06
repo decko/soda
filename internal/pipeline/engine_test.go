@@ -4071,8 +4071,8 @@ func TestEngine_PauseSignalContextCancel(t *testing.T) {
 		errCh <- engine.Run(ctx)
 	}()
 
-	// Wait briefly, then cancel context while paused
-	time.Sleep(100 * time.Millisecond)
+	// Wait for engine to enter paused state. 500ms is generous for slow CI runners.
+	time.Sleep(500 * time.Millisecond)
 	cancel()
 
 	select {
