@@ -12,6 +12,17 @@ import (
 )
 
 func TestOpencodeAdapterBuildArgs(t *testing.T) {
+	// assertNotContains checks that none of the args equal the given value.
+	assertNotContains := func(t *testing.T, args []string, unwanted string) {
+		t.Helper()
+		for _, arg := range args {
+			if arg == unwanted {
+				t.Errorf("args %v should NOT contain %q", args, unwanted)
+				return
+			}
+		}
+	}
+
 	// Create a fake opencode binary so NewOpencodeAdapter can resolve it.
 	binDir := t.TempDir()
 	fakeOpencode := filepath.Join(binDir, "opencode")
@@ -38,13 +49,27 @@ func TestOpencodeAdapterBuildArgs(t *testing.T) {
 			t.Fatalf("BuildArgs: %v", err)
 		}
 
-		assertContains(t, args, "--print")
-		assertContains(t, args, "--output-format")
-		assertContains(t, args, "--dangerously-skip-permissions")
+		// args[0] must be the "run" subcommand.
+		if len(args) == 0 || args[0] != "run" {
+			t.Fatalf("args[0] = %q, want %q", args[0], "run")
+		}
+
+		// OpenCode-compatible flags.
+		assertContainsArgPair(t, args, "--format", "json")
 		assertContainsArgPair(t, args, "--model", "opencode-model-1")
 		assertContainsArgPair(t, args, "--agent", "soda-implement")
-		assertContainsArgPair(t, args, "--permissions", "read,bash(git:*)")
-		assertContainsArgPair(t, args, "-p", "do the thing")
+
+		// Claude Code flags must NOT be present.
+		assertNotContains(t, args, "--print")
+		assertNotContains(t, args, "--output-format")
+		assertNotContains(t, args, "--dangerously-skip-permissions")
+		assertNotContains(t, args, "--permissions")
+		assertNotContains(t, args, "-p")
+
+		// User prompt should be the last element.
+		if args[len(args)-1] != "do the thing" {
+			t.Errorf("last arg = %q, want %q", args[len(args)-1], "do the thing")
+		}
 	})
 
 	t.Run("writes_agent_file_to_tmpdir", func(t *testing.T) {
@@ -83,20 +108,6 @@ func TestOpencodeAdapterBuildArgs(t *testing.T) {
 		}
 	})
 
-	t.Run("no_permissions_when_no_tools", func(t *testing.T) {
-		tmpDir := t.TempDir()
-		opts := runner.RunOpts{Phase: "triage", UserPrompt: "hello"}
-		args, err := adapter.BuildArgs(opts, tmpDir)
-		if err != nil {
-			t.Fatalf("BuildArgs: %v", err)
-		}
-		for _, arg := range args {
-			if arg == "--permissions" {
-				t.Error("should not include --permissions when no tools")
-			}
-		}
-	})
-
 	t.Run("phase_with_slash", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		opts := runner.RunOpts{Phase: "review/go-specialist", UserPrompt: "hello"}
@@ -105,6 +116,26 @@ func TestOpencodeAdapterBuildArgs(t *testing.T) {
 			t.Fatalf("BuildArgs: %v", err)
 		}
 		assertContainsArgPair(t, args, "--agent", "soda-review-go-specialist")
+	})
+
+	t.Run("prompt_as_positional_arg", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		opts := runner.RunOpts{
+			Phase:      "triage",
+			Model:      "m",
+			UserPrompt: "please triage this ticket",
+		}
+		args, err := adapter.BuildArgs(opts, tmpDir)
+		if err != nil {
+			t.Fatalf("BuildArgs: %v", err)
+		}
+
+		if args[0] != "run" {
+			t.Fatalf("args[0] = %q, want %q", args[0], "run")
+		}
+		if args[len(args)-1] != opts.UserPrompt {
+			t.Errorf("last arg = %q, want %q", args[len(args)-1], opts.UserPrompt)
+		}
 	})
 }
 
