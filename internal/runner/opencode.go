@@ -117,11 +117,6 @@ func (r *OpencodeRunner) Run(ctx context.Context, opts RunOpts) (*RunResult, err
 	cmd.Dir = opts.WorkDir
 	cmd.Env = env
 
-	// Stdin: prompt via stdin, or /dev/null if empty.
-	if opts.UserPrompt != "" {
-		cmd.Stdin = strings.NewReader(opts.UserPrompt)
-	}
-
 	// Process group isolation — kill the entire group on cancel.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
