@@ -84,9 +84,8 @@ func (a *OpencodeAdapter) BuildArgs(opts runner.RunOpts, tmpDir string) ([]strin
 	}
 
 	args := []string{
-		"--print",
-		"--output-format", "stream-json",
-		"--dangerously-skip-permissions",
+		"run",
+		"--format", "json",
 	}
 
 	if opts.Model != "" {
@@ -101,18 +100,10 @@ func (a *OpencodeAdapter) BuildArgs(opts runner.RunOpts, tmpDir string) ([]strin
 	agentName := "soda-" + strings.ReplaceAll(phase, "/", "-")
 	args = append(args, "--agent", agentName)
 
-	// Map and add allowed tools.
-	mapped := make([]string, 0, len(opts.AllowedTools))
-	for _, tool := range opts.AllowedTools {
-		mapped = append(mapped, runner.MapOpencodeToolName(tool))
+	// Append user prompt as final positional argument.
+	if opts.UserPrompt != "" {
+		args = append(args, opts.UserPrompt)
 	}
-	mapped = runner.DeduplicateTools(mapped)
-	if len(mapped) > 0 {
-		args = append(args, "--permissions", strings.Join(mapped, ","))
-	}
-
-	// Append user prompt as positional arg.
-	args = append(args, "-p", opts.UserPrompt)
 
 	return args, nil
 }
