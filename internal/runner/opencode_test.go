@@ -389,38 +389,60 @@ func TestClassifyOpencodeError(t *testing.T) {
 }
 
 func TestBuildOpencodeArgs(t *testing.T) {
+	// assertNotContainsArg checks that none of the args equal the given value.
+	assertNotContainsArg := func(t *testing.T, args []string, unwanted string) {
+		t.Helper()
+		for _, arg := range args {
+			if arg == unwanted {
+				t.Errorf("args %v should NOT contain %q", args, unwanted)
+				return
+			}
+		}
+	}
+
 	t.Run("basic_args", func(t *testing.T) {
 		opts := RunOpts{
 			Phase:        "implement",
 			Model:        "opencode-model-1",
 			OutputSchema: `{"type":"object"}`,
 			AllowedTools: []string{"Read", "Bash(git:*)"},
+			UserPrompt:   "do the thing",
 		}
 		args := buildOpencodeArgs(opts, "default-model")
 
+		// args[0] must be the "run" subcommand.
+		if len(args) == 0 || args[0] != "run" {
+			t.Fatalf("args[0] = %q, want %q", args[0], "run")
+		}
+
+		// OpenCode-compatible flags.
+		assertContainsArg(t, args, "--format", "json")
 		// Model should be per-invocation override.
 		assertContainsArg(t, args, "--model", "opencode-model-1")
-		// Should have --dangerously-skip-permissions.
-		found := false
-		for _, arg := range args {
-			if arg == "--dangerously-skip-permissions" {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Error("args should contain --dangerously-skip-permissions")
-		}
 		// Agent name should be derived from phase.
 		assertContainsArg(t, args, "--agent", "soda-implement")
-		// Tools should be mapped and joined.
-		assertContainsArg(t, args, "--permissions", "read,bash(git:*)")
+
+		// Claude Code flags must NOT be present.
+		assertNotContainsArg(t, args, "--print")
+		assertNotContainsArg(t, args, "--output-format")
+		assertNotContainsArg(t, args, "--dangerously-skip-permissions")
+		assertNotContainsArg(t, args, "--permissions")
+
+		// User prompt should be the last element.
+		if args[len(args)-1] != "do the thing" {
+			t.Errorf("last arg = %q, want %q", args[len(args)-1], "do the thing")
+		}
 	})
 
 	t.Run("default_model_when_not_overridden", func(t *testing.T) {
 		opts := RunOpts{Phase: "triage"}
 		args := buildOpencodeArgs(opts, "default-model")
 		assertContainsArg(t, args, "--model", "default-model")
+
+		// No Claude flags.
+		assertNotContainsArg(t, args, "--print")
+		assertNotContainsArg(t, args, "--output-format")
+		assertNotContainsArg(t, args, "--dangerously-skip-permissions")
 	})
 
 	t.Run("no_model_when_both_empty", func(t *testing.T) {
@@ -429,16 +451,6 @@ func TestBuildOpencodeArgs(t *testing.T) {
 		for _, arg := range args {
 			if arg == "--model" {
 				t.Error("should not include --model when both are empty")
-			}
-		}
-	})
-
-	t.Run("no_permissions_when_no_tools", func(t *testing.T) {
-		opts := RunOpts{Phase: "triage"}
-		args := buildOpencodeArgs(opts, "model")
-		for _, arg := range args {
-			if arg == "--permissions" {
-				t.Error("should not include --permissions when no tools")
 			}
 		}
 	})
@@ -455,30 +467,29 @@ func TestBuildOpencodeArgs(t *testing.T) {
 		assertContainsArg(t, args, "--agent", "soda-default")
 	})
 
-	t.Run("output_schema_in_agent_file", func(t *testing.T) {
-		dir := t.TempDir()
-		schema := `{"required":["ticket_key","verdict"]}`
-		content := "You are a helpful assistant."
-		agentContent := content + "\n\n## Output Schema\n\nYou MUST produce a JSON object conforming to this schema:\n\n```json\n" + schema + "\n```\n"
-		cleanup, err := writeOpencodeAgentFile(dir, "default", agentContent)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+	t.Run("prompt_as_positional_arg", func(t *testing.T) {
+		opts := RunOpts{
+			Phase:      "triage",
+			Model:      "m",
+			UserPrompt: "please triage this ticket",
 		}
-		defer cleanup()
+		args := buildOpencodeArgs(opts, "")
 
-		agentPath := filepath.Join(dir, ".opencode", "agent", "soda-default.md")
-		got, readErr := os.ReadFile(agentPath)
-		if readErr != nil {
-			t.Fatalf("failed to read file: %v", readErr)
+		if args[0] != "run" {
+			t.Fatalf("args[0] = %q, want %q", args[0], "run")
 		}
-		if !strings.Contains(string(got), "## Output Schema") {
-			t.Error("agent file should contain output schema section")
+		if args[len(args)-1] != opts.UserPrompt {
+			t.Errorf("last arg = %q, want %q", args[len(args)-1], opts.UserPrompt)
 		}
-		if !strings.Contains(string(got), schema) {
-			t.Error("agent file should contain the schema JSON")
-		}
-		if !strings.Contains(string(got), content) {
-			t.Error("agent file should contain the system prompt")
+	})
+
+	t.Run("no_prompt_when_empty", func(t *testing.T) {
+		opts := RunOpts{Phase: "triage", Model: "m"}
+		args := buildOpencodeArgs(opts, "")
+
+		// The last element should be the agent name, not an empty string.
+		if args[len(args)-1] == "" {
+			t.Error("args should not end with an empty string when UserPrompt is empty")
 		}
 	})
 }

@@ -117,11 +117,6 @@ func (r *OpencodeRunner) Run(ctx context.Context, opts RunOpts) (*RunResult, err
 	cmd.Dir = opts.WorkDir
 	cmd.Env = env
 
-	// Stdin: prompt via stdin, or /dev/null if empty.
-	if opts.UserPrompt != "" {
-		cmd.Stdin = strings.NewReader(opts.UserPrompt)
-	}
-
 	// Process group isolation — kill the entire group on cancel.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
@@ -303,9 +298,8 @@ func opencodeStreamToResult(parsed *OpencodeStreamResult) *RunResult {
 // buildOpencodeArgs constructs the CLI argument list for an Opencode invocation.
 func buildOpencodeArgs(opts RunOpts, defaultModel string) []string {
 	args := []string{
-		"--print",
-		"--output-format", "stream-json",
-		"--dangerously-skip-permissions",
+		"run",
+		"--format", "json",
 	}
 
 	// Prefer per-invocation model over runner-level default.
@@ -325,14 +319,9 @@ func buildOpencodeArgs(opts RunOpts, defaultModel string) []string {
 	}
 	args = append(args, "--agent", agentName(phase))
 
-	// Map and add allowed tools.
-	mapped := make([]string, 0, len(opts.AllowedTools))
-	for _, tool := range opts.AllowedTools {
-		mapped = append(mapped, MapOpencodeToolName(tool))
-	}
-	mapped = DeduplicateTools(mapped)
-	if len(mapped) > 0 {
-		args = append(args, "--permissions", strings.Join(mapped, ","))
+	// Append user prompt as the final positional argument.
+	if opts.UserPrompt != "" {
+		args = append(args, opts.UserPrompt)
 	}
 
 	return args
