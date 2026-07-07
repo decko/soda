@@ -303,9 +303,8 @@ func opencodeStreamToResult(parsed *OpencodeStreamResult) *RunResult {
 // buildOpencodeArgs constructs the CLI argument list for an Opencode invocation.
 func buildOpencodeArgs(opts RunOpts, defaultModel string) []string {
 	args := []string{
-		"--print",
-		"--output-format", "stream-json",
-		"--dangerously-skip-permissions",
+		"run",
+		"--format", "json",
 	}
 
 	// Prefer per-invocation model over runner-level default.
@@ -325,14 +324,9 @@ func buildOpencodeArgs(opts RunOpts, defaultModel string) []string {
 	}
 	args = append(args, "--agent", agentName(phase))
 
-	// Map and add allowed tools.
-	mapped := make([]string, 0, len(opts.AllowedTools))
-	for _, tool := range opts.AllowedTools {
-		mapped = append(mapped, MapOpencodeToolName(tool))
-	}
-	mapped = DeduplicateTools(mapped)
-	if len(mapped) > 0 {
-		args = append(args, "--permissions", strings.Join(mapped, ","))
+	// Append user prompt as the final positional argument.
+	if opts.UserPrompt != "" {
+		args = append(args, opts.UserPrompt)
 	}
 
 	return args
