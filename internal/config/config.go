@@ -58,9 +58,18 @@ type OpencodeConfig struct {
 
 // MCPServerConfig holds the definition of a single MCP server process.
 type MCPServerConfig struct {
-	Command string            `yaml:"command"`
-	Args    []string          `yaml:"args,omitempty"`
-	Env     map[string]string `yaml:"env,omitempty"`
+	Command      string            `yaml:"command"`
+	Args         []string          `yaml:"args,omitempty"`
+	Env          map[string]string `yaml:"env,omitempty"`
+	AllowedHosts []AllowedHost     `yaml:"allowed_hosts,omitempty"`
+}
+
+// AllowedHost specifies an outbound host:port that the sandbox CONNECT
+// proxy will allow. When all MCP servers in a phase declare allowed_hosts,
+// network namespace isolation is preserved instead of being disabled.
+type AllowedHost struct {
+	Host string `yaml:"host"`
+	Port uint16 `yaml:"port"`
 }
 
 // MCPConfig holds MCP server declarations available to pipeline phases.

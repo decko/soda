@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 
+	arapuca "github.com/sergio-correia/go-arapuca"
+
 	"github.com/decko/soda/internal/runner"
 )
 
@@ -39,13 +41,54 @@ func buildSandboxPaths(workDir, tmpDir string, extraRead, extraWrite []string) s
 }
 
 // effectiveUseNetNS returns the effective network namespace isolation flag.
-// When MCP servers are configured, network isolation is disabled because MCP
-// servers may need to make outbound connections (e.g. to Jira, GitHub APIs).
+// When MCP servers are configured without allowed_hosts, network isolation
+// is disabled because MCP servers may need outbound connections. When all
+// MCP servers declare allowed_hosts, network isolation is preserved and
+// traffic is routed through the sandbox CONNECT proxy.
 func effectiveUseNetNS(configured bool, servers map[string]runner.MCPServerConfig) bool {
-	if len(servers) > 0 {
-		return false
+	if len(servers) == 0 {
+		return configured
 	}
-	return configured
+	if allServersHaveAllowedHosts(servers) {
+		return true
+	}
+	return false
+}
+
+// allServersHaveAllowedHosts returns true when every server in the map
+// declares at least one AllowedHost entry.
+func allServersHaveAllowedHosts(servers map[string]runner.MCPServerConfig) bool {
+	for _, srv := range servers {
+		if len(srv.AllowedHosts) == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// collectAllowedHosts aggregates AllowedHost entries from all MCP servers
+// into a deduplicated list of arapuca.AllowedHost values for the sandbox
+// CONNECT proxy.
+func collectAllowedHosts(servers map[string]runner.MCPServerConfig) []arapuca.AllowedHost {
+	type hostPort struct {
+		host string
+		port uint16
+	}
+	seen := make(map[hostPort]struct{})
+	var result []arapuca.AllowedHost
+	for _, srv := range servers {
+		for _, ah := range srv.AllowedHosts {
+			key := hostPort{host: ah.Host, port: ah.Port}
+			if _, exists := seen[key]; !exists {
+				seen[key] = struct{}{}
+				result = append(result, arapuca.AllowedHost{
+					Host: ah.Host,
+					Port: ah.Port,
+				})
+			}
+		}
+	}
+	return result
 }
 
 // mcpNetworkWarning returns a warning message indicating that network

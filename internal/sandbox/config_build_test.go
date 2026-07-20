@@ -207,6 +207,40 @@ func TestEffectiveUseNetNS(t *testing.T) {
 			},
 			want: false,
 		},
+		{
+			name:       "servers_with_allowed_hosts_keeps_netns",
+			configured: true,
+			servers: map[string]runner.MCPServerConfig{
+				"jira": {
+					Command:      "jira-mcp",
+					AllowedHosts: []runner.AllowedHost{{Host: "jira.example.com", Port: 443}},
+				},
+			},
+			want: true,
+		},
+		{
+			name:       "servers_with_allowed_hosts_enables_netns_even_if_configured_false",
+			configured: false,
+			servers: map[string]runner.MCPServerConfig{
+				"jira": {
+					Command:      "jira-mcp",
+					AllowedHosts: []runner.AllowedHost{{Host: "jira.example.com", Port: 443}},
+				},
+			},
+			want: true,
+		},
+		{
+			name:       "mixed_servers_some_without_allowed_hosts_disables_netns",
+			configured: true,
+			servers: map[string]runner.MCPServerConfig{
+				"jira": {
+					Command:      "jira-mcp",
+					AllowedHosts: []runner.AllowedHost{{Host: "jira.example.com", Port: 443}},
+				},
+				"github": {Command: "gh-mcp"},
+			},
+			want: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -231,6 +265,100 @@ func TestMCPNetworkWarning(t *testing.T) {
 	}
 	if !strings.Contains(warning, "MCP") {
 		t.Errorf("warning should contain 'MCP', got: %s", warning)
+	}
+}
+
+func TestCollectAllowedHosts(t *testing.T) {
+	tests := []struct {
+		name    string
+		servers map[string]runner.MCPServerConfig
+		want    int
+	}{
+		{
+			name:    "nil_servers",
+			servers: nil,
+			want:    0,
+		},
+		{
+			name:    "empty_servers",
+			servers: map[string]runner.MCPServerConfig{},
+			want:    0,
+		},
+		{
+			name: "servers_without_allowed_hosts",
+			servers: map[string]runner.MCPServerConfig{
+				"jira": {Command: "jira-mcp"},
+			},
+			want: 0,
+		},
+		{
+			name: "single_server_single_host",
+			servers: map[string]runner.MCPServerConfig{
+				"jira": {
+					Command:      "jira-mcp",
+					AllowedHosts: []runner.AllowedHost{{Host: "jira.example.com", Port: 443}},
+				},
+			},
+			want: 1,
+		},
+		{
+			name: "multiple_servers_multiple_hosts",
+			servers: map[string]runner.MCPServerConfig{
+				"jira": {
+					Command: "jira-mcp",
+					AllowedHosts: []runner.AllowedHost{
+						{Host: "jira.example.com", Port: 443},
+					},
+				},
+				"github": {
+					Command: "gh-mcp",
+					AllowedHosts: []runner.AllowedHost{
+						{Host: "api.github.com", Port: 443},
+					},
+				},
+			},
+			want: 2,
+		},
+		{
+			name: "duplicate_hosts_deduplicated",
+			servers: map[string]runner.MCPServerConfig{
+				"jira": {
+					Command: "jira-mcp",
+					AllowedHosts: []runner.AllowedHost{
+						{Host: "api.example.com", Port: 443},
+					},
+				},
+				"github": {
+					Command: "gh-mcp",
+					AllowedHosts: []runner.AllowedHost{
+						{Host: "api.example.com", Port: 443},
+					},
+				},
+			},
+			want: 1,
+		},
+		{
+			name: "same_host_different_ports_kept",
+			servers: map[string]runner.MCPServerConfig{
+				"srv": {
+					Command: "mcp",
+					AllowedHosts: []runner.AllowedHost{
+						{Host: "api.example.com", Port: 443},
+						{Host: "api.example.com", Port: 8443},
+					},
+				},
+			},
+			want: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := collectAllowedHosts(tt.servers)
+			if len(got) != tt.want {
+				t.Errorf("collectAllowedHosts() returned %d hosts, want %d", len(got), tt.want)
+			}
+		})
 	}
 }
 

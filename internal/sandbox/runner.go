@@ -113,11 +113,19 @@ func (r *Runner) Run(ctx context.Context, opts runner.RunOpts) (*runner.RunResul
 
 	sp := buildSandboxPaths(opts.WorkDir, tmpDir, combinedExtraRead, combinedExtraWrite)
 
-	// Disable network isolation when MCP servers are configured — they
-	// may need outbound connectivity (e.g. Jira, GitHub APIs).
+	// Determine network isolation strategy for MCP servers. When all
+	// servers declare allowed_hosts, keep netns and route traffic through
+	// the CONNECT proxy. Otherwise fall back to disabling netns entirely.
 	useNetNS := effectiveUseNetNS(r.config.UseNetNS, opts.MCPServers)
+	var mcpAllowedHosts []arapuca.AllowedHost
 	if len(opts.MCPServers) > 0 {
-		fmt.Fprintf(os.Stderr, "%s", mcpNetworkWarning(opts.Phase))
+		if allServersHaveAllowedHosts(opts.MCPServers) {
+			mcpAllowedHosts = collectAllowedHosts(opts.MCPServers)
+			fmt.Fprintf(os.Stderr, "sandbox: MCP servers using CONNECT proxy with %d allowed host(s) for phase %q\n",
+				len(mcpAllowedHosts), opts.Phase)
+		} else {
+			fmt.Fprintf(os.Stderr, "%s", mcpNetworkWarning(opts.Phase))
+		}
 	}
 	var llmProxy *proxy.Proxy
 	var proxyBaseURL string
@@ -207,12 +215,13 @@ func (r *Runner) Run(ctx context.Context, opts runner.RunOpts) (*runner.RunResul
 	defer stderrW.Close()
 
 	cfg := arapuca.Config{
-		Profile: profile,
-		TaskID:  tmpPhase,
-		Phase:   tmpPhase,
-		WorkDir: opts.WorkDir,
-		Stdout:  stdoutW,
-		Stderr:  stderrW,
+		Profile:      profile,
+		TaskID:       tmpPhase,
+		Phase:        tmpPhase,
+		WorkDir:      opts.WorkDir,
+		Stdout:       stdoutW,
+		Stderr:       stderrW,
+		AllowedHosts: mcpAllowedHosts,
 	}
 
 	// Build env vars for the sandboxed process. go-arapuca v0.1.1+ passes

@@ -57,9 +57,18 @@ model: claude-opus-4-6
 #       args: [jira]
 #       env:
 #         JIRA_URL: "https://jira.example.com"
+#       # allowed_hosts preserves network isolation by routing MCP
+#       # traffic through the sandbox CONNECT proxy. Without it,
+#       # network namespace isolation is disabled for the phase.
+#       allowed_hosts:
+#         - host: "jira.example.com"
+#           port: 443
 #     github:
 #       command: wtmcp
 #       args: [github]
+#       allowed_hosts:
+#         - host: "api.github.com"
+#           port: 443
 
 # Authentication — optional keychain/vault-based credential injection.
 # When api_key_helper is set, SODA writes a Claude Code settings file
