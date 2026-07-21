@@ -1629,12 +1629,25 @@ func convertMCPConfig(cfg config.MCPConfig) pipeline.MCPConfig {
 	servers := make(map[string]pipeline.MCPServerConfig, len(cfg.Servers))
 	for name, srv := range cfg.Servers {
 		servers[name] = pipeline.MCPServerConfig{
-			Command: srv.Command,
-			Args:    srv.Args,
-			Env:     srv.Env,
+			Command:      srv.Command,
+			Args:         srv.Args,
+			Env:          srv.Env,
+			AllowedHosts: convertAllowedHosts(srv.AllowedHosts),
 		}
 	}
 	return pipeline.MCPConfig{Servers: servers}
+}
+
+// convertAllowedHosts converts config.AllowedHost to pipeline.AllowedHost.
+func convertAllowedHosts(hosts []config.AllowedHost) []pipeline.AllowedHost {
+	if len(hosts) == 0 {
+		return nil
+	}
+	result := make([]pipeline.AllowedHost, len(hosts))
+	for idx, host := range hosts {
+		result[idx] = pipeline.AllowedHost{Host: host.Host, Port: host.Port}
+	}
+	return result
 }
 
 // resolveLastPhase finds the last running or failed phase in pipeline order.

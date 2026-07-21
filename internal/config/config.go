@@ -58,9 +58,18 @@ type OpencodeConfig struct {
 
 // MCPServerConfig holds the definition of a single MCP server process.
 type MCPServerConfig struct {
-	Command string            `yaml:"command"`
-	Args    []string          `yaml:"args,omitempty"`
-	Env     map[string]string `yaml:"env,omitempty"`
+	Command      string            `yaml:"command"`
+	Args         []string          `yaml:"args,omitempty"`
+	Env          map[string]string `yaml:"env,omitempty"`
+	AllowedHosts []AllowedHost     `yaml:"allowed_hosts,omitempty"`
+}
+
+// AllowedHost specifies an outbound host:port that the sandbox CONNECT
+// proxy will allow. When all MCP servers in a phase declare allowed_hosts,
+// network namespace isolation is preserved instead of being disabled.
+type AllowedHost struct {
+	Host string `yaml:"host"`
+	Port uint16 `yaml:"port"`
 }
 
 // MCPConfig holds MCP server declarations available to pipeline phases.
@@ -319,6 +328,21 @@ func Load(path string) (*Config, error) {
 	if len(cfg.ConventionChecklist) > maxConventionChecklistBytes {
 		return nil, fmt.Errorf("config: convention_checklist exceeds %d-byte limit (%d bytes)",
 			maxConventionChecklistBytes, len(cfg.ConventionChecklist))
+	}
+
+	// Validate MCP server allowed_hosts entries.
+	for srvName, srv := range cfg.MCP.Servers {
+		for idx, ah := range srv.AllowedHosts {
+			if ah.Host == "" {
+				return nil, fmt.Errorf("config: mcp.servers.%s.allowed_hosts[%d]: host is required", srvName, idx)
+			}
+			if ah.Port == 0 {
+				return nil, fmt.Errorf("config: mcp.servers.%s.allowed_hosts[%d]: port must be 1-65535", srvName, idx)
+			}
+			if strings.Contains(ah.Host, "://") {
+				return nil, fmt.Errorf("config: mcp.servers.%s.allowed_hosts[%d]: host must not contain URL scheme (got %q)", srvName, idx, ah.Host)
+			}
+		}
 	}
 
 	return &cfg, nil

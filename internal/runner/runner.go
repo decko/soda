@@ -17,9 +17,17 @@ type Runner interface {
 // MCPServerConfig holds the definition of a single MCP server process.
 // Mirrors config.MCPServerConfig — kept separate to avoid cross-package imports.
 type MCPServerConfig struct {
-	Command string
-	Args    []string
-	Env     map[string]string
+	Command      string
+	Args         []string
+	Env          map[string]string
+	AllowedHosts []AllowedHost
+}
+
+// AllowedHost specifies an outbound host:port allowed through the sandbox
+// CONNECT proxy. Mirrors config.AllowedHost.
+type AllowedHost struct {
+	Host string
+	Port uint16
 }
 
 // RunOpts holds everything needed to execute one phase.

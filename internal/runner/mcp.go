@@ -37,8 +37,11 @@ func WriteMCPConfigFile(dir string, servers map[string]MCPServerConfig) (string,
 		MCPServers: make(map[string]mcpServerEntry, len(servers)),
 	}
 	for name, srv := range servers {
-		entry := mcpServerEntry(srv)
-		entry.Command = resolveMCPCommand(srv.Command)
+		entry := mcpServerEntry{
+			Command: resolveMCPCommand(srv.Command),
+			Args:    srv.Args,
+			Env:     srv.Env,
+		}
 		envelope.MCPServers[name] = entry
 	}
 
@@ -100,8 +103,11 @@ func WriteOpencodeMCPConfig(workDir string, servers map[string]MCPServerConfig) 
 	// paths so the agent process can find them without relying on PATH.
 	mcpEntries := make(map[string]mcpServerEntry, len(servers))
 	for name, srv := range servers {
-		entry := mcpServerEntry(srv)
-		entry.Command = resolveMCPCommand(srv.Command)
+		entry := mcpServerEntry{
+			Command: resolveMCPCommand(srv.Command),
+			Args:    srv.Args,
+			Env:     srv.Env,
+		}
 		mcpEntries[name] = entry
 	}
 

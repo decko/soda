@@ -81,9 +81,17 @@ type EngineConfig struct {
 // MCPServerConfig holds the definition of a single MCP server process.
 // Mirrors config.MCPServerConfig — kept separate to avoid cross-package imports.
 type MCPServerConfig struct {
-	Command string
-	Args    []string
-	Env     map[string]string
+	Command      string
+	Args         []string
+	Env          map[string]string
+	AllowedHosts []AllowedHost
+}
+
+// AllowedHost specifies an outbound host:port allowed through the sandbox
+// CONNECT proxy. Mirrors config.AllowedHost.
+type AllowedHost struct {
+	Host string
+	Port uint16
 }
 
 // MCPConfig holds MCP server declarations available to pipeline phases.
@@ -97,6 +105,18 @@ type MCPConfig struct {
 type TokenBudgetConfig struct {
 	WarnTokens    int     // emit warning when estimated prompt tokens exceed this; 0 disables
 	BytesPerToken float64 // bytes-per-token ratio for estimation; 0 defaults to 3.3
+}
+
+// convertAllowedHosts converts pipeline AllowedHost to runner AllowedHost.
+func convertAllowedHosts(hosts []AllowedHost) []runner.AllowedHost {
+	if len(hosts) == 0 {
+		return nil
+	}
+	result := make([]runner.AllowedHost, len(hosts))
+	for idx, host := range hosts {
+		result[idx] = runner.AllowedHost{Host: host.Host, Port: host.Port}
+	}
+	return result
 }
 
 // maxReworkCycles returns the configured max rework cycles, defaulting to DefaultMaxReworkCycles.
@@ -864,9 +884,10 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 		for _, name := range phase.MCPServers {
 			if def, ok := e.config.MCPConfig.Servers[name]; ok {
 				mcpServers[name] = runner.MCPServerConfig{
-					Command: def.Command,
-					Args:    def.Args,
-					Env:     def.Env,
+					Command:      def.Command,
+					Args:         def.Args,
+					Env:          def.Env,
+					AllowedHosts: convertAllowedHosts(def.AllowedHosts),
 				}
 			} else {
 				fmt.Fprintf(e.config.Stderr, "engine: warning: MCP server %q in phase %q not in global config\n", name, phase.Name)
