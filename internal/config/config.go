@@ -330,6 +330,21 @@ func Load(path string) (*Config, error) {
 			maxConventionChecklistBytes, len(cfg.ConventionChecklist))
 	}
 
+	// Validate MCP server allowed_hosts entries.
+	for srvName, srv := range cfg.MCP.Servers {
+		for idx, ah := range srv.AllowedHosts {
+			if ah.Host == "" {
+				return nil, fmt.Errorf("config: mcp.servers.%s.allowed_hosts[%d]: host is required", srvName, idx)
+			}
+			if ah.Port == 0 {
+				return nil, fmt.Errorf("config: mcp.servers.%s.allowed_hosts[%d]: port must be 1-65535", srvName, idx)
+			}
+			if strings.Contains(ah.Host, "://") {
+				return nil, fmt.Errorf("config: mcp.servers.%s.allowed_hosts[%d]: host must not contain URL scheme (got %q)", srvName, idx, ah.Host)
+			}
+		}
+	}
+
 	return &cfg, nil
 }
 

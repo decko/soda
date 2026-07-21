@@ -41,18 +41,23 @@ func buildSandboxPaths(workDir, tmpDir string, extraRead, extraWrite []string) s
 }
 
 // effectiveUseNetNS returns the effective network namespace isolation flag.
-// When MCP servers are configured without allowed_hosts, network isolation
-// is disabled because MCP servers may need outbound connections. When all
-// MCP servers declare allowed_hosts, network isolation is preserved and
-// traffic is routed through the sandbox CONNECT proxy.
+//
+// When configured=false, always returns false — the user explicitly opted
+// out (e.g. their kernel lacks unprivileged user namespaces) and we must
+// not silently override that decision.
+//
+// When configured=true and MCP servers are present, netns is preserved
+// only when all servers declare allowed_hosts (traffic routes through the
+// CONNECT proxy). If any server lacks allowed_hosts it may need arbitrary
+// outbound access, so netns is disabled.
 func effectiveUseNetNS(configured bool, servers map[string]runner.MCPServerConfig) bool {
-	if len(servers) == 0 {
-		return configured
+	if !configured {
+		return false
 	}
-	if allServersHaveAllowedHosts(servers) {
+	if len(servers) == 0 {
 		return true
 	}
-	return false
+	return allServersHaveAllowedHosts(servers)
 }
 
 // allServersHaveAllowedHosts returns true when every server in the map

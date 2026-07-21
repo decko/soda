@@ -219,7 +219,7 @@ func TestEffectiveUseNetNS(t *testing.T) {
 			want: true,
 		},
 		{
-			name:       "servers_with_allowed_hosts_enables_netns_even_if_configured_false",
+			name:       "servers_with_allowed_hosts_respects_configured_false",
 			configured: false,
 			servers: map[string]runner.MCPServerConfig{
 				"jira": {
@@ -227,7 +227,7 @@ func TestEffectiveUseNetNS(t *testing.T) {
 					AllowedHosts: []runner.AllowedHost{{Host: "jira.example.com", Port: 443}},
 				},
 			},
-			want: true,
+			want: false,
 		},
 		{
 			name:       "mixed_servers_some_without_allowed_hosts_disables_netns",
