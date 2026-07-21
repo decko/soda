@@ -1490,6 +1490,166 @@ func TestRunValidate_WithMCPServers(t *testing.T) {
 	}
 }
 
+// TestValidateMCP_AllowedHosts tests that validateMCP validates AllowedHost
+// fields on declared MCP servers.
+func TestValidateMCP_AllowedHosts_Valid(t *testing.T) {
+	cfg := &config.Config{
+		MCP: config.MCPConfig{
+			Servers: map[string]config.MCPServerConfig{
+				"jira": {
+					Command: "wtmcp",
+					AllowedHosts: []config.AllowedHost{
+						{Host: "jira.example.com", Port: 443},
+					},
+				},
+			},
+		},
+	}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	lookPath := stubLookPath(map[string]string{"wtmcp": "/usr/bin/wtmcp"})
+	validateMCP(&buf, result, cfg, nil, lookPath)
+
+	if result.hasErrors() {
+		t.Errorf("expected no errors for valid AllowedHosts, got: %v", result.errors)
+	}
+	if len(result.warnings) != 0 {
+		t.Errorf("expected no warnings, got: %v", result.warnings)
+	}
+}
+
+func TestValidateMCP_AllowedHosts_EmptyHost(t *testing.T) {
+	cfg := &config.Config{
+		MCP: config.MCPConfig{
+			Servers: map[string]config.MCPServerConfig{
+				"jira": {
+					Command: "wtmcp",
+					AllowedHosts: []config.AllowedHost{
+						{Host: "", Port: 443},
+					},
+				},
+			},
+		},
+	}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	lookPath := stubLookPath(map[string]string{"wtmcp": "/usr/bin/wtmcp"})
+	validateMCP(&buf, result, cfg, nil, lookPath)
+
+	if !result.hasErrors() {
+		t.Error("expected errors for empty AllowedHost.Host")
+	}
+	found := false
+	for _, errMsg := range result.errors {
+		if strings.Contains(errMsg, "host must not be empty") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected error about empty host, got: %v", result.errors)
+	}
+}
+
+func TestValidateMCP_AllowedHosts_SchemePrefix(t *testing.T) {
+	cfg := &config.Config{
+		MCP: config.MCPConfig{
+			Servers: map[string]config.MCPServerConfig{
+				"jira": {
+					Command: "wtmcp",
+					AllowedHosts: []config.AllowedHost{
+						{Host: "https://jira.example.com", Port: 443},
+					},
+				},
+			},
+		},
+	}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	lookPath := stubLookPath(map[string]string{"wtmcp": "/usr/bin/wtmcp"})
+	validateMCP(&buf, result, cfg, nil, lookPath)
+
+	if !result.hasErrors() {
+		t.Error("expected errors for AllowedHost.Host with scheme prefix")
+	}
+	found := false
+	for _, errMsg := range result.errors {
+		if strings.Contains(errMsg, "scheme prefix") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected error about scheme prefix, got: %v", result.errors)
+	}
+}
+
+func TestValidateMCP_AllowedHosts_PortZero(t *testing.T) {
+	cfg := &config.Config{
+		MCP: config.MCPConfig{
+			Servers: map[string]config.MCPServerConfig{
+				"jira": {
+					Command: "wtmcp",
+					AllowedHosts: []config.AllowedHost{
+						{Host: "jira.example.com", Port: 0},
+					},
+				},
+			},
+		},
+	}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	lookPath := stubLookPath(map[string]string{"wtmcp": "/usr/bin/wtmcp"})
+	validateMCP(&buf, result, cfg, nil, lookPath)
+
+	if !result.hasErrors() {
+		t.Error("expected errors for AllowedHost.Port = 0")
+	}
+	found := false
+	for _, errMsg := range result.errors {
+		if strings.Contains(errMsg, "1-65535") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected error about port range, got: %v", result.errors)
+	}
+}
+
+func TestValidateMCP_AllowedHosts_PortTooLarge(t *testing.T) {
+	cfg := &config.Config{
+		MCP: config.MCPConfig{
+			Servers: map[string]config.MCPServerConfig{
+				"jira": {
+					Command: "wtmcp",
+					AllowedHosts: []config.AllowedHost{
+						{Host: "jira.example.com", Port: 65536},
+					},
+				},
+			},
+		},
+	}
+	result := &validationResult{}
+	var buf bytes.Buffer
+	lookPath := stubLookPath(map[string]string{"wtmcp": "/usr/bin/wtmcp"})
+	validateMCP(&buf, result, cfg, nil, lookPath)
+
+	if !result.hasErrors() {
+		t.Error("expected errors for AllowedHost.Port = 65536")
+	}
+	found := false
+	for _, errMsg := range result.errors {
+		if strings.Contains(errMsg, "1-65535") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected error about port range, got: %v", result.errors)
+	}
+}
+
 func TestValidateMCP_NilPipeline(t *testing.T) {
 	cfg := &config.Config{
 		MCP: config.MCPConfig{

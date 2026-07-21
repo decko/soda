@@ -56,11 +56,26 @@ type OpencodeConfig struct {
 	Model  string `yaml:"model,omitempty"`  // model override for Opencode; empty = use top-level Model
 }
 
+// AllowedHost specifies an external host and port that an MCP server process
+// is permitted to connect to. go-arapuca uses this information to set up
+// network allow-list rules in the sandbox. An empty Host or a Port outside
+// the 1-65535 range is rejected at config.Load time rather than at sandbox
+// launch, where the error would surface deep in the FFI with no clear indication
+// of the root cause.
+type AllowedHost struct {
+	// Host is the hostname or IP address. Must not include a scheme prefix
+	// (e.g., "https://"). Must not be empty.
+	Host string `yaml:"host"`
+	// Port is the TCP port number. Must be in the range 1-65535.
+	Port int `yaml:"port"`
+}
+
 // MCPServerConfig holds the definition of a single MCP server process.
 type MCPServerConfig struct {
-	Command string            `yaml:"command"`
-	Args    []string          `yaml:"args,omitempty"`
-	Env     map[string]string `yaml:"env,omitempty"`
+	Command      string            `yaml:"command"`
+	Args         []string          `yaml:"args,omitempty"`
+	Env          map[string]string `yaml:"env,omitempty"`
+	AllowedHosts []AllowedHost     `yaml:"allowed_hosts,omitempty"`
 }
 
 // MCPConfig holds MCP server declarations available to pipeline phases.
@@ -319,6 +334,23 @@ func Load(path string) (*Config, error) {
 	if len(cfg.ConventionChecklist) > maxConventionChecklistBytes {
 		return nil, fmt.Errorf("config: convention_checklist exceeds %d-byte limit (%d bytes)",
 			maxConventionChecklistBytes, len(cfg.ConventionChecklist))
+	}
+
+	// Validate AllowedHost fields on each MCP server. go-arapuca rejects
+	// port 0 at the FFI level and an empty host may produce broken proxy rules,
+	// so we catch these early with a clear diagnostic.
+	for serverName, server := range cfg.MCP.Servers {
+		for idx, ah := range server.AllowedHosts {
+			if ah.Host == "" {
+				return nil, fmt.Errorf("config: mcp.servers[%s].allowed_hosts[%d]: host must not be empty", serverName, idx)
+			}
+			if strings.Contains(ah.Host, "://") {
+				return nil, fmt.Errorf("config: mcp.servers[%s].allowed_hosts[%d]: host %q must not include a scheme prefix (remove the scheme and keep only the hostname)", serverName, idx, ah.Host)
+			}
+			if ah.Port < 1 || ah.Port > 65535 {
+				return nil, fmt.Errorf("config: mcp.servers[%s].allowed_hosts[%d]: port %d is out of range (must be 1-65535)", serverName, idx, ah.Port)
+			}
+		}
 	}
 
 	return &cfg, nil

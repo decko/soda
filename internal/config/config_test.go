@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -505,6 +506,174 @@ func TestLoad_ConventionChecklist_OverLimit(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "2000") {
 		t.Errorf("error should mention the limit, got: %v", err)
+	}
+}
+
+// TestLoad_AllowedHosts validates that AllowedHost entries on MCP servers are
+// checked at config.Load time. Invalid entries (empty host, scheme prefix, or
+// out-of-range port) must cause Load to return an error.
+func TestLoad_AllowedHosts_Valid(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "soda.yaml")
+	content := `mcp:
+  servers:
+    jira:
+      command: wtmcp
+      args: [jira]
+      allowed_hosts:
+        - host: jira.example.com
+          port: 443
+        - host: 192.168.1.1
+          port: 8080
+`
+	if err := os.WriteFile(cfgFile, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(cfgFile)
+	if err != nil {
+		t.Fatalf("valid AllowedHosts should be accepted, got error: %v", err)
+	}
+
+	jira, ok := cfg.MCP.Servers["jira"]
+	if !ok {
+		t.Fatal("MCP.Servers[jira] not found")
+	}
+	if len(jira.AllowedHosts) != 2 {
+		t.Fatalf("expected 2 AllowedHosts, got %d", len(jira.AllowedHosts))
+	}
+	if jira.AllowedHosts[0].Host != "jira.example.com" {
+		t.Errorf("AllowedHosts[0].Host = %q, want %q", jira.AllowedHosts[0].Host, "jira.example.com")
+	}
+	if jira.AllowedHosts[0].Port != 443 {
+		t.Errorf("AllowedHosts[0].Port = %d, want 443", jira.AllowedHosts[0].Port)
+	}
+}
+
+func TestLoad_AllowedHosts_EmptyHost(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "soda.yaml")
+	content := `mcp:
+  servers:
+    jira:
+      command: wtmcp
+      allowed_hosts:
+        - host: ""
+          port: 443
+`
+	if err := os.WriteFile(cfgFile, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load(cfgFile)
+	if err == nil {
+		t.Fatal("empty host should be rejected")
+	}
+	if !strings.Contains(err.Error(), "host must not be empty") {
+		t.Errorf("error should mention empty host, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "jira") {
+		t.Errorf("error should mention server name 'jira', got: %v", err)
+	}
+}
+
+func TestLoad_AllowedHosts_SchemePrefix(t *testing.T) {
+	tests := []struct {
+		name string
+		host string
+	}{
+		{"https scheme", "https://jira.example.com"},
+		{"http scheme", "http://api.example.com"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			cfgFile := filepath.Join(dir, "soda.yaml")
+			content := "mcp:\n  servers:\n    jira:\n      command: wtmcp\n      allowed_hosts:\n        - host: " + tt.host + "\n          port: 443\n"
+			if err := os.WriteFile(cfgFile, []byte(content), 0644); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err := Load(cfgFile)
+			if err == nil {
+				t.Fatalf("host %q with scheme prefix should be rejected", tt.host)
+			}
+			if !strings.Contains(err.Error(), "scheme prefix") {
+				t.Errorf("error should mention scheme prefix, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestLoad_AllowedHosts_InvalidPort(t *testing.T) {
+	tests := []struct {
+		name string
+		port string
+		want string
+	}{
+		{"port zero", "0", "1-65535"},
+		{"port too large", "65536", "1-65535"},
+		{"negative port", "-1", "1-65535"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			cfgFile := filepath.Join(dir, "soda.yaml")
+			content := "mcp:\n  servers:\n    jira:\n      command: wtmcp\n      allowed_hosts:\n        - host: jira.example.com\n          port: " + tt.port + "\n"
+			if err := os.WriteFile(cfgFile, []byte(content), 0644); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err := Load(cfgFile)
+			if err == nil {
+				t.Fatalf("port %s should be rejected", tt.port)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error should mention %q, got: %v", tt.want, err)
+			}
+		})
+	}
+}
+
+func TestLoad_AllowedHosts_PortBoundaryValid(t *testing.T) {
+	for _, port := range []int{1, 65535} {
+		t.Run(fmt.Sprintf("port_%d", port), func(t *testing.T) {
+			dir := t.TempDir()
+			cfgFile := filepath.Join(dir, "soda.yaml")
+			content := fmt.Sprintf("mcp:\n  servers:\n    jira:\n      command: wtmcp\n      allowed_hosts:\n        - host: jira.example.com\n          port: %d\n", port)
+			if err := os.WriteFile(cfgFile, []byte(content), 0644); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err := Load(cfgFile)
+			if err != nil {
+				t.Fatalf("port %d should be accepted, got: %v", port, err)
+			}
+		})
+	}
+}
+
+func TestLoad_AllowedHosts_NoHostsConfigured(t *testing.T) {
+	// A server without AllowedHosts should be accepted.
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "soda.yaml")
+	content := `mcp:
+  servers:
+    jira:
+      command: wtmcp
+      args: [jira]
+`
+	if err := os.WriteFile(cfgFile, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(cfgFile)
+	if err != nil {
+		t.Fatalf("server without AllowedHosts should be accepted, got: %v", err)
+	}
+	jira := cfg.MCP.Servers["jira"]
+	if len(jira.AllowedHosts) != 0 {
+		t.Errorf("expected no AllowedHosts, got %d", len(jira.AllowedHosts))
 	}
 }
 

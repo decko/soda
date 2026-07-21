@@ -634,16 +634,16 @@ func validateTranscript(w io.Writer, result *validationResult, cfg *config.Confi
 }
 
 // validateMCP checks that each declared MCP server's command binary exists in
-// PATH and warns when a phase references an undeclared MCP server.
-// The lookPath parameter is injected for testability, following the same
-// pattern as validateRunner.
+// PATH, validates AllowedHost fields, and warns when a phase references an
+// undeclared MCP server. The lookPath parameter is injected for testability,
+// following the same pattern as validateRunner.
 func validateMCP(w io.Writer, result *validationResult, cfg *config.Config, pl *pipeline.PhasePipeline, lookPath func(string) (string, error)) {
 	if len(cfg.MCP.Servers) == 0 {
 		fmt.Fprintln(w, "✓ mcp: no servers configured")
 		return
 	}
 
-	// Check each declared server's binary.
+	// Check each declared server's binary and AllowedHosts.
 	for name, server := range cfg.MCP.Servers {
 		_, err := lookPath(server.Command)
 		if err != nil {
@@ -651,6 +651,20 @@ func validateMCP(w io.Writer, result *validationResult, cfg *config.Config, pl *
 			fmt.Fprintf(w, "  ✗ mcp server %s: %s not found\n", name, server.Command)
 		} else {
 			fmt.Fprintf(w, "  ✓ mcp server %s: %s\n", name, server.Command)
+		}
+
+		// Validate AllowedHost entries. These are hard errors because
+		// go-arapuca rejects port 0 at the FFI level and an empty/scheme-
+		// prefixed host may produce silently broken proxy rules.
+		for idx, ah := range server.AllowedHosts {
+			if ah.Host == "" {
+				result.addError("mcp: server %q: allowed_hosts[%d]: host must not be empty", name, idx)
+			} else if strings.Contains(ah.Host, "://") {
+				result.addError("mcp: server %q: allowed_hosts[%d]: host %q must not include a scheme prefix", name, idx, ah.Host)
+			}
+			if ah.Port < 1 || ah.Port > 65535 {
+				result.addError("mcp: server %q: allowed_hosts[%d]: port %d is out of range (must be 1-65535)", name, idx, ah.Port)
+			}
 		}
 	}
 
