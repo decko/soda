@@ -295,6 +295,7 @@ func runPipeline(cfg *config.Config, opts pipelineOpts) error {
 			MemoryMB:     uint64(cfg.Sandbox.Limits.MemoryMB),
 			CPUPercent:   uint32(cfg.Sandbox.Limits.CPUPercent),
 			MaxPIDs:      uint32(cfg.Sandbox.Limits.MaxPIDs),
+			UseNetNS:     cfg.Sandbox.UseNetNS,
 			ClaudeBinary: cfg.Sandbox.Binary,
 			Proxy: sandbox.ProxyConfig{
 				Enabled:         cfg.Sandbox.Proxy.Enabled,
@@ -1629,9 +1630,10 @@ func convertMCPConfig(cfg config.MCPConfig) pipeline.MCPConfig {
 	servers := make(map[string]pipeline.MCPServerConfig, len(cfg.Servers))
 	for name, srv := range cfg.Servers {
 		servers[name] = pipeline.MCPServerConfig{
-			Command: srv.Command,
-			Args:    srv.Args,
-			Env:     srv.Env,
+			Command:      srv.Command,
+			Args:         srv.Args,
+			Env:          srv.Env,
+			AllowedHosts: srv.AllowedHosts,
 		}
 	}
 	return pipeline.MCPConfig{Servers: servers}

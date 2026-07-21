@@ -58,9 +58,10 @@ type OpencodeConfig struct {
 
 // MCPServerConfig holds the definition of a single MCP server process.
 type MCPServerConfig struct {
-	Command string            `yaml:"command"`
-	Args    []string          `yaml:"args,omitempty"`
-	Env     map[string]string `yaml:"env,omitempty"`
+	Command      string            `yaml:"command"`
+	Args         []string          `yaml:"args,omitempty"`
+	Env          map[string]string `yaml:"env,omitempty"`
+	AllowedHosts []string          `yaml:"allowed_hosts,omitempty"` // hosts the server is permitted to reach; empty = unrestricted
 }
 
 // MCPConfig holds MCP server declarations available to pipeline phases.
@@ -170,10 +171,11 @@ type ExtractionStrategy struct {
 
 // SandboxConfig holds sandbox execution settings.
 type SandboxConfig struct {
-	Enabled bool               `yaml:"enabled"`
-	Binary  string             `yaml:"binary"`
-	Limits  SandboxLimits      `yaml:"limits"`
-	Proxy   SandboxProxyConfig `yaml:"proxy"`
+	Enabled  bool               `yaml:"enabled"`
+	Binary   string             `yaml:"binary"`
+	UseNetNS bool               `yaml:"use_net_ns"` // enable network namespace isolation; requires unprivileged user namespaces
+	Limits   SandboxLimits      `yaml:"limits"`
+	Proxy    SandboxProxyConfig `yaml:"proxy"`
 }
 
 // SandboxProxyConfig holds LLM proxy settings for sandboxed execution.

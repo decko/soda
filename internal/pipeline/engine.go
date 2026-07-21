@@ -81,9 +81,10 @@ type EngineConfig struct {
 // MCPServerConfig holds the definition of a single MCP server process.
 // Mirrors config.MCPServerConfig — kept separate to avoid cross-package imports.
 type MCPServerConfig struct {
-	Command string
-	Args    []string
-	Env     map[string]string
+	Command      string
+	Args         []string
+	Env          map[string]string
+	AllowedHosts []string // hosts the server is permitted to reach; empty = unrestricted
 }
 
 // MCPConfig holds MCP server declarations available to pipeline phases.
@@ -864,9 +865,10 @@ func (e *Engine) runPhase(ctx context.Context, phase PhaseConfig) error {
 		for _, name := range phase.MCPServers {
 			if def, ok := e.config.MCPConfig.Servers[name]; ok {
 				mcpServers[name] = runner.MCPServerConfig{
-					Command: def.Command,
-					Args:    def.Args,
-					Env:     def.Env,
+					Command:      def.Command,
+					Args:         def.Args,
+					Env:          def.Env,
+					AllowedHosts: def.AllowedHosts,
 				}
 			} else {
 				fmt.Fprintf(e.config.Stderr, "engine: warning: MCP server %q in phase %q not in global config\n", name, phase.Name)

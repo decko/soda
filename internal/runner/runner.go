@@ -17,9 +17,10 @@ type Runner interface {
 // MCPServerConfig holds the definition of a single MCP server process.
 // Mirrors config.MCPServerConfig — kept separate to avoid cross-package imports.
 type MCPServerConfig struct {
-	Command string
-	Args    []string
-	Env     map[string]string
+	Command      string
+	Args         []string
+	Env          map[string]string
+	AllowedHosts []string // hosts the server is permitted to reach; empty = unrestricted
 }
 
 // RunOpts holds everything needed to execute one phase.
