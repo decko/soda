@@ -79,7 +79,7 @@ jobs:
         run: |
           git clone https://github.com/sergio-correia/arapuca /tmp/arapuca
           cd /tmp/arapuca
-          git checkout de97447cec63161bf4a209ac1a45cf4f40693099
+          git checkout 8c61b0d985140f0d8d264131437b3e016a3e0a26  # v0.2.7
           cargo install cbindgen
           make install PREFIX=$HOME/.local
           echo "PKG_CONFIG_PATH=$HOME/.local/lib/pkgconfig" >> "$GITHUB_ENV"
